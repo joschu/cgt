@@ -1,0 +1,32 @@
+
+# IDE junk
+.settings
+.cproject
+._*
+.\#*
+\#*
+*.pyc
+.project
+.pydevproject
+*~
+*.orig
+*~
+
+
+# Build generated stuff
+doc/build
+doc/tex-images
+build
+*.swp
+openblas.tar.gz
+
+# Tmp stuff
+junk
+doc/primer
+doc/images
+_build
+_junk
+.coverage
+htmlcov
+cgt.sublime-project
+cgt.sublime-workspace
