@@ -63,6 +63,7 @@ def make_deep_lstm(size_input, size_mem, n_layers, size_output):
     return nn.Module(inputs, outputs)
 
 
+# XXX move elsewhere
 def flatcat(xs):
     return cgt.concatenate([x.flatten() for x in xs])
 
@@ -158,6 +159,7 @@ class Loader(object):
             yield ind2onehot(self.data[start:stop], self.size_vocab), ind2onehot(self.data[start+1:stop+1], self.size_vocab) # XXX
 
 
+# XXX move elsewhere
 def ind2onehot(inds, n_cls):
     out = np.zeros(inds.shape+(n_cls,),cgt.floatX)
     out.flat[np.arange(inds.size)*n_cls + inds.ravel()] = 1

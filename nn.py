@@ -49,7 +49,7 @@ def setup_contiguous_storage(shareds, dtype = None):
 
 def relu(x):
     return cgt.Result(cgt.ElwiseUnary("relu",
-        info=cgt.UnaryInfo("relu",lambda x: (x>=0)*x, True, "s", "cgt.sign(x)", "x*(x>0)")),[x])
+        info=cgt.UnaryInfo("relu",lambda x: (x>=0)*x, True, "s", "gy*(x>=0)", "sign(x)")), [x])
 
 def softmax(x,axis=1):
     out = cgt.exp(x)
@@ -58,6 +58,10 @@ def softmax(x,axis=1):
 
 def logsoftmax(x, axis=1):
     return cgt.log(softmax(x, axis=axis))
+
+def crossent(logprobs, y_onehot, axis=1):
+    loss = -(logprobs * y_onehot).sum()
+    return loss
 
 def zero_one_loss(x, y):
     assert x.ndim == 2 and y.ndim in (1,2) and cgt._dtype_kind(y.dtype)=='i'

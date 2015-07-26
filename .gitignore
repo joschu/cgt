@@ -30,3 +30,6 @@ _junk
 htmlcov
 cgt.sublime-project
 cgt.sublime-workspace
+
+# data
+data
