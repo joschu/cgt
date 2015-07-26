@@ -1,1 +1,1 @@
-from cgt import *
+from core import *

@@ -1,7 +1,7 @@
 import cgt
 import numpy as np
 import unittest
-
+import numpy.random as nr
 
 PROB2RESULT = {}
 
@@ -178,10 +178,10 @@ def repeat1(x,y):
 ################################################################
 
 class AffineTestCase(unittest.TestCase):
-    def test_affine(self):
-        cgt.set_precision('single')
-        import numpy.random as nr
+    def setUp(self):
+        cgt.set_precision('double')
         nr.seed(303)
+    def test_affine(self):
 
         sA = np.array(nr.rand())
         sB = np.array(nr.rand())
