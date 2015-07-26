@@ -3,6 +3,9 @@ from collections import defaultdict,namedtuple
 import traceback
 import __builtin__
 
+import exceptions
+import utils
+
 # ================================================================
 # Datatypes
 # ================================================================
@@ -27,6 +30,11 @@ class Dtype: #pylint: disable=W0232
             return 'c'+str(dt.itemsize)
         else:
             raise ValueError("Invalid dtype %s"%dt)
+
+def _as_valid_array(x):
+    x = np.asarray(x)
+    x = x.astype(Dtype.canon(x.dtype))
+    return x
 
 class Type(object):
     """
@@ -446,6 +454,7 @@ class GetData(Op):
             return self.datanode.get_value()
         return fn
 
+
 class Data(Input):
     """
     An input to the graph, which is associated with a value and implicitly provided
@@ -471,7 +480,7 @@ class Data(Input):
         return self.device
     def get_fixed_shape(self):
         shp = self.value.shape
-        return [s if bfixed else None for (bfixed,s) in _safezip(self.fixed_shape_mask, shp)]
+        return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
         return self.value
     # TODO: remove external accesses to .value
@@ -513,7 +522,7 @@ def differentiably_influences(outputs, nodelist=None):
     for node in reversed(nodelist):
         # print node, dio.get(node, False),id(node),"updating",[map(id, node.parents)],[map(str, node.parents)]
         if node in diset and not node.is_input():
-            for (p,d) in _safezip(node.parents, node.get_diff()):
+            for (p,d) in utils.safezip(node.parents, node.get_diff()):
                 if d: diset.add(p)
     return diset
 
@@ -522,10 +531,9 @@ def differentiably_influenced_by(wrt, outputs=None, nodelist=None):
     if nodelist is None: nodelist = list(topsorted(outputs))
     dibset = set(wrt)
     for node in nodelist:
-        if any(p in dibset and d for (p,d) in _safezip(node.parents, node.get_diff())):
+        if any(p in dibset and d for (p,d) in utils.safezip(node.parents, node.get_diff())):
             dibset.add(node)
     return dibset
-
 
 
 def influences(outputs):
@@ -555,14 +563,14 @@ def pullback(outputs, goutputs, wrt):
     # Some checks
     badwrtset = set(wrt).difference(dio)
     if badwrtset:
-        raise NonDifferentiable("Outputs not differentiable wrt %s"%badwrtset)
+        raise exceptions.NonDifferentiable("Outputs not differentiable wrt %s"%badwrtset)
 
     badoutset = set(outputs).difference(dibw)
     if badoutset:
-        raise NonDifferentiable("Outputs %s not differentiable wrt any of %s"%(badoutset, badwrtset))
+        raise exceptions.NonDifferentiable("Outputs %s not differentiable wrt any of %s"%(badoutset, badwrtset))
 
     var2gs = defaultdict(list)
-    for (node, gnode) in _safezip(outputs, goutputs):
+    for (node, gnode) in utils.safezip(outputs, goutputs):
         var2gs[node] = [gnode]
 
     active = dio.intersection(dibw)
@@ -583,7 +591,7 @@ def pullback(outputs, goutputs, wrt):
                 # XXX wil fail with unused outputs
             else:
                 gpars = node.op.pullback(node.parents, node, gnode)
-                for (par,gpar) in _safezip(node.parents, gpars):
+                for (par,gpar) in utils.safezip(node.parents, gpars):
                     var2gs[par].append(gpar)
                     if gpar is not None:
                         assert (par.get_ndim() == gpar.get_ndim())
@@ -603,301 +611,6 @@ def grad(cost, wrt):
     gout = _singleton_ones(cost.get_dtype(), 0)
     return pullback([cost], [gout], wrt)
 
-
-
-# ================================================================
-# Execution
-# ================================================================
-
-class Assertion(Op):
-    """
-    Assertion gets evaluated when the graph is executed, and it prints out a stack trace on failure
-    """
-    def __init__(self, msg):
-        self.stack = traceback.extract_stack()[:-2]
-        self.msg = msg
-    def typ_apply(self, inputs):
-        x, = inputs
-        assert x.ndim==0 and x.dtype=='i1'
-        return Tensor('i8',0)
-    def shp_apply(self, _):
-        return []
-    def get_numeric_py(self):
-        def fn(x):
-            if not x.item():
-                self.display_error()
-            return x
-        return fn
-    def display_error(self):
-        print "Stack trace at failed assertion:"
-        print "**************************"        
-        traceback.print_list(self.stack)
-        print "**************************"        
-        raise AssertionError("Assertion failed. Message: %s. Above, you can find the stack trace of the failed node"%self.msg)
-
-class DebugFunc(Op):
-    """
-    Call a function when the graph is executed
-    """
-    def __init__(self, yourfunc):
-        self.yourfunc = yourfunc
-    def typ_apply(self, _):
-        return Tensor('i8',0)
-    def shp_apply(self, _):
-        return []
-    def get_numeric_py(self):
-        def fn(*xs):
-            self.yourfunc(*xs)
-        return fn
-
-def assert_(x,msg=None):
-    add_debug_node(Result(Assertion(msg or "(empty)"), [x]))
-
-def dbg_call(yourfunc, *args):
-    add_debug_node(Result(DebugFunc(yourfunc), list(args)))
-
-def add_debug_node(x):
-    if debug_context.global_context is not None:
-        debug_context.global_context.nodes.append(x)
-
-class debug_context(object):
-    global_context = None
-    def __init__(self):
-        self.nodes = []
-    def __enter__(self):
-        assert debug_context.global_context is None, "can only be in one debug context at a time"
-        debug_context.global_context = self
-        return self
-    def __exit__(self, type, value, traceback):
-        debug_context.global_context = None
-
-def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
-    config = load_config()
-    backend = backend or config["backend"]
-
-    single = isinstance(outputs, Node)
-    if single: outputs = [outputs]
-    if dbg: 
-        if backend == "python":            
-            outputs = dbg.nodes + outputs
-        else:
-            warn("Debugging nodes can currently only be used with the python backend, but %s was selected. Ignoring"%backend)
-    
-    if backend == "python":
-        def fn(*invals):
-            out = numeric_eval(outputs, {innode:inval for (innode,inval) in _safezip(inputs, invals)})
-            if dbg and len(dbg.nodes)>0: out = out[len(dbg.nodes):]
-            if single: out = out[0]
-            return out
-        return fn
-    elif backend == "cython":
-        if fixed_sizes: fn = FixedSizeFunc(inputs, outputs)
-        else: fn = VarSizeFunc(inputs, outputs)
-        if single: return lambda *invals : fn(*invals)[0]
-        else: return fn        
-    else:
-        raise NotImplementedError("invalid backend %s"%backend)
-    return fn
-
-def get_cgt_src_root():
-    return osp.dirname(osp.dirname(osp.realpath(__file__)))
-
-_CONFIG = None
-def load_config():
-    global _CONFIG
-    if _CONFIG is None:
-        from configobj import ConfigObj
-        from validate import Validator
-        rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
-        specfilename = osp.join(get_cgt_src_root(), "cgtrc_spec.ini")
-        _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)
-        val = Validator()
-        test = _CONFIG.validate(val,preserve_errors=True)
-        if test is not True:
-            for (k,v) in test.items():
-                if v is not True:
-                    error("%s: %s in %s"%(k,v.message,rcfileloc))
-            raise ValueError
-        envflags = os.getenv("CGT_FLAGS")
-        if envflags:
-            pairs = envflags.split(",")
-            for pair in pairs:
-                lhs,rhs = pair.split("=")
-                assert lhs in _CONFIG
-                _CONFIG[lhs] = rhs
-        print "CONFIG",_CONFIG
-    return _CONFIG
-
-
-def numeric_eval(outputs, arg2val):
-    """
-    Evaluate outputs numerically. arg2val is a dictionary mapping arguments to numerical values
-    """
-    single = isinstance(outputs, Node)
-
-    if single: outputs = [outputs]
-    node2val = {}
-    for node in topsorted(outputs):
-        if node.is_argument():
-            node2val[node] = arg2val[node]
-        elif node.is_data():
-            node2val[node] = node.get_value()
-        else:
-            node2val[node] = node.op.numeric_apply([node2val[par] for par in node.parents])
-        # assert node.get_ndim() == np.array(node2val[node]).ndim
-    numeric_outputs = [node2val[node] for node in outputs]
-    if single:
-        return numeric_outputs[0]
-    else:
-        return numeric_outputs
-
-# UNUSED, but gives a much simpler implementation of CallSequence implemented in cython
-class CallSequence(object):
-    def __init__(self, inputs, outputs):
-        fncalls = []
-        var2idx = {}
-        nodes = self.nodes = list(topsorted(outputs))
-        for (i,node) in enumerate(nodes):
-            var2idx[node] = i
-            if not node.is_input():
-                args = [var2idx[var] for var in node.parents]
-                args.append(i)
-                fn = node.op.get_numeric_py()
-                fncalls.append( ( fn, args ) )
-
-        self.varstore = [np.array(666, node.dtype) for node in nodes]
-        self.fncalls = fncalls
-        self.ininds = _indexin(inputs, nodes)
-        self.outinds = _indexin(outputs, nodes)
-
-    def execute(self):
-        for (fn, varinds) in self.fncalls:
-            self.varstore[varinds[-1]][...] = fn(*(self.varstore[i] for i in varinds[:-1])) # XXX
-
-
-class VarSizeFunc(object):
-    def __init__(self, inputs, tmpoutputs, devfn = None):
-        import cycgt #pylint: disable=F0401
-        self.inputs = inputs        
-        tmpoutputs = simplify(tmpoutputs)
-        self.outputs, self.node2device = assign_devices(tmpoutputs, devfn)
-        self.analysis = analyze(self.outputs)
-        self.nodes = list(topsorted(self.outputs))  
-        node2shape = self.analysis["node2shape"]
-        self.shapevars = simplify([constant(np.array([],'i8')) 
-            if node.get_ndim()==0 or node.get_ndim() is None 
-            else stack(node2shape[node]) for node in self.nodes])
-        self.callseq = cycgt.CallSequence(self.inputs, self.outputs, self.nodes, 
-            node2device = self.node2device, check = load_config()["backend_check_values"])
-    def __call__(self, *invals):
-        shapes = numeric_eval(self.shapevars, dict(_safezip(self.inputs, invals)))
-        self.callseq.set_shapes(shapes)
-        self.callseq.set_inputs(invals)
-        self.callseq.execute()
-        return self.callseq.get_outputs_numpy()
-
-class FixedSizeFunc(object):
-    def __init__(self, inputs, tmpoutputs, devfn = None):
-        import cycgt #pylint: disable=F0401
-        self.inputs = inputs        
-        tmpoutputs = simplify(tmpoutputs)
-        self.outputs, self.node2device = assign_devices(tmpoutputs, devfn)
-        self.analysis = analyze(self.outputs)
-        self.nodes = list(topsorted(self.outputs))  
-        node2shape = self.analysis["node2shape"]
-        self.shapevars = simplify([constant(np.array([],'i8')) 
-            if node.get_ndim()==0 or node.get_ndim() is None 
-            else stack(node2shape[node]) for node in self.nodes])
-        self.callseq = cycgt.CallSequence(self.inputs, self.outputs, self.nodes, 
-            node2device = self.node2device, check = load_config()["backend_check_values"])        
-        self.first_time = True
-
-    def __call__(self, *invals):
-        if self.first_time:
-            shapes = numeric_eval(self.shapevars, dict(_safezip(self.inputs, invals)))
-            self.callseq.set_shapes(shapes)
-            self.first_time=False
-        self.callseq.set_inputs(invals)
-        self.callseq.execute()
-        return self.callseq.get_outputs_numpy()
-
-# ================================================================
-# Printing 
-# ================================================================
-
-def print_tree(outputs, o=sys.stdout, nodefn=None):
-    """
-    Print out a representation of the computation graph as a tree
-    nodefn is called after printing the result for every node, as
-    nodefn(node, o)
-    So you can print more attributes of the node
-    """
-    if isinstance(outputs, Node):
-        outputs = [outputs]
-    node2name = {}
-    expands = []
-    for node in outputs:
-        _print_tree(node, 0, node2name, expands, o, nodefn)
-    assert expands == []
-    return node2name
-
-def _print_tree(node, depth, node2name, expands, o, nodefn):
-    o.write("| "*depth)
-    if node in node2name: 
-        varname = node2name[node]
-        new = False
-    else:
-        varname = node.get_name() + "@%i"%len(node2name)
-        node2name[node] = varname
-        new = True
-
-    color = Color.GREEN if node.is_input() else Color.RED
-    colorprint(color, varname, o)
-
-    if new:
-        if nodefn is not None: nodefn(node, o)
-        o.write("\n")
-        for p in node.parents:
-            _print_tree(p, depth+1, node2name, expands, o, nodefn)
-    else:
-        if not node.is_input(): o.write(" (see above)")
-        o.write("\n")
-
-def print_expr(x, o=sys.stdout):
-    """
-    Returns a string that represents a computation graph
-    """
-    node2s = {}
-    o.write(_get_expr(x, node2s))
-    o.write("\n")
-
-def _get_expr(node, node2s):
-    if node in node2s:
-        return node2s[node]
-    else:
-        if node.is_input():
-            name = node2s[node] = "@%i"%len(node2s)
-            return name
-        else:
-            parent_exprs = [_get_expr(parent, node2s) 
-                for parent in node.parents]
-            return node.op.get_expr(parent_exprs)
-
-def print_text(outputs, o=sys.stdout):
-    """
-    Print computation graph in single-statement assignment form,
-    inspired by LLVM IR. (needs work)
-    """
-    if isinstance(outputs, Node):
-        outputs = [outputs]
-    node2name = {}
-    for node in topsorted(outputs):
-        thisname = node2name[node] = "@%i"%len(node2name)
-        if node.is_input():
-            o.write("Input: %s\n"%thisname)
-        else:
-            o.write("%s = %s %s\n"%(thisname, node.get_name(), " ".join(node2name[parent]
-                for parent in node.parents)))
 
 # ================================================================
 # Ops 
@@ -961,12 +674,19 @@ class Fill(Op):
                 return out
         return fn
     def pullback(self, inputs, output, goutput):
-        raise NonDifferentiable
+        raise exceptions.NonDifferentiable
     def shp_apply(self, inputs):
         return inputs
     def typ_apply(self, inputs):
         assert all(x.get_dtype() == 'i8' for x in inputs)
         return Tensor(self.dtype, len(inputs))
+
+
+def _is_int(node):
+    return _dtype_kind(node.dtype)=='i'
+
+def _list_is_valid_shape(inputs):
+    return len(inputs)==3 and all(x.ndim==0 and _is_int(x) for x in inputs)
 
 class Arange(Op):
     """
@@ -981,7 +701,7 @@ class Arange(Op):
             return np.arange(start,stop,step, self.dtype)
         return fn
     def pullback(self, inputs, output, goutput):
-        raise NonDifferentiable
+        raise exceptions.NonDifferentiable
     def shp_apply(self, inputs):
         start,stop,step = inputs
         return [(stop - start)//step]
@@ -1005,7 +725,7 @@ class ScalarRng(Op):
         if self.kind == "uniform": return lambda *shp: np.random.rand(*shp).astype(floatX)
         elif self.kind == "gaussian": return lambda *shp: np.random.randn(*shp).astype(floatX)
     def pullback(self, inputs, output, goutput):
-        raise NonDifferentiable
+        raise exceptions.NonDifferentiable
     def shp_apply(self, inputs):
         return inputs
     def typ_apply(self, inputs):
@@ -1016,7 +736,7 @@ class ScalarRng(Op):
 # ----------------------------------------------------------------
 
 def _no_grad():
-    raise NonDifferentiable()
+    raise exceptions.NonDifferentiable()
 
 def _nu_sigmoid(x):
     return np.reciprocal(1+np.exp(-x))
@@ -1062,6 +782,12 @@ BINARY_INFO = {
     "=="  : BinaryInfo("equal", lambda x,y : np.equal(x,y).astype('i'),      True,      (False, False), 'i1',  "_no_grad()", "x==y"),
 }
 
+
+np2c = {"i1":"int8_t","i2":"int16_t","i4":"int32_t","i8":"int64_t",
+        "f4":"float","f8":"double","f16":"long double",
+        "c4" : "float complex", "c8" : "double complex", "c16" : "long double complex"}
+
+
 class ElwiseUnary(Op):
     """
     Elementwise unary operation
@@ -1076,7 +802,7 @@ class ElwiseUnary(Op):
     def get_name(self):
         return self.opname
     def get_hash(self):
-        return _hash_seq1(self.opname)
+        return utils.hash_seq1(self.opname)
     def get_numeric_py(self):
         return self.info.pyfunc
     def get_replacement(self, _newparents, _analysis):
@@ -1144,7 +870,7 @@ class ElwiseBinary(Op):
     def get_diff(self, _):
         return BINARY_INFO[self.opname].diff
     def get_hash(self):
-        return _hash_seq1(self.opname)        
+        return utils.hash_seq1(self.opname)        
     def get_expr(self, parent_exprs):
         return "(%s %s %s)"%(parent_exprs[0], self.opname, parent_exprs[1])
     def get_name(self):
@@ -1169,7 +895,7 @@ class ElwiseBinary(Op):
                 elif node2sv[l] == -1: return -r
     def pullback(self, (x, y), z, gz): #pylint: disable=W0613
         gin = eval(BINARY_INFO[self.opname].gradexpr)
-        return [sum(gv) if (v.ndim==0 and gv.ndim > 0) else gv for (v,gv) in _safezip([x,y],gin)]
+        return [sum(gv) if (v.ndim==0 and gv.ndim > 0) else gv for (v,gv) in utils.safezip([x,y],gin)]
     def shp_apply(self, inputs):
         ind4shape = 1 if self.scalar_mask[0] else 0
         return shape(inputs[ind4shape])
@@ -1247,7 +973,7 @@ class Size(Op):
             return arr.shape[self.axis]
         return fn
     def pullback(self, inputs, output, goutput):
-        raise NonDifferentiable
+        raise exceptions.NonDifferentiable
     def shp_apply(self, _inputs):
         return []
     def typ_apply(self, _inputs):
@@ -1324,7 +1050,7 @@ class Stack(Op):
     def shp_apply(self, inputs):
         return [constant(len(inputs))] + shape(inputs[0])
     def typ_apply(self, inputs):
-        assert _allsame([x.get_type() for x in inputs])
+        assert utils.allsame([x.get_type() for x in inputs])
         return Tensor(inputs[0].get_dtype(), inputs[0].get_ndim()+1)
 
 class Repeat(Op):
@@ -1336,7 +1062,7 @@ class Repeat(Op):
         def fn(arr, *numreps):
             shp = arr.shape
             assert all(shp[i] == 1 for i in self.axes)
-            for (ax,numrep) in _safezip(self.axes, numreps):
+            for (ax,numrep) in utils.safezip(self.axes, numreps):
                 arr = np.repeat(arr, numrep, ax)
             return arr
         return fn
@@ -1349,7 +1075,7 @@ class Repeat(Op):
         return [sum(goutput, self.axes, keepdims=True)] + [None]*(len(inputs)-1)
     def shp_apply(self, inputs):
         out = shape(inputs[0])
-        for (ax,rep) in _safezip(self.axes, inputs[1:]):
+        for (ax,rep) in utils.safezip(self.axes, inputs[1:]):
             out[ax] = rep
         return out
     def typ_apply(self, inputs):
@@ -1366,7 +1092,7 @@ class Transpose(Op):
             return arr.transpose(self.axes)
         return fn
     def pullback(self, inputs, output, goutput):
-        return [transpose(goutput, _invert_perm(self.axes))] # XXX is this right?
+        return [transpose(goutput, utils.invert_perm(self.axes))] # XXX is this right?
     def shp_apply(self, inputs):
         inshape = shape(inputs[0])
         return [inshape[ax] for ax in self.axes]
@@ -1419,7 +1145,7 @@ class RFFT(Op):
         return real(Result(RFFT(self.axes),[goutput]+inputs[1:]))
     def shp_apply(self, inputs):
         out = shape(inputs[0])
-        for (ax,sz) in _safezip(self.axes, inputs[1:]):
+        for (ax,sz) in utils.safezip(self.axes, inputs[1:]):
             out[ax]=sz
         return out
     def typ_apply(self, inputs):
@@ -1833,13 +1559,13 @@ class Composition(Op):
         return lambda num_inputs: tuple(f(num_inputs))
     def pullback(self, inputs, output, goutput):
         # repl = {}
-        # repl.update(_safezip(self._inputs, inputs))
-        # repl.update(_safezip(self._outputs, output))
-        # repl.update(_safezip(self._goutput, goutput))
+        # repl.update(utils.safezip(self._inputs, inputs))
+        # repl.update(utils.safezip(self._outputs, output))
+        # repl.update(utils.safezip(self._goutput, goutput))
         # return clone(self._gin, replace=repl)
         gwrt = pullback([output], [goutput], inputs)
     def shp_apply(self, inputs):
-        out = clone(self._shp, replace=dict(_safezip(self._inputs, inputs)))
+        out = clone(self._shp, replace=dict(utils.safezip(self._inputs, inputs)))
         return out
     def typ_apply(self, inputs):
         assert [x.get_type() for x in inputs] == [x.get_type() for x in self._inputs]
@@ -1850,7 +1576,7 @@ class Composition(Op):
     def shapes(self):
         return self._shp
     def expand(self, inputs):
-        return clone(self._outputs, replace=dict(_safezip(self._inputs, inputs)))
+        return clone(self._outputs, replace=dict(utils.safezip(self._inputs, inputs)))
     def get_nodes(self):
         return self._nodes
 
@@ -1887,7 +1613,7 @@ class EasyPyOp(Op):
         raise NotImplementedError
 
     def typ_apply(self, inputs):
-        assert (x.get_type() == reqtype for (x,reqtype) in _safezip(inputs, self.input_types()))
+        assert (x.get_type() == reqtype for (x,reqtype) in utils.safezip(inputs, self.input_types()))
         return self.output_type()
     def get_diff(self, inputs):
         return [True]*len(inputs)
@@ -1929,7 +1655,7 @@ class EasyCodeOp(Op):
         return []
 
     def typ_apply(self, inputs):
-        assert (x.get_type() == reqtype for (x,reqtype) in _safezip(inputs, self.input_types()))
+        assert (x.get_type() == reqtype for (x,reqtype) in utils.safezip(inputs, self.input_types()))
         return self.output_type()
     def get_diff(self, inputs):
         return [True]*len(inputs)
@@ -1999,127 +1725,69 @@ class EasyCodeOp(Op):
 
 
 
+# Assertion and debug operations
+# ----------------------------------------------------------------
+class Assertion(Op):
+    """
+    Assertion gets evaluated when the graph is executed, and it prints out a stack trace on failure
+    """
+    def __init__(self, msg):
+        self.stack = traceback.extract_stack()[:-2]
+        self.msg = msg
+    def typ_apply(self, inputs):
+        x, = inputs
+        assert x.ndim==0 and x.dtype=='i1'
+        return Tensor('i8',0)
+    def shp_apply(self, _):
+        return []
+    def get_numeric_py(self):
+        def fn(x):
+            if not x.item():
+                self.display_error()
+            return x
+        return fn
+    def display_error(self):
+        print "Stack trace at failed assertion:"
+        print "**************************"        
+        traceback.print_list(self.stack)
+        print "**************************"        
+        raise AssertionError("Assertion failed. Message: %s. Above, you can find the stack trace of the failed node"%self.msg)
 
-np2c = {"i1":"int8_t","i2":"int16_t","i4":"int32_t","i8":"int64_t",
-        "f4":"float","f8":"double","f16":"long double",
-        "c4" : "float complex", "c8" : "double complex", "c16" : "long double complex"}
+class DebugFunc(Op):
+    """
+    Call a function when the graph is executed
+    """
+    def __init__(self, yourfunc):
+        self.yourfunc = yourfunc
+    def typ_apply(self, _):
+        return Tensor('i8',0)
+    def shp_apply(self, _):
+        return []
+    def get_numeric_py(self):
+        def fn(*xs):
+            self.yourfunc(*xs)
+        return fn
 
-COMPILE_CONFIG = None
-def get_compile_info():
-    global COMPILE_CONFIG
-    
-    if COMPILE_CONFIG is None:
+def assert_(x,msg=None):
+    add_debug_node(Result(Assertion(msg or "(empty)"), [x]))
 
-        config = load_config()
+def dbg_call(yourfunc, *args):
+    add_debug_node(Result(DebugFunc(yourfunc), list(args)))
 
-        import cycgt #pylint: disable=F0401
-        CGT_BUILD_ROOT = osp.dirname(osp.dirname(osp.realpath(cycgt.__file__)))
+def add_debug_node(x):
+    if debug_context.global_context is not None:
+        debug_context.global_context.nodes.append(x)
 
-        cmake_info = {}
-        with open(osp.join(CGT_BUILD_ROOT,"build_info.txt")) as fh:
-            lines = fh.readlines()
-        for line in lines:
-            if ":=" not in line: print "skipping",line
-            lhs,rhs = line.split(":=")
-            lhs = lhs.strip()
-            rhs = rhs.strip()
-            cmake_info[lhs] = rhs
-
-        CUDA_ROOT = cmake_info["CUDA_ROOT"]
-        DEFINITIONS = " ".join("-D"+s for s in filter(None,cmake_info["CGT_DEFS"].split(",")))
-        COMPILE_CONFIG = dict(        
-            OPENBLAS_INCLUDE_DIR = osp.join(CGT_BUILD_ROOT,"OpenBLAS"),
-            CGT_INCLUDE_DIR = cmake_info["CGT_INCLUDE_DIR"],
-            CGT_LIBRARY_DIR = osp.join(CGT_BUILD_ROOT,"lib"),
-            CUDA_LIBRARY_DIR = osp.join(CUDA_ROOT,"lib"),
-            CUDA_INCLUDE_DIR = osp.join(CUDA_ROOT,"include"), 
-            CUDA_LIBRARIES = cmake_info["CUDA_LIBRARIES"], 
-            DEFINITIONS = DEFINITIONS,  
-            CUDA_ROOT = CUDA_ROOT,
-            CACHE_ROOT = osp.expanduser(config["cache_dir"]),
-            CGT_ENABLE_CUDA = cmake_info["CGT_ENABLE_CUDA"] in ["1","ON"],
-            # CGT_LIBRARY = cmake_info["CGT_LIBRARY"],
-        )
-    return COMPILE_CONFIG
-
-
-def cap(cmd):
-    print "\x1b[32m%s\x1b[0m"%cmd
-    subprocess.check_call(cmd,shell=True)
-
-def compile_file(fname, libpath, extra_link_flags = ""):
-    info = get_compile_info()
-    includes = "-I%(CGT_INCLUDE_DIR)s -I%(CUDA_INCLUDE_DIR)s -I%(OPENBLAS_INCLUDE_DIR)s"%info    
-    d = dict(cacheroot = info["CACHE_ROOT"], srcpath = fname, includes = includes, defines = info["DEFINITIONS"], libname = osp.basename(libpath), libpath = libpath, cgtlibdir = info["CGT_LIBRARY_DIR"], extralink=extra_link_flags)            
-    if fname.endswith(".cu"):
-        if not info["CGT_ENABLE_CUDA"]:
-            raise RuntimeError("Trying to compile a CUDA function but CUDA is disabled in your build. Rebuild with CGT_ENABLE_CUDA=ON")
-        d.update(cudalibs = info["CUDA_LIBRARIES"], cudaroot = info["CUDA_ROOT"], cudalibdir = info["CUDA_LIBRARY_DIR"])
-
-    if sys.platform == "darwin":
-        if fname.endswith(".c"):
-            cap(r'''
-cd %(cacheroot)s && \
-cc -fPIC -O3 -DNDEBUG %(srcpath)s -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-cc -fPIC -O3 -DNDEBUG %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
-            '''%d)
-        elif fname.endswith(".cu"):
-            cap(r'''
-cd %(cacheroot)s && \
-nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -fPIC -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
-            '''%d)
-                # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
-
-    else:
-        if fname.endswith(".c"):
-            cap('''
-cc -fPIC -O3 -DNDEBUG %(srcpath)s -std=c99 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-cc -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
-            '''%d)
-        elif fname.endswith(".cu"):
-            cap(r'''
-cd %(cacheroot)s && 
-nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler -fPIC -Xcompiler -O3 -Xcompiler -DNDEBUG %(includes)s %(defines)s && \
-c++  -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(cudalibs)s -Wl,-rpath,%(cudaroot)s
-            '''%d
-            )
-
-
-
-def get_impl(node, devtype):
-    code_raw = (node.op.c_code if devtype=="cpu" else node.op.cuda_code)(node.parents)
-    s = StringIO.StringIO()
-    if devtype == "cpu":
-        includes = ["cgt_utils.h","cgt_mem.h","stdint.h","stddef.h"] + node.op.c_extra_includes
-    else:
-        includes = ["cgt_utils.h","cgt_mem.h","cgt_cuda.h"] + node.op.cuda_extra_includes
-    for filename in includes:
-        s.write('#include "%s"\n'%filename)
-    h = hashlib.md5(code_raw).hexdigest()[:10]
-    funcname = devtype + node.op.__class__.__name__ + h
-    ci = get_compile_info()
-    CACHE_ROOT = ci["CACHE_ROOT"]
-    libpath = osp.join(CACHE_ROOT, funcname + ".so")
-    closure = node.op.get_closure(node.parents)
-
-    if not osp.exists(libpath):
-        if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
-        print "compiling %(libpath)s for node %(node)s"%locals()
-        ext = "c" if devtype == "cpu" else "cu"
-        srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
-        # write c code to tmp file
-        s = StringIO.StringIO()
-        for filename in includes:
-            s.write('#include "%s"\n'%filename)
-        code = code_raw.replace("CGT_FUNCNAME",funcname)
-        s.write(code)
-        with open(srcpath,"w") as fh:
-            fh.write(s.getvalue())
-
-        compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags = node.op.c_extra_link_flags)
-
-    return (libpath,funcname,closure)
+class debug_context(object):
+    global_context = None # TODO: what is this?
+    def __init__(self):
+        self.nodes = []
+    def __enter__(self):
+        assert debug_context.global_context is None, "can only be in one debug context at a time"
+        debug_context.global_context = self
+        return self
+    def __exit__(self, type, value, traceback):
+        debug_context.global_context = None
 
 
 # ================================================================
@@ -2259,6 +1927,13 @@ def mul_multi(xs):
     return reduce(operator.mul, xs) if len(xs)>0 else constant(np.array(1,dtype='i8'))
 
 
+def _is_sequence(x):
+    return hasattr(x, "__iter__") and not isinstance(x, Node)
+
+def _to_list(x):
+    if _is_sequence(x): return list(x)
+    else: return [x]
+
 def getitem(arr, slis):
     if not _is_sequence(slis):
         slis = [slis]
@@ -2275,7 +1950,7 @@ def sub2ind(subs, shp):
     strides = [None]*(ndim-1) + [1]
     for i in xrange(ndim-2, -1, -1):
         strides[i] = shp[i+1] * strides[i+1]
-    return add_multi([stride*sub for (stride,sub) in _safezip(strides, subs)])
+    return add_multi([stride*sub for (stride,sub) in utils.safezip(strides, subs)])
 
 def getitem_fancy(arr, indarrs):
     assert all(indarr.ndim==1 for indarr in indarrs)
@@ -2334,6 +2009,14 @@ def getitem_nonfancy(arr, slis):
         out = reshape(out, newshape)
     return out
 
+
+def _is_unique(col):
+    return len(set(col))==len(col)
+
+def _is_subset_of(maybesub, bigset):
+    return len(set(bigset).difference(set(maybesub)))==0
+
+
 def einsum(desc, x, y):
     pat = r'(\w+),(\w+)->(\w+)'
     match = re.match(pat, desc)
@@ -2371,7 +2054,7 @@ def einsum(desc, x, y):
            zt.reshape( [size(x, xdesc.index(c)) for c in loop]
                      + [size(x, xdesc.index(c)) for c in justx]
                      + [size(y, ydesc.index(c)) for c in justy]),
-           _invert_perm([zdesc.index(c) for c in loop + justx + justy]))
+           utils.invert_perm([zdesc.index(c) for c in loop + justx + justy]))
 
 def flatten(x):
     return reshape(x, [mul_multi(shape(x))])
@@ -2489,7 +2172,7 @@ def do_analysis(node, analysis):
         op = node.op
         if isinstance(op, Fill):
             node2sv[node] = op.value
-        elif isinstance(op, Constant) and _is_singleton(op.value):
+        elif isinstance(op, Constant) and utils.is_singleton(op.value):
             node2sv[node] = op.value.flat[0]
         elif isinstance(op, Repeat) and newparents[0] in node2sv:
             node2sv[node] = node2sv[newparents[0]]
@@ -2525,66 +2208,6 @@ def simplify(outputs):
     if single: outputs = [outputs]
     result = simplify_and_analyze(outputs)[0]
     return result[0] if single else result
-
-def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
-    op = node.op
-    parents = node.parents
-    parent_devices = [node2dev[par] for par in parents]
-    if isinstance(op,Transport):
-        assert parent_devices[0].devtype==op.src
-        devtype = op.targ   
-    elif any(pardev.devtype == "gpu" for pardev in parent_devices):
-        devtype = "gpu"
-    else:
-        devtype = "cpu"
-    if devtype == "gpu":
-        try:
-            get_impl(node, "gpu")
-        except MethodNotDefined:
-            print "couldn't get gpu func for ", node
-            devtype = "cpu"
-
-
-    # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
-    idx = 0 if idx is None else idx
-    machine = "default" if machine is None else machine
-    return Device(machine, devtype, idx)
-
-
-def assign_devices(outputs, devfn=None):
-    # First assign each node to a device
-    node2dev={}
-    for node in topsorted(outputs):        
-        maybedev = None if devfn is None else devfn(node)
-        if maybedev: 
-            node2dev[node] = maybedev
-        elif node.is_argument():
-            node2dev[node] = Device(devtype="cpu")
-        elif node.is_data():
-            node2dev[node] = node.get_device()
-        else:
-            node2dev[node] = determine_device(node, node2dev)
-
-    # Now make a new computation graph with 
-    replace = {}
-    newnode2dev = {}
-    for node in topsorted(outputs):
-        parents = node.parents
-        dev = node2dev[node]
-        if node.is_input():
-            replace[node] = node
-        else:
-            newparents = []
-            for par in parents:
-                if node2dev[par] == dev:
-                    newparents.append(replace[par])
-                else:
-                    newparents.append(transport(replace[par], node2dev[par], dev))
-                    newnode2dev[newparents[-1]] = dev
-            replace[node] = Result(node.op, newparents, typ=node.get_type())
-        newnode2dev[replace[node]] = dev
-
-    return [replace[node] for node in outputs], newnode2dev
 
 # ================================================================
 # Graph Traversal
@@ -2643,7 +2266,7 @@ def topsorted_active(outputs, wrt):
                 n2a[node] = False        
             else:
                 parents = node.parents
-                n2a[node] = any(n2a[par] and d for (par,d) in _safezip(parents, node.op.get_diff(len(parents))))
+                n2a[node] = any(n2a[par] and d for (par,d) in utils.safezip(parents, node.op.get_diff(len(parents))))
         if n2a[node]: yield node
 
 def count_nodes(outputs):
@@ -2685,109 +2308,6 @@ def batched_matmul(x, y):
 #     idxvar = cgt.scalar(dtype='i8')
 #     innerop = Composition([idxvar], [fn(idxvar)])
 #     return IdxMap(innerop)(idxvar)
-
-
-# ================================================================
-# Utils
-# ================================================================
-
-class Color: #pylint: disable=W0232
-    GRAY=30,
-    RED=31,
-    GREEN=32,
-    YELLOW=33,
-    BLUE=34,
-    MAGENTA=35,
-    CYAN=36,
-    WHITE=37,
-    CRIMSON=38    
-
-def colorprint(colorcode, text, o=sys.stdout):
-    o.write("\x1b[%im"%colorcode)
-    o.write(text)
-    o.write("\x1b[0m")
-
-def warn(msg):
-    colorprint(Color.YELLOW, msg)
-    sys.stdout.write("\n")
-def error(msg):
-    colorprint(Color.RED, msg)
-    sys.stdout.write("\n")
-
-def _is_sequence(x):
-    return hasattr(x, "__iter__") and not isinstance(x, Node)
-
-class NonDifferentiable(Exception):
-    pass
-
-class Disconnected(Exception):
-    pass
-
-def _is_singleton(x):
-    return np.prod(x.shape)==1
-
-def _get_scalar_value(x):
-    return x.flat[0]
-
-def _canon_order(x, y):
-    return (x,y) if x.get_name() < y.get_name() else (y,x)
-
-def _safezip(x,y):
-    assert len(x) == len(y)
-    return zip(x,y)
-
-def _flatten(lis):
-    out = []
-    for li in lis:
-        out.extend(li)
-    return out
-
-def _indexin(xs, ys):
-    y2i = {y:i for (i,y) in enumerate(ys)}
-    return [y2i.get(x,None) for x in xs]
-
-def _allsame(xs):
-    out = True
-    if len(xs)>0:
-        x0 = xs[0]
-        for x in xs[1:]:
-            out &= x==x0
-    return out
-
-def _is_unique(col):
-    return len(set(col))==len(col)
-
-def _is_subset_of(maybesub, bigset):
-    return len(set(bigset).difference(set(maybesub)))==0
-
-def _invert_perm(x):
-    return list(np.argsort(x))
-
-class Todo(Exception):
-    pass
-
-def _as_valid_array(x):
-    x = np.asarray(x)
-    x = x.astype(Dtype.canon(x.dtype))
-    return x
-
-def _hash_seq(args):
-    hashobj = hashlib.md5()
-    for a in args: hashobj.update(a)
-    return hashobj.hexdigest()
-
-def _hash_seq1(*args):
-    return _hash_seq(args)
-
-def _to_list(x):
-    if _is_sequence(x): return list(x)
-    else: return [x]
-
-def _is_int(node):
-    return _dtype_kind(node.dtype)=='i'
-
-def _list_is_valid_shape(inputs):
-    return len(inputs)==3 and all(x.ndim==0 and _is_int(x) for x in inputs)
 
 
 if sys.argv[0] != "gen_py.py":

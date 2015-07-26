@@ -132,9 +132,9 @@ class Pool(Op):
     def get_name(self):
         return "%spool"%self.kind
     def get_numeric_py(self):
-        raise cgt.Todo
+        raise cgt.exceptions.Todo
     def pullback(self, inputs, output, goutput):
-        raise cgt.Todo
+        raise cgt.exceptions.Todo
     def shp_apply(self, inputs):        
         x = inputs[0]
         assert x.ndim == 4

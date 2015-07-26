@@ -20,7 +20,7 @@ class ScalarTestCase(unittest.TestCase):
                 it.izip(cgt.UNARY_INFO.items(),it.repeat(cgt.ElwiseUnary)),
                 it.izip(cgt.BINARY_INFO.items(),it.repeat(cgt.ElwiseBinary))
                 ):
-            cgt.colorprint(cgt.Color.YELLOW, "Testing %s\n"%key)
+            cgt.utils.colorprint(cgt.utils.Color.YELLOW, "Testing %s\n"%key)
             if cls == cgt.ElwiseUnary:
                 n_in = 1
                 op = cls(key)

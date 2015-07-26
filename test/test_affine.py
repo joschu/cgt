@@ -27,7 +27,7 @@ def broadcast(opname,x,y,bcpat):
 
 def check_affine(f, *nu_inputs):
     types = ",".join(["{%s,%s}"%(x.dtype, x.ndim) for x in nu_inputs])
-    cgt.colorprint(cgt.Color.YELLOW,"Testing %s(%s)\n"%(f.__name__, types))
+    cgt.utils.colorprint(cgt.utils.Color.YELLOW,"Testing %s(%s)\n"%(f.__name__, types))
     sy_inputs = map(tensor_like, nu_inputs)
     for (i,sy) in enumerate(sy_inputs):
         sy.name = "x%i"%i

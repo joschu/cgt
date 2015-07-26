@@ -36,7 +36,7 @@ def setup_contiguous_storage(shareds, dtype = None):
     This facilitates writing optimization code that acts on flat vectors.
     """    
     dtype = dtype or cgt.floatX
-    # assert _allsame([s.get_device() for s in shareds])
+    # assert utils.allsame([s.get_device() for s in shareds])
     tot_size = sum(s.value.size for s in shareds)
     flatvec = np.empty(tot_size, dtype=dtype)
     start = 0
