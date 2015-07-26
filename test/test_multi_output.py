@@ -1,4 +1,7 @@
 import cgt, numpy as np
+import unittest
+
+
 class SinCos(cgt.Op):
 #     def c_code(self, inputs):
 #         return """
@@ -22,10 +25,16 @@ class SinCos(cgt.Op):
     c_extra_includes = ["math.h"]
 
 
-x = cgt.scalar('x')
-y,z = cgt.unpack(cgt.Result(SinCos(), [x]))
-xnum = 1.0
-yznum = cgt.numeric_eval([y,z], {x:xnum})
-print yznum, (np.sin(1),np.cos(1))
-f = cgt.make_function([x],[y,z])
-print f(xnum)
+class MultiOutputTestCase(unittest.TestCase):
+    def test_multi_output(self):
+        x = cgt.scalar('x')
+        y,z = cgt.unpack(cgt.Result(SinCos(), [x]))
+        xnum = 1.0
+        yznum = cgt.numeric_eval([y,z], {x:xnum})
+        np.testing.assert_allclose(yznum, (np.sin(1),np.cos(1)))
+        f = cgt.make_function([x],[y,z])
+        np.testing.assert_allclose(f(xnum), yznum)
+
+
+if __name__ == "__main__":
+    unittest.main()
