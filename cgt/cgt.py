@@ -699,6 +699,9 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
         raise NotImplementedError("invalid backend %s"%backend)
     return fn
 
+def get_cgt_src_root():
+    return osp.dirname(osp.dirname(osp.realpath(__file__)))
+
 _CONFIG = None
 def load_config():
     global _CONFIG
@@ -706,7 +709,7 @@ def load_config():
         from configobj import ConfigObj
         from validate import Validator
         rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
-        specfilename = osp.join(osp.dirname(osp.realpath(__file__)), "cgtrc_spec.ini")
+        specfilename = osp.join(get_cgt_src_root(), "cgtrc_spec.ini")
         _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)
         val = Validator()
         test = _CONFIG.validate(val,preserve_errors=True)
