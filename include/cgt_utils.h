@@ -65,3 +65,9 @@ static inline int cgt_itemsize(cgt_dtype dtype) {
 static inline size_t cgt_nbytes(const cgt_array* a) {
     return cgt_size(a) * cgt_itemsize(a->dtype);
 }
+
+
+#define cgt_always_assert(e)  \
+    ((void) ((e) ? ((void)0) : __cgt_always_assert (#e, __FILE__, __LINE__)))
+#define __cgt_always_assert(e, file, line) \
+    ((void)printf ("%s:%u: failed assertion `%s'\n", file, line, e), abort())

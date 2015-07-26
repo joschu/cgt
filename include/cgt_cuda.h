@@ -65,8 +65,8 @@ static void cgt_get_bt(size_t size, int* num_blocks, int* num_threads) {
 
 #else
 
-#define CUDA_CHECK(condition) assert(0 && "CUDA is disabled")
-#define CUBLAS_CHECK(condition) assert(0 && "CUDA is disabled")
-#define CURAND_CHECK(condition) assert(0 && "CUDA is disabled")
+#define CUDA_CHECK(condition) cgt_always_assert(0 && "CUDA is disabled")
+#define CUBLAS_CHECK(condition) cgt_always_assert(0 && "CUDA is disabled")
+#define CURAND_CHECK(condition) cgt_always_assert(0 && "CUDA is disabled")
 
 #endif

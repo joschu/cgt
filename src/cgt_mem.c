@@ -3,8 +3,7 @@
 #include "assert.h"
 #include "memory.h"
 #include "stdio.h"
-
-const static char cgt_cpu = 0, cgt_gpu = 1; // XXX HACK
+#include "cgt_utils.h"
 
 void* cgt_alloc(char devtype, size_t size) {
     if (devtype == cgt_cpu) {
@@ -36,7 +35,7 @@ void cgt_memcpy(char dest_type, char src_type, void* dest_ptr, void* src_ptr, si
         if       (src_type == cgt_cpu && dest_type == cgt_gpu) kind = cudaMemcpyHostToDevice;
         else if  (src_type == cgt_gpu && dest_type == cgt_cpu) kind = cudaMemcpyDeviceToHost;
         else if  (src_type == cgt_gpu && dest_type == cgt_gpu) kind = cudaMemcpyDeviceToDevice;
-        else assert(0 && "invalid src/test types");
+        else cgt_always_assert(0 && "invalid src/test types");
         #endif
         CUDA_CHECK(cudaMemcpy(dest_ptr, src_ptr, nbytes, kind));
     }

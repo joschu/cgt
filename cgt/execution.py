@@ -141,6 +141,11 @@ c++  -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s
 
 
 def get_impl(node, devtype):
+
+    compile_info = get_compile_info()    
+    if devtype == "gpu" and not compile_info["CGT_ENABLE_CUDA"]:
+        raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
+
     code_raw = (node.op.c_code if devtype=="cpu" else node.op.cuda_code)(node.parents)
     s = StringIO.StringIO()
     if devtype == "cpu":
@@ -176,6 +181,7 @@ def get_impl(node, devtype):
 
 
 def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
+
     op = node.op
     parents = node.parents
     parent_devices = [node2dev[par] for par in parents]
