@@ -7,12 +7,8 @@ import numpy as np
 # see https://github.com/cython/cython/blob/master/Cython/Includes/numpy/__init__.pxd
 import os.path as osp
 
-cdef extern from "cgt_mem.h":
-    void* cgt_alloc(cgt_devtype devtype, size_t size)
-    void cgt_free(cgt_devtype devtype, void* ptr)
-    void cgt_memcpy(cgt_devtype dest_type, cgt_devtype src_type, void* dest_ptr, void* src_ptr, size_t nbytes)
 
-cdef extern from "cgt_utils.h":
+cdef extern from "cgt_common.h":
 
     struct cgt_array:
         int ndim
@@ -47,9 +43,18 @@ cdef extern from "cgt_utils.h":
         cgt_cpu
         cgt_gpu
 
+    ctypedef int cgt_error
+
+    ctypedef void (*cgt_fun)(void*, cgt_array**);
+
+    void* cgt_alloc(cgt_devtype devtype, size_t size)
+    void cgt_free(cgt_devtype devtype, void* ptr)
+    void cgt_memcpy(cgt_devtype dest_type, cgt_devtype src_type, void* dest_ptr, void* src_ptr, size_t nbytes)
+
+
 
 ctypedef cnp.Py_intptr_t npy_intp_t
-ctypedef void (*cgt_fun)(void*, cgt_array**)
+# assert sizeof(npy_intp_t) == sizeof(size_t)
 
 
 
@@ -224,7 +229,6 @@ cdef class CallSequence(object):
                         self.objstore.append(s)
                         funcall.cldata = <void*><size_t>ctypes.cast(ctypes.pointer(s), ctypes.c_voidp).value
                 except cgt.MethodNotDefined:                
-                    print "getting python impl for",node
                     funcall.fptr = &call_pyfunc
                     pyfun = node.op.get_numeric_py()
                     cldata = (pyfun, len(parents), cgt.num_components(node))
@@ -295,7 +299,7 @@ cdef class CallSequence(object):
             if node.is_argument():
                 if node in in2val:
                     node2val[node] = in2val[node]
-            else:
+            elif isinstance(node.get_type(), cgt.Tensor):
                 node2val[node] = node.op.numeric_apply([node2val[par] for par in node.parents])
                 if not np.allclose(node2val[node],to_numpy_array(&self.cgtarrs[inode]),atol=1e-5):
                     print "error at",node
@@ -351,7 +355,6 @@ cdef object dtype_tostr(cgt_dtype d):
         raise ValueError("invalid cgt_dtype")
 
 cdef object to_numpy_array(cgt_array* a):
-    assert sizeof(npy_intp_t) == sizeof(size_t)
     # cdef npy_intp_t* newshape = <npy_intp_t*>malloc(sizeof(npy_intp_t*)*a.ndim)
     # for i in xrange(a.ndim): newshape[i] = a.shape[i]
     # cdef np.ndarray nparr = np.PyArray_SimpleNew(a.ndim, newshape, a.dtype)
@@ -361,9 +364,14 @@ cdef object to_numpy_array(cgt_array* a):
     return nparr
 
 cdef void to_cgt_array(cnp.ndarray nparr, cgt_array* a):
-    assert nparr.ndim == a.ndim and nparr.dtype.num == a.dtype and nparr.flags.c_contiguous
+    # assert nparr.ndim == a.ndim and nparr.dtype.num == a.dtype and nparr.flags.c_contiguous
+    if nparr.dtype.num != a.dtype:
+        nparr = nparr.astype(dtype_tostr(a.dtype))
+    # TODO: break this down
     cdef int i
     for i in xrange(a.ndim): assert a.shape[i] == nparr.shape[i]
+    assert a.ndim == nparr.ndim
+    
     assert a.data != NULL or cgt_nbytes(a) == 0
     cgt_memcpy(a.devtype, cgt_cpu, a.data, cnp.PyArray_DATA(nparr), cgt_nbytes(a))
 

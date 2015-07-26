@@ -25,7 +25,7 @@ def load_config():
         if test is not True:
             for (k,v) in test.items():
                 if v is not True:
-                    error("%s: %s in %s"%(k,v.message,rcfileloc))
+                    utils.error("%s: %s in %s"%(k,v.message,rcfileloc))
             raise ValueError
         envflags = os.getenv("CGT_FLAGS")
         if envflags:
@@ -60,7 +60,10 @@ def get_compile_info():
             cmake_info[lhs] = rhs
 
         CUDA_ROOT = cmake_info["CUDA_ROOT"]
-        DEFINITIONS = " ".join("-D"+s for s in filter(None,cmake_info["CGT_DEFS"].split(",")))
+        CGT_ENABLE_CUDA = cmake_info["CGT_ENABLE_CUDA"] in ["1","ON"]
+        DEFINITIONS = "-DENABLE_CUDA" if CGT_ENABLE_CUDA else ""
+
+
         _COMPILE_CONFIG = dict(        
             OPENBLAS_INCLUDE_DIR = osp.join(CGT_BUILD_ROOT,"OpenBLAS"),
             CGT_INCLUDE_DIR = cmake_info["CGT_INCLUDE_DIR"],
@@ -71,7 +74,7 @@ def get_compile_info():
             DEFINITIONS = DEFINITIONS,  
             CUDA_ROOT = CUDA_ROOT,
             CACHE_ROOT = osp.expanduser(config["cache_dir"]),
-            CGT_ENABLE_CUDA = cmake_info["CGT_ENABLE_CUDA"] in ["1","ON"],
+            CGT_ENABLE_CUDA = CGT_ENABLE_CUDA
             # CGT_LIBRARY = cmake_info["CGT_LIBRARY"],
         )
     return _COMPILE_CONFIG
@@ -145,18 +148,18 @@ c++  -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s
 
 def get_impl(node, devtype):
 
+    # TODO: includes should be in cache, as well as info about definitions like
+    # CGT_ENABLE_CUDA
+
     compile_info = get_compile_info()    
     if devtype == "gpu" and not compile_info["CGT_ENABLE_CUDA"]:
         raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
 
     code_raw = (node.op.c_code if devtype=="cpu" else node.op.cuda_code)(node.parents)
-    s = StringIO.StringIO()
     if devtype == "cpu":
-        includes = ["cgt_utils.h","cgt_mem.h","stdint.h","stddef.h"] + node.op.c_extra_includes
+        includes = ["cgt_common.h","stdint.h","stddef.h"] + node.op.c_extra_includes
     else:
-        includes = ["cgt_utils.h","cgt_mem.h","cgt_cuda.h"] + node.op.cuda_extra_includes
-    for filename in includes:
-        s.write('#include "%s"\n'%filename)
+        includes = ["cgt_common.h","cgt_cuda.h"] + node.op.cuda_extra_includes
     h = hashlib.md5(code_raw).hexdigest()[:10]
     funcname = devtype + node.op.__class__.__name__ + h
     ci = get_compile_info()
@@ -165,6 +168,7 @@ def get_impl(node, devtype):
     closure = node.op.get_closure(node.parents)
 
     if not osp.exists(libpath):
+        s = StringIO.StringIO()        
         if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
         print "compiling %(libpath)s for node %(node)s"%locals()
         ext = "c" if devtype == "cpu" else "cu"
@@ -305,7 +309,7 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
         if backend == "python":            
             outputs = dbg.nodes + outputs
         else:
-            warn("Debugging nodes can currently only be used with the python backend, but %s was selected. Ignoring"%backend)
+            utils.warn("Debugging nodes can currently only be used with the python backend, but %s was selected. Ignoring"%backend)
     
     if backend == "python":
         def fn(*invals):

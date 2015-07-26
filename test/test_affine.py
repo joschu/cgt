@@ -56,10 +56,10 @@ def check_affine(f, *nu_inputs):
     grads_true = gradients_affine(f_cgt, nu_inputs)
     grads_cgt = gradf_cgt(*nu_inputs)
 
-    np.testing.assert_allclose(out_cgt, out_true)
+    np.testing.assert_allclose(out_cgt, out_true, rtol=1e-5)
 
     for (g_cgt, g_true) in zip(grads_cgt, grads_true):
-        np.testing.assert_allclose(g_cgt, g_true)
+        np.testing.assert_allclose(g_cgt, g_true,rtol=1e-5)
 
     result_count = cgt.count_nodes(sy_result_simple)
     grad_count = cgt.count_nodes(sy_grads_simple)
@@ -181,7 +181,7 @@ class AffineTestCase(unittest.TestCase):
     def setUp(self):
         cgt.set_precision('double')
         nr.seed(303)
-    def test_affine(self):
+    def runTest(self):
 
         sA = np.array(nr.rand())
         sB = np.array(nr.rand())

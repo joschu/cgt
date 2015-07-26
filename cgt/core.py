@@ -658,7 +658,7 @@ class Fill(Op):
     (value, shape...) -> array filled with `value`, with shape `shape`
     """
     def __init__(self, value):
-        self.value = np.array(value)
+        self.value = _as_valid_array(value)
         self.dtype = self.value.dtype
         assert self.value.ndim==0
     def get_diff(self, num_inputs):
@@ -667,7 +667,7 @@ class Fill(Op):
         return "fill{%g}"%self.value
     def get_numeric_py(self):
         def fn(*shp):
-            if len(shp) == 0: return np.array(self.value)
+            if len(shp) == 0: return self.value
             else:
                 out = np.empty(shp, self.dtype)
                 out[:] = self.value
@@ -857,7 +857,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 }
 """%dict(cdtype=np2c[npdtype],cexpr=info.cexpr)
     def cuda_includes(self):
-        return ["cgt_cuda.h","cgt_utils.h"]
+        return ["cgt_cuda.h","cgt_common.h"]
 
 class ElwiseBinary(Op):
     c_extra_includes =  ["math.h"]    
@@ -916,7 +916,7 @@ class ElwiseBinary(Op):
         ind4shape = 1 if self.scalar_mask[0] else 0
         index0 = "0" if self.scalar_mask[0] else "i"
         index1 = "0" if self.scalar_mask[1] else "i"
-        return """
+        return r"""
 static inline %(cdtype2)s scalar_CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
 void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     int s = cgt_size(io[%(ind4shape)s]);
@@ -930,7 +930,7 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 """%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
     cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape)  
     def c_includes(self):
-        return ["cgt_utils.h","math.h"]
+        return ["cgt_common.h","math.h"]
     def cuda_code(self, inputs):
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
@@ -952,7 +952,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 }
 """%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],cexpr=self.info.cexpr,funcname=funcname, index="0" if self.kind==ElwiseBinary.ST else "i")  
     def cuda_includes(self):
-        return ["cgt_cuda.h","cgt_utils.h"]
+        return ["cgt_cuda.h","cgt_common.h"]
 
 
 # Shape manip
@@ -1233,7 +1233,8 @@ class Max(Op):
         x = inputs[0]
         inputpat = "x"*x.ndim
         singpat = "".join(["1" if i in self.axes else "x" for i in xrange(x.ndim)])
-        return [broadcast("==", output, x, singpat+","+inputpat) * goutput]
+        bcpat = singpat+","+inputpat
+        return [broadcast("*", goutput, broadcast("==", output, x, bcpat), bcpat)]
         # XXX doesn't deal well with corner case
     def shp_apply(self, inputs):
         x = inputs[0]
@@ -1341,6 +1342,7 @@ class IncSli(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def c_code(self, inputs):
+        raise MethodNotDefined # XXX
         x = inputs[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < out->shape[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" 

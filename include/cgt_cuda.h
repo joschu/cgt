@@ -1,5 +1,4 @@
 #pragma once
-#ifdef ENABLE_CUDA
 #include "cuda_runtime.h"
 
 // Code mostly ripped off from caffe
@@ -62,11 +61,3 @@ static void cgt_get_bt(size_t size, int* num_blocks, int* num_threads) {
     *num_blocks = 128;
   }
 }
-
-#else
-
-#define CUDA_CHECK(condition) cgt_always_assert(0 && "CUDA is disabled")
-#define CUBLAS_CHECK(condition) cgt_always_assert(0 && "CUDA is disabled")
-#define CURAND_CHECK(condition) cgt_always_assert(0 && "CUDA is disabled")
-
-#endif

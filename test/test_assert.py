@@ -6,6 +6,9 @@ def myfunc(x):
 
 class AssertTestCase(unittest.TestCase):
     def test_assertion(self):
+        if cgt.load_config()["backend"] != "python":
+            cgt.utils.warn("Skipping test -- only works for backend=python")
+            return
         x = cgt.scalar()
         with cgt.debug_context() as dbg:
             cgt.assert_(cgt.equal(x, 1),"yoyoyo")

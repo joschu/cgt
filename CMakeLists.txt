@@ -60,10 +60,10 @@ endif(CGT_DEVEL_MODE)
 set(CGT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
 message("include dir ${CGT_INCLUDE_DIR}")
 
-add_library(cgt SHARED src/cgt_mem.c include/cgt_mem.h include/cgt_utils.h)
+add_library(cgt SHARED src/cgt_common.c include/cgt_common.h)
 if (CGT_ENABLE_CUDA)
-  find_package(CUDA REQUIRED)  
-  target_compile_definitions(cgt PRIVATE "-DENABLE_CUDA")
+  find_package(CUDA REQUIRED)
+  add_definitions(-DCGT_ENABLE_CUDA)
 endif()
 
 target_link_libraries(cgt ${CUDA_CUDART_LIBRARY})
@@ -114,15 +114,12 @@ add_custom_command(
 
 # cuda_add_library(cudadummy SHARED dummy.cu)
 
-get_target_property(CGT_DEFS cgt COMPILE_DEFINITIONS)
-
 message("link flags ${CMAKE_SHARED_LINKER_FLAGS}")
 
 get_property(CGT_LIBRARY_PATH TARGET cgt PROPERTY LOCATION)
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/build_info.txt 
   "CUDA_ROOT := ${CUDA_TOOLKIT_ROOT_DIR}\n"
   "CGT_INCLUDE_DIR := ${CGT_INCLUDE_DIR}\n"
-  "CGT_DEFS := ${CGT_DEFS}\n"  
   "C_COMPILER := ${CMAKE_C_COMPILER}\n"
   "CGT_LIBRARY_PATH := ${CGT_LIBRARY_PATH}\n"
   "CUDA_LIBRARIES := ${CUDA_LIBRARIES}\n"

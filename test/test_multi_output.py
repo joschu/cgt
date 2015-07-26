@@ -26,7 +26,7 @@ class SinCos(cgt.Op):
 
 
 class MultiOutputTestCase(unittest.TestCase):
-    def test_multi_output(self):
+    def runTest(self):
         x = cgt.scalar('x')
         y,z = cgt.unpack(cgt.Result(SinCos(), [x]))
         xnum = 1.0
@@ -37,4 +37,4 @@ class MultiOutputTestCase(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    MultiOutputTestCase().runTest()

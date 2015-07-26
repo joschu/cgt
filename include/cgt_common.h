@@ -2,7 +2,16 @@
 
 #include "stddef.h"
 #include "stdbool.h"
+#include "stdio.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ================================================================
+// Basic structs and enums
+// ================================================================
+ 
 typedef enum cgt_dtype {
     cgt_i1 = 1,
     cgt_i2 = 3,
@@ -23,6 +32,7 @@ typedef enum cgt_devtype {
     cgt_cpu,
     cgt_gpu
 } cgt_devtype;
+
 
 typedef struct cgt_array {
     int ndim;
@@ -66,8 +76,45 @@ static inline size_t cgt_nbytes(const cgt_array* a) {
     return cgt_size(a) * cgt_itemsize(a->dtype);
 }
 
+typedef void (*cgt_fun)(void*, cgt_array**);
 
-#define cgt_always_assert(e)  \
-    ((void) ((e) ? ((void)0) : __cgt_always_assert (#e, __FILE__, __LINE__)))
-#define __cgt_always_assert(e, file, line) \
-    ((void)printf ("%s:%u: failed assertion `%s'\n", file, line, e), abort())
+// ================================================================
+// Error handling 
+// ================================================================
+
+#define cgt_assert(x)  \
+    do {\
+        if (!(x)) {\
+            fprintf (stderr, "Assertion failed: %s (%s:%d)\n", #x, \
+                __FILE__, __LINE__);\
+            fflush (stderr);\
+            cgt_abort();\
+        }\
+    } while (0)
+
+#define CGT_NORETURN __attribute__ ((noreturn))
+CGT_NORETURN void nn_err_abort (void);
+
+CGT_NORETURN void cgt_abort();
+
+typedef int cgt_status;
+#define cgt_success 0
+#define cgt_err_unknown 1
+#define cgt_err_shape 2
+#define cgt_err_alloc 3
+
+// ================================================================
+// Memory management 
+// ================================================================
+ 
+void* cgt_alloc(char devtype, size_t size);
+void cgt_free(char devtype, void* ptr);
+void cgt_memcpy(char dest_type, char src_type, void* dest_ptr, void* src_ptr, size_t nbytes);
+
+
+
+
+
+#ifdef __cplusplus
+}
+#endif

@@ -6,3 +6,9 @@ class Disconnected(Exception):
 
 class Todo(Exception):
     pass
+
+class ShapeError(Exception):
+    pass
+
+class AllocationError(Exception):
+    pass

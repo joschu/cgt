@@ -3,7 +3,7 @@
 
 CudaContext g_context;
 
-#ifdef ENABLE_CUDA
+#ifdef CGT_ENABLE_CUDA
 
 void cuda_initialize() {
     CUDA_CHECK(cudaStreamCreate(&g_context.stream));
