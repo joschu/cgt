@@ -57,17 +57,20 @@ if (CGT_DEVEL_MODE)
   set(CMAKE_C_FLAGS "-Wall -Wextra -Wno-unused-function -Wno-sign-compare")
 endif(CGT_DEVEL_MODE)
 
-set(CGT_INCLUDE_DIR ${CMAKE_SOURCE_DIR})
+set(CGT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
+message("include dir ${CGT_INCLUDE_DIR}")
 
-add_library(cgt SHARED cgt_mem.c cgt_mem.h cgt_utils.h)
+add_library(cgt SHARED src/cgt_mem.c include/cgt_mem.h include/cgt_utils.h)
 if (CGT_ENABLE_CUDA)
   find_package(CUDA REQUIRED)  
   target_compile_definitions(cgt PRIVATE "-DENABLE_CUDA")
-  target_link_libraries(cgt ${CUDA_CUDART_LIBRARY})
-  target_include_directories(cgt PRIVATE ${CUDA_INCLUDE_DIRS})
 endif()
 
-cython_add_module(cycgt cycgt.pyx)
+target_link_libraries(cgt ${CUDA_CUDART_LIBRARY})
+target_include_directories(cgt PRIVATE ${CUDA_INCLUDE_DIRS} ${CGT_INCLUDE_DIR})
+
+
+cython_add_module(cycgt ${CMAKE_SOURCE_DIR}/src/cycgt.pyx)
 target_link_libraries(cycgt cgt)
 target_include_directories(cycgt PRIVATE ${NUMPY_INCLUDE_DIR} ${CGT_INCLUDE_DIR})
 
