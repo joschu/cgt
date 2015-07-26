@@ -876,7 +876,11 @@ class ElwiseBinary(Op):
     def get_name(self):
         return BINARY_INFO[self.opname].short
     def get_numeric_py(self):
-        return self.info.pyfunc
+        def fn(x,y):
+            if self.scalar_mask==(False,False):
+                assert x.shape==y.shape, "Implicit broadcasting isn't allows. Use the broadcast(...) function"
+            return self.info.pyfunc(x,y)
+        return fn
     def get_replacement(self, parents, analysis):
         node2sv = analysis["node2sv"]
         ind4shape = 1 if self.scalar_mask[0] else 0
@@ -923,6 +927,7 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     %(cdtype0)s* in0 = (%(cdtype0)s*)io[0]->data;
     %(cdtype1)s* in1 = (%(cdtype1)s*)io[1]->data;
     %(cdtype2)s* out = (%(cdtype2)s*)io[2]->data;
+    cgt_assert((cgt_size(io[2]) == s) && "Shape error in eleemntwise binary operation broadcast your input to the right shape");
     for (int i=0; i < s; ++i) {
         out[i] = scalar_CGT_FUNCNAME(in0[%(index0)s], in1[%(index1)s]);
     }
