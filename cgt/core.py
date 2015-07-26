@@ -1,4 +1,4 @@
-import sys, numpy as np, hashlib, copy, cPickle, re, operator, ctypes, warnings, os.path as osp, subprocess, StringIO, os
+import sys, numpy as np, hashlib, copy, cPickle, re, operator, ctypes, warnings, subprocess, StringIO
 from collections import defaultdict,namedtuple
 import traceback
 import __builtin__
@@ -751,21 +751,21 @@ def _nu_ifloor(x):
 UnaryInfo = namedtuple("UnaryInfo", ("short","pyfunc","diff","typeinfo", "gradexpr", "cexpr"))
 
 UNARY_INFO = {
-    "abs" : UnaryInfo(   "abs", np.abs,  True,   's', "gy*sign(x)", "fabs(x)"),
-    "ceil" : UnaryInfo(  "ceil", np.ceil, False,  'i',  "_no_grad()", "ceil(x)"),
-    "cos" : UnaryInfo(   "cos", np.cos,  True,   'f',   "-gy*sin(x)", "cos(x)"),
-    "exp" : UnaryInfo(   "exp", np.exp,  True,   'f',   "gy*exp(x)", "exp(x)"),
-    "iceil" : UnaryInfo( "iceil", _nu_iceil, False, 'i',   "_no_grad()", "(int)ceil(x)"),
-    "ifloor" : UnaryInfo( "ifloor", _nu_ifloor, False, 'i',   "_no_grad()", "(int)floor(x)"),
-    "log" : UnaryInfo(   "log", np.log,  True,   'f', "gy/x", "log(x)"),
-    "neg" : UnaryInfo(   "negative", np.negative, True, 's', "-gy", "(-x)"),
-    "sign" : UnaryInfo(   "sign", np.sign, False,   's',  "_no_grad()", "2*(x>0)-1"),
-    "sin" : UnaryInfo(    "sin", np.sin,    True, 'f',  "gy*cos(x)", "sin(x)"),
-    "square" : UnaryInfo( "square", np.square, True, 's',  "2.0*gy*x", "x*x"),
-    "sqrt" : UnaryInfo( "sqrt", np.sqrt, True, 'f', "gy/(2.0*y)", "sqrt(x)"),
-    "tanh" : UnaryInfo(   "tanh", np.tanh, True,   'f', "gy*(1-square(y))", "tanh(x)"),
-    "sigmoid" : UnaryInfo( "sigmoid", _nu_sigmoid, True, 'f', "gy*y*(1-y)", "1.0/(1.0+exp(-x))"),
-    "conj" : UnaryInfo( "conj", np.conj, True, 'c', "conj(gy)", "conj(x)")
+    "abs" : UnaryInfo(   "abs", np.abs,  True,   's', lambda x, y, gy: gy*sign(x), "fabs(x)"),
+    "ceil" : UnaryInfo(  "ceil", np.ceil, False,  'i',  lambda x, y, gy: _no_grad(), "ceil(x)"),
+    "cos" : UnaryInfo(   "cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*sin(x), "cos(x)"),
+    "exp" : UnaryInfo(   "exp", np.exp,  True,   'f',   lambda x, y, gy: gy*exp(x), "exp(x)"),
+    "iceil" : UnaryInfo( "iceil", _nu_iceil, False, 'i',   lambda x, y, gy: _no_grad(), "(int)ceil(x)"),
+    "ifloor" : UnaryInfo( "ifloor", _nu_ifloor, False, 'i',   lambda x, y, gy: _no_grad(), "(int)floor(x)"),
+    "log" : UnaryInfo(   "log", np.log,  True,   'f', lambda x, y, gy: gy/x, "log(x)"),
+    "neg" : UnaryInfo(   "negative", np.negative, True, 's', lambda x, y, gy: -gy, "(-x)"),
+    "sign" : UnaryInfo(   "sign", np.sign, False,   's',  lambda x, y, gy: _no_grad(), "2*(x>0)-1"),
+    "sin" : UnaryInfo(    "sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cos(x), "sin(x)"),
+    "square" : UnaryInfo( "square", np.square, True, 's',  lambda x, y, gy: 2.0*gy*x, "x*x"),
+    "sqrt" : UnaryInfo( "sqrt", np.sqrt, True, 'f', lambda x, y, gy: gy/(2.0*y), "sqrt(x)"),
+    "tanh" : UnaryInfo(   "tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-square(y)), "tanh(x)"),
+    "sigmoid" : UnaryInfo( "sigmoid", _nu_sigmoid, True, 'f', lambda x, y, gy: gy*y*(1-y), "1.0/(1.0+exp(-x))"),
+    "conj" : UnaryInfo( "conj", np.conj, True, 'c', lambda x, y, gy: conj(gy), "conj(x)")
 }
 
 BinaryInfo = namedtuple("BinaryInfo", ("short","pyfunc","commutes","diff","typeinfo","gradexpr", "cexpr"))
@@ -773,13 +773,13 @@ BinaryInfo = namedtuple("BinaryInfo", ("short","pyfunc","commutes","diff","typei
 
 BINARY_INFO = {
     #infix             short      pyfunc    commutes     diff        typeinfo
-    "*"   : BinaryInfo("multiply",  np.multiply, True,    (True,True),    'p',        "[y*gz,x*gz]", "x*y"),
-    "+"   : BinaryInfo("add",  np.add,   True,    (True,True),    'p',        "[gz,gz]", "x+y"),
-    "-"   : BinaryInfo("subtract",  np.subtract, False,    (True,True),   'p',       "[gz,-gz]", "x-y"),
-    "/"   : BinaryInfo("divide",  np.divide,  False,    (True,True),    'p',       "[gz/y,-gz*z/y]", "x/y"),
-    "<"   : BinaryInfo("less",   np.less,    False,    (False,False),  'i1',     "_no_grad()", "x<y"),
-    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      "[gz*y*z/x,z*log(x)]","pow(x,y)"),
-    "=="  : BinaryInfo("equal", lambda x,y : np.equal(x,y).astype('i'),      True,      (False, False), 'i1',  "_no_grad()", "x==y"),
+    "*"   : BinaryInfo("multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
+    "+"   : BinaryInfo("add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
+    "-"   : BinaryInfo("subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
+    "/"   : BinaryInfo("divide",  np.divide,  False,    (True,True),    'p',       lambda x, y, z, gz: [gz/y,-gz*z/y], "x/y"),
+    "<"   : BinaryInfo("less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
+    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,z*log(x)],"pow(x,y)"),
+    "=="  : BinaryInfo("equal", lambda x,y : np.equal(x,y).astype('i'),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
 }
 
 
@@ -808,7 +808,7 @@ class ElwiseUnary(Op):
     def get_replacement(self, _newparents, _analysis):
         return None
     def pullback(self, (x,), y, gy): #pylint: disable=W0613
-        return [eval(self.info.gradexpr)]
+        return [self.info.gradexpr(x, y, gy)]
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, inputs):
@@ -894,7 +894,7 @@ class ElwiseBinary(Op):
                 if node2sv[l] == 1: return r
                 elif node2sv[l] == -1: return -r
     def pullback(self, (x, y), z, gz): #pylint: disable=W0613
-        gin = eval(BINARY_INFO[self.opname].gradexpr)
+        gin = BINARY_INFO[self.opname].gradexpr(x, y, z, gz)
         return [sum(gv) if (v.ndim==0 and gv.ndim > 0) else gv for (v,gv) in utils.safezip([x,y],gin)]
     def shp_apply(self, inputs):
         ind4shape = 1 if self.scalar_mask[0] else 0
