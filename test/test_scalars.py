@@ -52,7 +52,7 @@ class ScalarTestCase(unittest.TestCase):
             PROB2RESULT[key] = {}
             PROB2RESULT[key]["grad"] = grad_count
 
-        from tabulate import tabulate
+        from thirdparty.tabulate import tabulate
         print tabulate([[key,val["grad"]] for (key,val) in PROB2RESULT.iteritems()],headers=["funcname","gradcount"])    
 
 
