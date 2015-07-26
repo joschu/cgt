@@ -1,0 +1,5 @@
+# See cgtrc_spec.ini for listing of options
+# Copy to $HOME/.cgtrc
+precision = single
+backend = cython
+backend_check_values = False 
