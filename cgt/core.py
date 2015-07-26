@@ -706,8 +706,8 @@ _CONFIG = None
 def load_config():
     global _CONFIG
     if _CONFIG is None:
-        from configobj import ConfigObj
-        from validate import Validator
+        from thirdparty.configobj import ConfigObj
+        from thirdparty.validate import Validator
         rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
         specfilename = osp.join(get_cgt_src_root(), "cgtrc_spec.ini")
         _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)

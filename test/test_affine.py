@@ -232,7 +232,7 @@ class AffineTestCase(unittest.TestCase):
         # TODO: examples with constants
         # TODO: examples that mix scalar and matrix types
 
-        from tabulate import tabulate
+        from thirdparty.tabulate import tabulate
         print tabulate([[key,val["fn"],val["grad"]] for (key,val) in sorted(PROB2RESULT.items())],headers=["funcname","fncount","gradcount"])
 
 
