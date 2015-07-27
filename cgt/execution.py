@@ -312,6 +312,7 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
             utils.warn("Debugging nodes can currently only be used with the python backend, but %s was selected. Ignoring"%backend)
     
     if backend == "python":
+        outputs = simplify(outputs)
         def fn(*invals):
             out = numeric_eval(outputs, {innode:inval for (innode,inval) in utils.safezip(inputs, invals)})
             if dbg and len(dbg.nodes)>0: out = out[len(dbg.nodes):]

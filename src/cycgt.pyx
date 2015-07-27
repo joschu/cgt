@@ -319,7 +319,6 @@ cdef class CallSequence(object):
                     raise RuntimeError
 
     def __dealloc__(self):
-        return
         cdef cgt_array* cgtarr
         cdef cgt_funcall* funcall
 
@@ -381,10 +380,10 @@ cdef void to_cgt_array(cnp.ndarray nparr, cgt_array* a):
         nparr = nparr.astype(dtype_tostr(a.dtype))
     # TODO: break this down
     cdef int i
-    for i in xrange(a.ndim): assert a.shape[i] == nparr.shape[i]
-    assert a.ndim == nparr.ndim
+    assert a.ndim == nparr.ndim, "ndimsame"
+    for i in xrange(a.ndim): assert a.shape[i] == nparr.shape[i],"shapesame%i,%s,%s"%(i,(<object>nparr).shape, (a.shape[0], a.shape[1]))
     
-    assert a.data != NULL or cgt_nbytes(a) == 0
+    assert a.data != NULL or cgt_nbytes(a) == 0,"notnull"
     cgt_memcpy(a.devtype, cgt_cpu, a.data, cnp.PyArray_DATA(nparr), cgt_nbytes(a))
 
 cdef _to_valid_array(arr):

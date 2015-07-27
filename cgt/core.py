@@ -659,6 +659,7 @@ class Fill(Op):
     """
     def __init__(self, value):
         self.value = _as_valid_array(value)
+        assert self.value.ndim ==0
         self.dtype = self.value.dtype
         assert self.value.ndim==0
     def get_diff(self, num_inputs):
@@ -975,7 +976,7 @@ class Size(Op):
         return "size{%i}"%self.axis
     def get_numeric_py(self):
         def fn(arr):
-            return arr.shape[self.axis]
+            return np.array(arr.shape[self.axis])
         return fn
     def pullback(self, inputs, output, goutput):
         raise exceptions.NonDifferentiable
@@ -1325,7 +1326,7 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     cdtype=np2c[inputs[0].dtype])
 
 class IncSli(Op):
-    # needs_alloc=False
+    needs_alloc=False
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
@@ -1348,14 +1349,12 @@ class IncSli(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def c_code(self, inputs):
-        # raise MethodNotDefined
         x = inputs[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         incidxexpr =  " + ".join(["i%i"%ax + "*incstrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
-        print "AXIS",self.axis
         return r"""
 void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     cgt_array *in=io[0], *inc = io[4], *out=io[5];

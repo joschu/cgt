@@ -4,7 +4,7 @@ import numpy as np
 from collections import namedtuple
 import os.path as osp
 import argparse
-
+from time import time
 
 # via https://github.com/karpathy/char-rnn/blob/master/model/GRU.lua
 # via http://arxiv.org/pdf/1412.3555v1.pdf
@@ -72,8 +72,9 @@ def flatcat(xs):
 
 def rmsprop_update(grad, state):
     state.sqgrad[:] *= state.decay_rate
-    state.sqgrad[:] += grad**2
-    np.sqrt(state.sqgrad, out=state.scratch[:]) # scratch = scaling
+    np.square(grad, out=state.scratch) # scratch=g^2
+    state.sqgrad[:] += state.scratch
+    np.sqrt(state.sqgrad, out=state.scratch) # scratch = scaling
     np.divide(grad, state.scratch, out=state.scratch) # scratch = grad/scaling
     np.multiply(state.scratch, state.step_size, out=state.scratch)
     state.theta[:] -= state.scratch
@@ -131,15 +132,11 @@ class Loader(object):
         data_file = np.load(preproc_file)
         self.vocab_mapping = {char:ind for (ind,char) in enumerate(data_file["chars"])}
         data = data_file["inds"]
-        length = data.shape[0]
-        residue = (length-size_batch) % (size_batch * n_unroll)
-        newlength = length - residue
-        assert newlength % (size_batch * n_unroll) == size_batch
-
+        data = data[:data.shape[0] - (data.shape[0] % size_batch)].reshape(size_batch, -1).T # inds_tn
+        n_batches = (data.shape[0]-1) // n_unroll 
+        data = data[:n_batches*n_unroll+1]  # now t-1 is divisble by batch size
         self.n_unroll = n_unroll
-
-        n_batches = (newlength-size_batch)//(size_batch * n_unroll)
-        self.data = data[:newlength].reshape(n_batches*n_unroll+1, size_batch)
+        self.data = data
 
         self.n_train_batches = int(n_batches*split_fractions[0])
         self.n_test_batches = int(n_batches*split_fractions[1])
@@ -235,6 +232,8 @@ def main():
         decay_rate = opt.decay_rate)
 
     for iepoch in xrange(opt.n_epochs):
+        losses = []
+        tstart = time()
         print "starting epoch",iepoch
         prev_hiddens = initialize_hiddens()
         for (x,y) in loader.train_batches_iter():
@@ -244,7 +243,8 @@ def main():
             np.clip(grad,-5,5,out=grad)
             prev_hiddens = out[2:]
             rmsprop_update(grad, optim_state)
-            print loss
+            losses.append(loss)
+        print "%.3f s/batch. avg loss = %.3f"%((time()-tstart)/len(losses), np.mean(losses))
         optim_state.step_size *= .95
 
 if __name__ == "__main__":
