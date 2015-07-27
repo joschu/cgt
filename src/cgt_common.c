@@ -11,19 +11,13 @@
 // ================================================================
 // Error handling 
 // ================================================================
- 
- const char* cgt_get_error_string(cgt_status e) {
-    switch (e) {
-        case cgt_err_unknown: return "unknown error";
-        case cgt_err_shape: return "shape error";
-        case cgt_err_alloc: return "allocation error";       
-    }
-    cgt_assert(0 && "unreachable");
- }
 
  void cgt_abort() {
     abort();    
  }
+
+cgt_status cgt_global_status = cgt_ok;
+char cgt_global_errmsg[1000];
 
 // ================================================================
 // Memory management 
@@ -68,7 +62,7 @@ void cgt_memcpy(char dest_type, char src_type, void* dest_ptr, void* src_ptr, si
         if       (src_type == cgt_cpu && dest_type == cgt_gpu) kind = cudaMemcpyHostToDevice;
         else if  (src_type == cgt_gpu && dest_type == cgt_cpu) kind = cudaMemcpyDeviceToHost;
         else if  (src_type == cgt_gpu && dest_type == cgt_gpu) kind = cudaMemcpyDeviceToDevice;
-        else cgt_assert(0 && "invalid src/test types");
+        else cgt_assert(0 && "invalid src/dest types");
         CUDA_CHECK(cudaMemcpy(dest_ptr, src_ptr, nbytes, kind));
         #else
         cgt_assert(0 && "CUDA disabled");

@@ -97,11 +97,27 @@ CGT_NORETURN void nn_err_abort (void);
 
 CGT_NORETURN void cgt_abort();
 
-typedef int cgt_status;
-#define cgt_success 0
-#define cgt_err_unknown 1
-#define cgt_err_shape 2
-#define cgt_err_alloc 3
+typedef enum {
+    cgt_ok = 0,
+    cgt_err
+} cgt_status;
+
+extern cgt_status cgt_global_status;
+extern char cgt_global_errmsg[1000];
+
+static inline void cgt_clear_error() {
+    cgt_global_status = cgt_ok;
+}
+
+
+// XXX how do we check that message doesn't overflow?
+#define cgt_check(x, msg, ...) \
+    do {\
+        if ((!(x))) {\
+            sprintf(cgt_global_errmsg, msg, ##__VA_ARGS__);\
+            cgt_global_status = cgt_err;\
+        }\
+    } while(0)
 
 // ================================================================
 // Memory management 

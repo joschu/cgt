@@ -52,6 +52,14 @@ cdef extern from "cgt_common.h":
     void cgt_memcpy(cgt_devtype dest_type, cgt_devtype src_type, void* dest_ptr, void* src_ptr, size_t nbytes)
 
 
+    cdef enum cgt_status:
+        cgt_ok
+        cgt_err
+
+    void cgt_clear_error()
+    char* cgt_global_errmsg
+    cgt_status cgt_global_status
+
 
 ctypedef cnp.Py_intptr_t npy_intp_t
 # assert sizeof(npy_intp_t) == sizeof(size_t)
@@ -283,6 +291,9 @@ cdef class CallSequence(object):
             funcall = &self.funcalls[i]
             if funcall.fptr != NULL:
                 funcall.fptr(funcall.cldata, funcall.args)
+                if cgt_global_status != cgt_ok:
+                    msg = <object>cgt_global_errmsg
+                    raise RuntimeError("Error encountered during execution: %s.\nRun your function with the python backend for easier debugging. (CGT_FLAGS=backend=python)"%msg)
         if self.check: self.dbg_check_values()
 
     def get_outputs_numpy(self):
@@ -308,6 +319,7 @@ cdef class CallSequence(object):
                     raise RuntimeError
 
     def __dealloc__(self):
+        return
         cdef cgt_array* cgtarr
         cdef cgt_funcall* funcall
 

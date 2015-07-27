@@ -878,7 +878,7 @@ class ElwiseBinary(Op):
     def get_numeric_py(self):
         def fn(x,y):
             if self.scalar_mask==(False,False):
-                assert x.shape==y.shape, "Implicit broadcasting isn't allows. Use the broadcast(...) function"
+                assert x.shape==y.shape, "Implicit broadcasting isn't allowed. Use the broadcast(...) function"
             return self.info.pyfunc(x,y)
         return fn
     def get_replacement(self, parents, analysis):
@@ -927,7 +927,7 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     %(cdtype0)s* in0 = (%(cdtype0)s*)io[0]->data;
     %(cdtype1)s* in1 = (%(cdtype1)s*)io[1]->data;
     %(cdtype2)s* out = (%(cdtype2)s*)io[2]->data;
-    cgt_assert((cgt_size(io[2]) == s) && "Shape error in eleemntwise binary operation broadcast your input to the right shape");
+    cgt_check(cgt_size(io[2]) == s, "Shape error in elementwise binary operation. You might be missing a call to cgt.broadcast(...)");
     for (int i=0; i < s; ++i) {
         out[i] = scalar_CGT_FUNCNAME(in0[%(index0)s], in1[%(index1)s]);
     }
@@ -1325,6 +1325,7 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     cdtype=np2c[inputs[0].dtype])
 
 class IncSli(Op):
+    # needs_alloc=False
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
@@ -1347,31 +1348,32 @@ class IncSli(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def c_code(self, inputs):
-        raise MethodNotDefined # XXX
+        # raise MethodNotDefined
         x = inputs[0]
         openloops = " ".join(
-            ["for (int i%(ax)s=0; i%(ax)s < out->shape[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" 
-            if ax==self.axis else "1") for ax in xrange(x.ndim)])
+            ["for (int i%(ax)s=0; i%(ax)s < inc->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
-        inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax)
-         + "*instrides[%i]"%ax for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join(["i%i"%ax + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
+        incidxexpr =  " + ".join(["i%i"%ax + "*incstrides[%i]"%ax for ax in xrange(x.ndim)])
+        outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
+        print "AXIS",self.axis
         return r"""
 void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-    cgt_array *in=io[0], *out=io[4];
+    cgt_array *in=io[0], *inc = io[4], *out=io[5];
     long start = ((long*)io[1]->data)[0];
     //long stop = ((long*)io[2]->data)[0];
     long step = ((long*)io[3]->data)[0];
-    size_t instrides[in->ndim];
-    cgt_get_strides(in, instrides);
-    size_t outstrides[out->ndim];
+    cgt_assert(cgt_size(in)==cgt_size(out));
+    size_t outstrides[in->ndim];
     cgt_get_strides(out, outstrides);
+    size_t incstrides[inc->ndim];
+    cgt_get_strides(inc, incstrides);
+    if (out->data != in->data) cgt_memcpy(cgt_cpu, cgt_cpu, out, in, cgt_nbytes(out));
     %(openloops)s
-        ((%(cdtype)s*)out->data)[%(outidxexpr)s] = ((%(cdtype)s*)in->data)[%(inidxexpr)s];
+        ((%(cdtype)s*)out->data)[%(outidxexpr)s] += ((%(cdtype)s*)inc->data)[%(incidxexpr)s];
     %(closeloops)s
 }
-"""%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
-    cdtype=np2c[inputs[0].dtype])
+"""%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops,
+    cdtype=np2c[inputs[0].dtype], incidxexpr=incidxexpr)
 
 class GetFlatIndices(Op):
     def get_diff(self, _):
