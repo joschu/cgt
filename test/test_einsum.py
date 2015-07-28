@@ -2,8 +2,9 @@ import cgt, numpy as np,numpy.random as nr
 import unittest
 
 
-class EinsumTestCase(unittest.TestCase):
-    def test_einsum(self):
+class EinsumTestCase(unittest.TestCase):    
+    def runTest(self):
+        cgt.set_precision("double")
         x = cgt.tensor3()
         y = cgt.tensor3()
 
@@ -24,4 +25,4 @@ class EinsumTestCase(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    EinsumTestCase().runTest()

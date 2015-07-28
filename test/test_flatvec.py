@@ -4,7 +4,7 @@ import unittest
 
 
 class FlatvecTestCase(unittest.TestCase):
-    def test_flatvec(self):
+    def runTest(self):
         cgt.set_precision('double')
 
         N = 10
@@ -32,5 +32,5 @@ class FlatvecTestCase(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    FlatvecTestCase().runTest()
 

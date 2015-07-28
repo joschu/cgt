@@ -13,12 +13,12 @@ class SinCos(cgt.Op):
 #     z[0] = cosf(x[0]);
 # }
 #         """
+    call_type = "valret"
     def typ_apply(self, inputs):
         return cgt.Tuple(cgt.Tensor(cgt.floatX, 0), cgt.Tensor(cgt.floatX, 0))
-    def get_numeric_py(self):
-        def fn(x):
-            return (np.sin(x),np.cos(x))
-        return fn
+    def py_apply_valret(self, reads):
+        x = reads[0]
+        return (np.sin(x), np.cos(x))
     def shp_apply(self, inputs):
         return (cgt.shape(inputs[0]), cgt.shape(inputs[0]))
     c_extra_link_flags = "-lm"

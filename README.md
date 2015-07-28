@@ -21,5 +21,5 @@ Then, in the source directory,
 
 In source directory, 
 
-    python test/test_all.py
+    python test/run_all_tests.py
 

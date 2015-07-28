@@ -4,7 +4,7 @@ import unittest
 
 
 class LinearRegressionTestCase(unittest.TestCase):
-    def test_linreg(self):
+    def runTest(self):
         cgt.set_precision('double')
         N = 10
         K = 3
@@ -46,4 +46,4 @@ class LinearRegressionTestCase(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    LinearRegressionTestCase().runTest()

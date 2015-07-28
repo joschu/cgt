@@ -79,30 +79,6 @@ def get_compile_info():
         )
     return _COMPILE_CONFIG
 
-
-def numeric_eval(outputs, arg2val):
-    """
-    Evaluate outputs numerically. arg2val is a dictionary mapping arguments to numerical values
-    """
-    single = isinstance(outputs, Node)
-
-    if single: outputs = [outputs]
-    node2val = {}
-    for node in topsorted(outputs):
-        if node.is_argument():
-            node2val[node] = arg2val[node]
-        elif node.is_data():
-            node2val[node] = node.get_value()
-        else:
-            node2val[node] = node.op.numeric_apply([node2val[par] for par in node.parents])
-        # assert node.get_ndim() == np.array(node2val[node]).ndim
-    numeric_outputs = [node2val[node] for node in outputs]
-    if single:
-        return numeric_outputs[0]
-    else:
-        return numeric_outputs
-
-
 def cap(cmd):
     print "\x1b[32m%s\x1b[0m"%cmd
     subprocess.check_call(cmd,shell=True)
@@ -313,13 +289,15 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
     
     if backend == "python":
         outputs = simplify(outputs)
+        eg = make_execution_graph(inputs, outputs)
         def fn(*invals):
-            out = numeric_eval(outputs, {innode:inval for (innode,inval) in utils.safezip(inputs, invals)})
+            out = eg.run(invals)
             if dbg and len(dbg.nodes)>0: out = out[len(dbg.nodes):]
             if single: out = out[0]
             return out
         return fn
     elif backend == "cython":
+        raise OopsThisCodeIsBrokenException
         if fixed_sizes: fn = FixedSizeFunc(inputs, outputs)
         else: fn = VarSizeFunc(inputs, outputs)
         if single: return lambda *invals : fn(*invals)[0]
@@ -329,30 +307,151 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
     return fn
 
 
-def _indexin(xs, ys):
-    y2i = {y:i for (i,y) in enumerate(ys)}
-    return [y2i.get(x,None) for x in xs]
+################################################################
+### Simple numeric eval via traversal 
+################################################################
+ 
+def numeric_eval(outputs, arg2val):
+    """
+    Evaluate outputs numerically. arg2val is a dictionary mapping arguments to numerical values
+    """
+    single = isinstance(outputs, Node)
+    if single: outputs = [outputs]
+
+    nodes = list(topsorted(outputs))
+
+    node2val = {}
+    for node in nodes:
+        if node.is_argument():
+            node2val[node] = arg2val[node]
+        elif node.is_data():
+            node2val[node] = node.get_value()
+        else:
+            parentvals = [node2val[par] for par in node.parents]
+            node2val[node] = py_numeric_apply(node, parentvals)
+        # assert node.get_ndim() == np.array(node2val[node]).ndim
+    numeric_outputs = [node2val[node] for node in outputs]
+
+    if single:
+        return numeric_outputs[0]
+    else:
+        return numeric_outputs
 
 
-# UNUSED, but gives a much simpler implementation of CallSequence implemented in cython
-class CallSequence(object):
-    def __init__(self, inputs, outputs):
-        fncalls = []
-        var2idx = {}
-        nodes = self.nodes = list(topsorted(outputs))
-        for (i,node) in enumerate(nodes):
-            var2idx[node] = i
-            if not node.is_input():
-                args = [var2idx[var] for var in node.parents]
-                args.append(i)
-                fn = node.op.get_numeric_py()
-                fncalls.append( ( fn, args ) )
+################################################################
+### Execution graph 
+################################################################
 
-        self.varstore = [np.array(666, node.dtype) for node in nodes]
-        self.fncalls = fncalls
-        self.ininds = _indexin(inputs, nodes)
-        self.outinds = _indexin(outputs, nodes)
+MemInfo = namedtuple("MemInfo",["loc","access"])
+MEM_OVERWRITE = 'overwrite'
+MEM_INCREMENT = 'increment'
 
-    def execute(self):
-        for (fn, varinds) in self.fncalls:
-            self.varstore[varinds[-1]][...] = fn(*(self.varstore[i] for i in varinds[:-1])) # XXX
+class ExecutionGraph(object):
+    """
+    Abstract interface for execution graph, which might be sequential or parallel
+    """
+    def new_loc(self):
+        raise NotImplementedError
+    def add_instr(self, instr):
+        raise NotImplementedError
+    def set_outputs(self, locs):
+        raise NotImplementedError
+
+
+class ExecutionContext(object):
+    """
+    Run-time information for the current functional call
+    """
+    def __init__(self, inputs):
+        self.inputs = inputs
+    def get_input(self, i):
+        return self.inputs[i]
+
+class MemLocation(object):
+    def __init__(self):
+        self.val = None
+    def set_to(self, val):
+        self.val = val
+    def get_ref(self):
+        return self.val
+
+class SequentialExecution(ExecutionGraph):
+    def __init__(self):
+        self.locs = []
+        self.instrs = []
+        self.output_locs = []
+    def new_loc(self):
+        loc = MemLocation()
+        self.locs.append(loc)
+        return loc
+    def add_instr(self, instr):
+        self.instrs.append(instr)
+    def run(self, args):
+        c = ExecutionContext(args)
+        for instr in self.instrs:
+            instr.fire(c)
+        return [loc.get_ref() for loc in self.output_locs]
+    def set_outputs(self, locs):
+        self.output_locs = locs
+
+
+def make_execution_graph(inputs, outputs):
+    G = SequentialExecution()
+    nodes = list(topsorted(outputs))
+    node2mem = {}
+
+    for node in nodes:
+        write_loc = G.new_loc()
+        node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
+        if node.is_argument():
+            i = inputs.index(node)
+            G.add_instr(LoadInput(node, i, write_loc))
+        else:
+            read_locs = [node2mem[parent].loc for parent in node.parents]
+            if node.op.call_type == "inplace":
+                G.add_instr(Alloc(node, read_locs, write_loc))
+                G.add_instr(InPlace(node, read_locs, write_loc))
+            else:                
+                G.add_instr(ValReturning(node, read_locs, write_loc))
+    G.set_outputs([node2mem[node].loc for node in outputs])
+    return G
+
+class Instr(object):
+    def fire(self, c):
+        raise NotImplementedError
+
+class LoadInput(Instr):
+    def __init__(self, node, ind, write_loc):
+        self.node = node
+        self.ind = ind
+        self.write_loc = write_loc
+    def fire(self, c):
+        self.write_loc.set_to(c.get_input(self.ind))
+
+class Alloc(Instr):
+    def __init__(self, node, read_locs, write_loc):
+        self.node = node
+        self.shape_fun = get_numeric_shape_fun(self.node)
+        self.read_locs = read_locs
+        self.write_loc = write_loc
+    def fire(self, c):
+        shp = self.shape_fun([mem.get_ref() for mem in self.read_locs])
+        self.write_loc.set_to(np.zeros(shp, self.node.dtype))
+
+class InPlace(Instr):
+    def __init__(self, node, read_locs, write_loc):
+        self.node = node
+        self.read_locs = read_locs
+        self.write_loc = write_loc
+    def fire(self, c):
+        self.node.op.py_apply_inplace(
+            [mem.get_ref() for mem in self.read_locs], 
+            self.write_loc.get_ref())
+
+class ValReturning(Instr):
+    def __init__(self, node, read_locs, write_loc):
+        self.node = node
+        self.read_locs = read_locs
+        self.write_loc = write_loc
+    def fire(self,c):
+        self.write_loc.set_to(self.node.op.py_apply_valret([mem.get_ref() for mem in self.read_locs]))

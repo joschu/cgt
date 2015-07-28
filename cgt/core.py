@@ -72,7 +72,7 @@ class Tuple(Type):
     def __iter__(self):
         return iter(self.eltypes)
     def __repr__(self):
-        return "(" + "".join(map(str,self.eltypes))+")"
+        return "(" + ",".join(map(str,self.eltypes))+")"
 
 class Vector(Type):
     """
@@ -286,9 +286,9 @@ class Op(object):
     """
 
     # attributes that can be overwritten in subclasses
-    needs_alloc = True # memory must be allocated for the output
     dynamic_data = False # op contains to data that might be changed externally
     gpu_uses_c = False # even if output on GPU, use C implementation, not CUDA
+    call_type = 'inplace' # or valret
     c_extra_includes = []
     c_extra_link_flags = ""
     cuda_extra_includes = []
@@ -326,12 +326,14 @@ class Op(object):
         Get a human-readable description of the Op, including its attributes
         """
         return type(self).__name__.lower()
-    def get_numeric_py(self):
+    def py_apply_inplace(self, reads, write):
         """
-        Get a numeric implementation of the Op, which takes the input arrays as arguments
-        and returns an output array.
-        This method is optional: if you define c_code or cuda_code, the graph execution will 
-        fall back on these methods (BUT DOESN'T CURRENTLY DO SO -- TODO)
+        Apply python implementation of op to numeric inputs and outputs in-place
+        """
+        raise MethodNotDefined
+    def py_apply_valret(self, reads):
+        """
+        Apply and return value.
         """
         raise MethodNotDefined
     def get_closure(self, _inputs):
@@ -355,9 +357,6 @@ class Op(object):
         Return the name of this node
         """
         return None
-    def numeric_apply(self, inputs):
-        # TODO: use C/CUDA when python func not defined
-        return self.get_numeric_py()(*inputs)
     def pullback(self, inputs, output, goutput): #pylint: disable=W0613
         """
         Compute symbolic expressions for derivatives obtained by backpropagation on this Op
@@ -447,12 +446,11 @@ class Argument(Input):
 
 # Just here as a temporary  hack so node.op does the right thing in cython
 class GetData(Op):
+    call_type="valret"
     def __init__(self, datanode):
         self.datanode = datanode        
-    def get_numeric_py(self):
-        def fn():
-            return self.datanode.get_value()
-        return fn
+    def py_apply(self, reads):
+        return self.datanode.get_value()
 
 
 class Data(Input):
@@ -507,7 +505,15 @@ def tensor(dtype, ndim, name=None):
 def _singleton_ones(dtype, ndim):
     return constant(np.ones((1,)*ndim, dtype))
 
+def make_argument(typ):
+    if isinstance(typ, Tuple):
+        return Argument(Tuple(typ))
+    elif isinstance(typ, Tensor):
+        return Argument(Tensor(typ.dtype, typ.ndim))
+    else:
+        raise ValueError("expected Tuple or Tensor. Got %s"%typ)
 # ================================================================
+
 # Differentiation
 # ================================================================
 
@@ -621,7 +627,7 @@ def grad(cost, wrt):
 # ----------------------------------------------------------------
 
 class Constant(Op):
-    needs_alloc=False
+    call_type = "valret"
     def __init__(self, value):
         self.value = _as_valid_array(value)
         assert self.value.dtype != object
@@ -629,10 +635,8 @@ class Constant(Op):
         return self.get_name()
     def get_name(self):
         return "const{%s}"%self.value
-    def get_numeric_py(self):
-        def fn():
-            return self.value
-        return fn
+    def py_apply_valret(self, reads):
+        return self.value
     def pullback(self, _inps, _out, _gout):
         return []
     def shp_apply(self, _inputs):
@@ -666,14 +670,8 @@ class Fill(Op):
         return [False]*num_inputs
     def get_name(self):
         return "fill{%g}"%self.value
-    def get_numeric_py(self):
-        def fn(*shp):
-            if len(shp) == 0: return self.value
-            else:
-                out = np.empty(shp, self.dtype)
-                out[:] = self.value
-                return out
-        return fn
+    def py_apply_inplace(self, reads, write):
+        write[...] = self.value
     def pullback(self, inputs, output, goutput):
         raise exceptions.NonDifferentiable
     def shp_apply(self, inputs):
@@ -739,14 +737,14 @@ class ScalarRng(Op):
 def _no_grad():
     raise exceptions.NonDifferentiable()
 
-def _nu_sigmoid(x):
-    return np.reciprocal(1+np.exp(-x))
+def _nu_sigmoid(x, out=None):
+    return np.reciprocal(1+np.exp(-x), out=out)
 
-def _nu_iceil(x):
-    return np.ceil(x).astype(_type_to_int(Dtype.canon(x.dtype)))
+def _nu_iceil(x,out=None):
+    return np.ceil(x, out=out)
 
-def _nu_ifloor(x):
-    return np.floor(x).astype(_type_to_int(Dtype.canon(x.dtype)))
+def _nu_ifloor(x,out=None):
+    return np.floor(x,out=out)
 
 
 UnaryInfo = namedtuple("UnaryInfo", ("short","pyfunc","diff","typeinfo", "gradexpr", "cexpr"))
@@ -780,7 +778,7 @@ BINARY_INFO = {
     "/"   : BinaryInfo("divide",  np.divide,  False,    (True,True),    'p',       lambda x, y, z, gz: [gz/y,-gz*z/y], "x/y"),
     "<"   : BinaryInfo("less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
     "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,z*log(x)],"pow(x,y)"),
-    "=="  : BinaryInfo("equal", lambda x,y : np.equal(x,y).astype('i'),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
+    "=="  : BinaryInfo("equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
 }
 
 
@@ -804,8 +802,8 @@ class ElwiseUnary(Op):
         return self.opname
     def get_hash(self):
         return utils.hash_seq1(self.opname)
-    def get_numeric_py(self):
-        return self.info.pyfunc
+    def py_apply_inplace(self, reads, write):
+        self.info.pyfunc(reads[0], out=write)
     def get_replacement(self, _newparents, _analysis):
         return None
     def pullback(self, (x,), y, gy): #pylint: disable=W0613
@@ -876,22 +874,22 @@ class ElwiseBinary(Op):
         return "(%s %s %s)"%(parent_exprs[0], self.opname, parent_exprs[1])
     def get_name(self):
         return BINARY_INFO[self.opname].short
-    def get_numeric_py(self):
-        def fn(x,y):
-            if self.scalar_mask==(False,False):
-                assert x.shape==y.shape, "Implicit broadcasting isn't allowed. Use the broadcast(...) function"
-            return self.info.pyfunc(x,y)
-        return fn
+    def py_apply_inplace(self, reads, write):
+        x,y = reads
+        if self.scalar_mask==(False,False):
+            assert x.shape==y.shape, "Implicit broadcasting isn't allowed. Use the broadcast(...) function"
+        self.info.pyfunc(x,y, out=write)
     def get_replacement(self, parents, analysis):
         node2sv = analysis["node2sv"]
         ind4shape = 1 if self.scalar_mask[0] else 0
         l,r = parents
+        node = Result(self, parents)
         if l in node2sv and r in node2sv:
-            return Result(Fill(self.numeric_apply([node2sv[l], node2sv[r]])), analysis["node2shape"][parents[ind4shape]])
+            return Result(Fill(self.info.pyfunc(node2sv[l], node2sv[r])), analysis["node2shape"][parents[ind4shape]])
         elif l in node2sv and isinstance(r.op, Constant) and r.ndim > 0:
-            return Result( Constant(self.numeric_apply([node2sv[l], r.op.val])), [l,r])
+            return Result( Constant(py_numeric_apply(self, [node2sv[l], r.op.val])), [l,r])
         elif r in node2sv and isinstance(l.op, Constant) and l.ndim > 0:
-            return Result(Constant(self.numeric_apply([l.op.val, node2sv[r]])), [l,r])
+            return Result(Constant(py_numeric_apply(self, [l.op.val, node2sv[r]])), [l,r])
 
         if self.opname == "*":
             if r in node2sv and not l in node2sv: l,r = r,l
@@ -968,16 +966,15 @@ class Size(Op):
     """
     Return an element of the shape of a tensor
     """
+    call_type = "valret"
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
         return [False]
     def get_name(self):
         return "size{%i}"%self.axis
-    def get_numeric_py(self):
-        def fn(arr):
-            return np.array(arr.shape[self.axis])
-        return fn
+    def py_apply_valret(self, reads):
+        return np.array(reads[0].shape[self.axis])
     def pullback(self, inputs, output, goutput):
         raise exceptions.NonDifferentiable
     def shp_apply(self, _inputs):
@@ -1000,15 +997,13 @@ class Size(Op):
         }"""
 
 class Reshape(Op):
-    needs_alloc = False
     # XXX restore after we're sure the right thing happens with python impls
     gpu_uses_c = True
+    call_type = "valret"
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
-    def get_numeric_py(self):
-        def fn(arr,*shp):
-            return arr.reshape(shp)
-        return fn
+    def py_apply_valret(self, reads):
+        return reads[0].reshape(reads[1:])
     def pullback(self, inputs, _out, gout):
         return [reshape(gout, shape(inputs[0]))] + [None]*(len(inputs)-1)
     def shp_apply(self, inputs):
@@ -1060,18 +1055,19 @@ class Stack(Op):
         return Tensor(inputs[0].get_dtype(), inputs[0].get_ndim()+1)
 
 class Repeat(Op):
+    call_type = "inplace"
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, num_inputs):
-        return [True] + [False for _ in xrange(num_inputs-1)]
-    def get_numeric_py(self):
-        def fn(arr, *numreps):
-            shp = arr.shape
-            assert all(shp[i] == 1 for i in self.axes)
-            for (ax,numrep) in utils.safezip(self.axes, numreps):
-                arr = np.repeat(arr, numrep, ax)
-            return arr
-        return fn
+        return [True] + [False for _ in xrange(num_inputs-1)]    
+    def py_apply_inplace(self, reads, write):
+        arr = reads[0]
+        numreps = reads[1:]
+        shp = arr.shape
+        assert all(shp[i] == 1 for i in self.axes)
+        for (ax,numrep) in utils.safezip(self.axes, numreps):
+            arr = np.repeat(arr, numrep, ax)
+        np.copyto(write, arr)
     def get_replacement(self, parents, analysis):
         if parents[0] in analysis["node2sv"]:
             value = analysis["node2sv"][parents[0]]
@@ -1093,10 +1089,8 @@ class Transpose(Op):
         self.axes = axes
     def get_diff(self, _):
         return [True]
-    def get_numeric_py(self):
-        def fn(arr):
-            return arr.transpose(self.axes)
-        return fn
+    def py_apply_inplace(self, reads, write):
+        np.copyto(write, reads[0].transpose(self.axes))
     def pullback(self, inputs, output, goutput):
         return [transpose(goutput, utils.invert_perm(self.axes))] # XXX is this right?
     def shp_apply(self, inputs):
@@ -1143,10 +1137,10 @@ class RFFT(Op):
         self.axes = axes
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
-    def get_numeric_py(self):
-        def fn(x,*shp):
-            return np.fft.fftn(x,shp,self.axes)
-        return fn
+    def py_apply_inplace(self, reads, write):
+        x = reads[0]
+        shp = map(int,reads[1:])
+        np.copyto(write, np.fft.fftn(x,shp,self.axes))
     def pullback(self, inputs, _outputs, goutput):
         return real(Result(RFFT(self.axes),[goutput]+inputs[1:]))
     def shp_apply(self, inputs):
@@ -1163,12 +1157,12 @@ class IRFFT(Op):
         self.axes = axes
     def get_diff(self, _):
         return [True]
-    def get_numeric_py(self):
-        def fn(x,*shp):
-            slis = [slice(0,None) for _ in xrange(x.ndim)]
-            for (ax,s) in zip(self.axes,shp): slis[ax] = slice(0, s)
-            return np.real(np.fft.ifftn(x,axes=self.axes)[slis])
-        return fn
+    def py_apply_inplace(self, reads, write):
+        x = reads[0]
+        shp = map(int,reads[1:])
+        slis = [slice(0,None) for _ in xrange(x.ndim)]
+        for (ax,s) in zip(self.axes,shp): slis[ax] = slice(0, s)
+        np.copyto(write, np.real(np.fft.ifftn(x,axes=self.axes)[slis]))
     def pullback(self, inputs, _outputs, goutput):
         return Result(IRFFT(self.axes),[goutput]) # XXX is this right?
     def shp_apply(self, inputs):
@@ -1192,8 +1186,8 @@ class Sum(Op):
         return [True]
     def get_name(self):
         return "sum{%s}"%(",".join(map(str,self.axes)))
-    def get_numeric_py(self):
-        return lambda x : x.sum(axis=self.axes or None,keepdims=True)
+    def py_apply_inplace(self, reads, write):
+        reads[0].sum(axis = self.axes or None, out=write, keepdims=True)
     def pullback(self, inputs, output, goutput):
         return [Result(Repeat(self.axes), [goutput] + [size(inputs[0],ax) for ax in self.axes])]
     def shp_apply(self, inputs):
@@ -1233,8 +1227,8 @@ class Max(Op):
         return [True]
     def get_name(self):
         return "max{%s}"%(",".join(map(str,self.axes)))
-    def get_numeric_py(self):
-        return lambda x : x.max(axis=self.axes or None,keepdims=True)
+    def py_apply_inplace(self, reads, write):
+        reads[0].max(axis=self.axes or None,keepdims=True, out=write)
     def pullback(self, inputs, output, goutput):
         x = inputs[0]
         inputpat = "x"*x.ndim
@@ -1277,19 +1271,18 @@ class Argmax(Op):
 # ----------------------------------------------------------------
 
 class GetSli(Op):
+    call_type = "valret"
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
         return [True,False,False,False]
-    def get_numeric_py(self):
-        def fn(x, start, stop, step):
-            assert step > 0
-            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
-            slices[self.axis] = slice(start,stop,step)
-            if step < 0:
-                raise NotImplementedError
-            return x[slices]
-        return fn
+    def py_apply_valret(self, reads):
+        x,start,stop,step=reads
+        slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+        slices[self.axis] = slice(start,stop,step)
+        if step < 0:
+            raise NotImplementedError
+        return x[slices]
     def pullback(self, inputs, output, goutput):
         ginput = zeros_like(inputs[0])
         return [Result(IncSli(self.axis), [ginput] + inputs[1:] + [goutput])] + [None]*3
@@ -1326,23 +1319,20 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     cdtype=np2c[inputs[0].dtype])
 
 class IncSli(Op):
-    needs_alloc=False
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
         return [True,False,True,True]
-    def get_numeric_py(self):
-        def fn(x, start, stop, step, y):
-            newx = x.copy()
-            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
-            slices[self.axis] = slice(start,stop,step)
-            newx[slices] += y
-            return newx
-        return fn
+    def py_apply_inplace(self, reads, write):
+        x, start, stop, step, y=reads
+        newx = x.copy()
+        slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+        slices[self.axis] = slice(start,stop,step)
+        write[slices] += y # XXX check that it's incremental
     def pullback(self, inputs, output, goutput):
         _x, start, stop, step, _y = inputs
         gx = goutput
-        gy = Result(GetSli(self.axis), [goutput, start, stop, step])
+        gy = Result(GetSli(self.axis), [goutput, start, stop, step])        
         return [gx, None, None, None, gy]
     def shp_apply(self, inputs):
         return shape(inputs[0])
@@ -1377,10 +1367,8 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 class GetFlatIndices(Op):
     def get_diff(self, _):
         return [True,False]
-    def get_numeric_py(self):
-        def fn(x, inds):
-            return x.flat[inds]
-        return fn
+    def py_apply_inplace(self, reads, write):
+        np.copyto(write, reads[0].flat[reads[1]])
     def pullback(self, inputs, output, goutput):
         x,inds = inputs
         ginput = zeros_like(x)
@@ -1395,13 +1383,11 @@ class GetFlatIndices(Op):
 class IncFlatIndices(Op):
     def get_diff(self, _):
         return [True,False,True]
-    def get_numeric_py(self):
-        def fn(x, inds, y):
-            newx = x.copy()
-            newx.flat[inds] += y
-            return newx
-        return fn
+    def py_apply_inplace(self, reads, write):
+        x,inds,y = reads
+        write.flat[inds] += y # XXX
     def pullback(self, inputs, output, goutput):
+        raise MethodNotDefined
         _x, inds, _y = inputs 
         gx = goutput
         gy = Result(GetFlatIndices(), [goutput, inds])
@@ -1421,11 +1407,10 @@ class Mul21(Op):
 
     def __init__(self, tA):
         self.tA = tA
-    def get_numeric_py(self):
-        def fn(x,y):
-            if self.tA: x = x.T
-            return x.dot(y)
-        return fn
+    def py_apply_inplace(self, reads, write):
+        x,y = reads
+        if self.tA: x = x.T
+        x.dot(y, out=write)
     def get_replacement(self, inputs, analysis):
         if inputs[1] in analysis["node2sv"]:
             return sum(inputs[0],0 if self.tA else 1) * analysis["node2sv"][inputs[1]]
@@ -1442,12 +1427,11 @@ class Mul22(Op):
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
-    def get_numeric_py(self):
-        def fn(x,y):
-            if self.tA: x = x.T
-            if self.tB: y = y.T
-            return x.dot(y)
-        return fn
+    def py_apply_inplace(self, reads, write):
+        x,y = reads
+        if self.tA: x = x.T
+        if self.tB: y = y.T
+        x.dot(y, out=write)
     def pullback(self, inputs, output, goutput):
         return [Result(Mul22(False, not self.tB), [goutput, inputs[1]]),
                 Result(Mul22(not self.tA, False), [inputs[0], goutput])]
@@ -1488,25 +1472,21 @@ class BatchedMul22(Op):
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
-    def get_numeric_py(self):
-        def fn(x,y):
-            z = np.empty((x.shape[0],x.shape[1],y.shape[2]),(x.flat[0]*y.flat[0]).dtype)
-            for (xmat, ymat, zmat) in zip(x,y, z):
-                xmat.dot(ymat, zmat)
-            return z
-        return fn
+    def py_apply_inplace(self, (x,y), z):
+        for (xmat, ymat, zmat) in zip(x,y, z):
+            xmat.dot(ymat, out=zmat)
     def pullback(self, inputs, output, goutput):
         return [Result(BatchedMul22(False, not self.tB), [goutput, inputs[1]]),
                 Result(BatchedMul22(not self.tA, False), [inputs[0], goutput])]
     def shp_apply(self, inputs):
-        return [size(inputs[0], 2 if self.tA else 1),size(inputs[1],1 if self.tB else 2)]
+        return [size(inputs[0],0), size(inputs[0], 2 if self.tA else 1),size(inputs[1],1 if self.tB else 2)]
     def typ_apply(self, inputs):
         # assert inputs[0].get_dtype()==floatX and inputs[1].get_dtype()==floatX
         return inputs[0].get_type()
 
 class Outer(Op):
-    def get_numeric_py(self):
-        return np.outer
+    def py_apply_inplace(self, reads, write):
+        np.outer(reads[0], reads[1], out=write)
     def pullback(self, inputs, _output, goutput):
         return [goutput.dot(inputs[0]), inputs[1].dot(goutput)]
     def shp_apply(self, inputs):
@@ -1520,8 +1500,9 @@ class Outer(Op):
 # ----------------------------------------------------------------
 
 class Dot(Op):
-    def get_numeric_py(self):
-        return np.dot
+    call_type = "valret"
+    def py_apply_valret(self, reads):
+        return np.dot(reads[0], reads[1])
     def pullback(self, inputs, _output, goutput):
         x, y = inputs
         return [y*goutput, x*goutput]
@@ -1589,14 +1570,13 @@ class Composition(Op):
         return self._nodes
 
 class TupleIndex(Op):
+    call_type="valret"
     def __init__(self, idx):
         self.idx = idx
-    def get_numeric_py(self):
-        def fn(x):
-            return x[self.idx]
-        return fn
+    def py_apply_valret(self, reads):
+        return reads[0][self.idx]
     def shp_apply(self, inputs):
-        raise NotImplementedError
+        return shape(inputs[0])[self.idx]
     def typ_apply(self, inputs):
         intype = inputs[0].get_type()
         assert isinstance(intype, Tuple)
@@ -1823,7 +1803,13 @@ def zeros_like(x):
     return zeros(shape(x), x.get_dtype())
 
 def shape(x):
-    return [size(x, i) for i in xrange(x.ndim)]
+    typ = x.get_type()
+    if isinstance(typ, Tensor):
+        return [size(x, i) for i in xrange(x.ndim)]
+    else:    
+        raise NotImplementedError    
+        # return tuple(shape(tuple_index(x, i)) for i in xrange(len(typ)))
+    
 
 def size(x, axis):
     return Result(Size(axis), [x])
@@ -1942,10 +1928,17 @@ def _to_list(x):
     if _is_sequence(x): return list(x)
     else: return [x]
 
+def tuple_index(x, i):
+    return Result(TupleIndex(i), [x])    
+
 def getitem(arr, slis):
+    arr = _as_node(arr)
+    if isinstance(arr.get_type(), Tuple):
+        assert isinstance(slis, int)
+        return tuple_index(arr, slis)
     if not _is_sequence(slis):
         slis = [slis]
-    if all(isinstance(sli, (int,slice)) or isinstance(sli,slice) and sli==COLON for sli in slis):
+    elif all(isinstance(sli, (int,slice)) or isinstance(sli,slice) and sli==COLON for sli in slis):
         return getitem_nonfancy(arr,slis)
     elif all(isinstance(sli, (np.ndarray, Node)) for sli in slis):
         return getitem_fancy(arr,slis)
@@ -2185,7 +2178,7 @@ def do_analysis(node, analysis):
         elif isinstance(op, Repeat) and newparents[0] in node2sv:
             node2sv[node] = node2sv[newparents[0]]
         elif isinstance(op, (ElwiseUnary, ElwiseBinary)) and all(p in node2sv for p in newparents):
-            node2sv[node] = node.op.numeric_apply([node2sv[p] for p in newparents])
+            node2sv[node] = node.op.info.pyfunc(*(node2sv[p] for p in newparents))
 
 
 def _try_repl(node, analysis, repl):
@@ -2200,7 +2193,7 @@ def _try_repl(node, analysis, repl):
     parents = node.parents
     # -- CONSTANT PROP --
     if all(isinstance(par.op, Constant) for par in parents) and not node.op.dynamic_data:
-        return constant(node.op.numeric_apply([p.op.value for p in parents]))
+        return constant(py_numeric_apply(node, [p.op.value for p in parents]))
     # -- SIZE --
     if isinstance(node.op, Size):
         s = analysis["node2shape"][parents[0]][node.op.axis]
@@ -2316,6 +2309,40 @@ def batched_matmul(x, y):
 #     idxvar = cgt.scalar(dtype='i8')
 #     innerop = Composition([idxvar], [fn(idxvar)])
 #     return IdxMap(innerop)(idxvar)
+
+def alloc_from_shp(shp, typ):
+    if isinstance(shp, tuple):
+        raise NotImplementedError
+        # return tuple(alloc_from_shp(shpel,typel) for (shpel,typel) in utils.safezip(shp,typ))
+    else:
+        return np.empty(shp,typ.dtype)
+
+def alloc_output(node, vals):
+    typ = node.get_type()
+    assert isinstance(typ, Tensor)
+    shp = get_numeric_shape_fun(node)(vals)
+    return alloc_from_shp(shp,typ)
+
+def get_numeric_shape_fun(node):
+
+    args = [make_argument(p.get_type()) for p in node.parents]
+    outputs = simplify(node.op.shp_apply(args))
+    nodes = topsorted(outputs)
+    def fn(vals):
+        node2val = {node:val for (node,val) in utils.safezip(args, vals)}
+        for node in nodes:
+            if not node.is_argument():
+                node2val[node] = node.op.py_apply_valret([node2val[p] for p in node.parents])
+        return [node2val[node] for node in outputs]
+    return fn
+
+def py_numeric_apply(node, vals):
+    if node.op.call_type == "valret":
+        out = node.op.py_apply_valret(vals)
+    else:
+        out = alloc_output(node,vals)
+        node.op.py_apply_inplace(vals, out)
+    return out
 
 
 if sys.argv[0] != "gen_py.py":

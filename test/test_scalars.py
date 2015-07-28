@@ -4,7 +4,7 @@ import unittest
 
 
 class ScalarTestCase(unittest.TestCase):
-    def test_scalars(self):
+    def runTest(self):
         np.random.seed(0)
         cgt.set_precision('double')
 
@@ -57,4 +57,4 @@ class ScalarTestCase(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    ScalarTestCase().runTest()
