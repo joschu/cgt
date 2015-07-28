@@ -5,7 +5,7 @@ def myfunc(x):
     print "x",x
 
 class AssertTestCase(unittest.TestCase):
-    def test_assertion(self):
+    def runTest(self):
         if cgt.load_config()["backend"] != "python":
             cgt.utils.warn("Skipping test -- only works for backend=python")
             return
@@ -23,4 +23,4 @@ class AssertTestCase(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    AssertTestCase().runTest()

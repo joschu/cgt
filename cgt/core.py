@@ -289,6 +289,7 @@ class Op(object):
     dynamic_data = False # op contains to data that might be changed externally
     gpu_uses_c = False # even if output on GPU, use C implementation, not CUDA
     call_type = 'inplace' # or valret
+    writes_to_input = -1
     c_extra_includes = []
     c_extra_link_flags = ""
     cuda_extra_includes = []
@@ -449,7 +450,7 @@ class GetData(Op):
     call_type="valret"
     def __init__(self, datanode):
         self.datanode = datanode        
-    def py_apply(self, reads):
+    def py_apply_valret(self, reads):
         return self.datanode.get_value()
 
 
@@ -1020,10 +1021,9 @@ class Concatenate(Op):
         self.axis = axis
     def get_diff(self, num_inputs):
         return [True]*num_inputs
-    def get_numeric_py(self):
-        def fn(*arrs):
-            return np.concatenate(arrs)
-        return fn
+    call_type = "valret"
+    def py_apply_valret(self, reads):
+        return np.concatenate(reads,axis=self.axis)
     def pullback(self, inputs, _output, gout):
         start = 0
         out = []
@@ -1319,6 +1319,7 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     cdtype=np2c[inputs[0].dtype])
 
 class IncSli(Op):
+    writes_to_input = 0
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
@@ -1381,6 +1382,7 @@ class GetFlatIndices(Op):
 
 
 class IncFlatIndices(Op):
+    writes_to_input = 0
     def get_diff(self, _):
         return [True,False,True]
     def py_apply_inplace(self, reads, write):
@@ -1728,12 +1730,10 @@ class Assertion(Op):
         return Tensor('i8',0)
     def shp_apply(self, _):
         return []
-    def get_numeric_py(self):
-        def fn(x):
-            if not x.item():
-                self.display_error()
-            return x
-        return fn
+    def py_apply_inplace(self, reads, write):
+        x = reads[0]
+        if not x.item():
+            self.display_error()
     def display_error(self):
         print "Stack trace at failed assertion:"
         print "**************************"        
@@ -1751,10 +1751,9 @@ class DebugFunc(Op):
         return Tensor('i8',0)
     def shp_apply(self, _):
         return []
-    def get_numeric_py(self):
-        def fn(*xs):
-            self.yourfunc(*xs)
-        return fn
+    def py_apply_inplace(self, reads, write):
+        def fn(*reads):
+            self.yourfunc(*reads)
 
 def assert_(x,msg=None):
     add_debug_node(Result(Assertion(msg or "(empty)"), [x]))
@@ -1936,9 +1935,11 @@ def getitem(arr, slis):
     if isinstance(arr.get_type(), Tuple):
         assert isinstance(slis, int)
         return tuple_index(arr, slis)
+    
     if not _is_sequence(slis):
         slis = [slis]
-    elif all(isinstance(sli, (int,slice)) or isinstance(sli,slice) and sli==COLON for sli in slis):
+    
+    if all(isinstance(sli, (int,slice)) or isinstance(sli,slice) and sli==COLON for sli in slis):
         return getitem_nonfancy(arr,slis)
     elif all(isinstance(sli, (np.ndarray, Node)) for sli in slis):
         return getitem_fancy(arr,slis)
@@ -2332,7 +2333,7 @@ def get_numeric_shape_fun(node):
         node2val = {node:val for (node,val) in utils.safezip(args, vals)}
         for node in nodes:
             if not node.is_argument():
-                node2val[node] = node.op.py_apply_valret([node2val[p] for p in node.parents])
+                node2val[node] = py_numeric_apply(node, [node2val[p] for p in node.parents])
         return [node2val[node] for node in outputs]
     return fn
 

@@ -1,5 +1,5 @@
 from core import *
-
+from collections import defaultdict
 import os
 import os.path as osp
 
@@ -400,21 +400,51 @@ def make_execution_graph(inputs, outputs):
     nodes = list(topsorted(outputs))
     node2mem = {}
 
+    node2child = defaultdict(list)
     for node in nodes:
-        write_loc = G.new_loc()
-        node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
+        for parent in node.parents:
+            node2child[parent].append(node)
+
+    # TODO: incremental versions of stuff
+
+    for node in nodes:        
         if node.is_argument():
+            write_loc = G.new_loc()
+            node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
             i = inputs.index(node)
             G.add_instr(LoadInput(node, i, write_loc))
         else:
             read_locs = [node2mem[parent].loc for parent in node.parents]
             if node.op.call_type == "inplace":
-                G.add_instr(Alloc(node, read_locs, write_loc))
+                needs_alloc=True
+                skip_op=False
+                if node.op.writes_to_input >= 0:
+                        write_loc = node2mem[node.parents[node.op.writes_to_input]].loc
+                        needs_alloc=False
+                else:
+                    nodeshape = node.op.shp_apply(node.parents)
+                    for parent in node.parents:
+                        if len(node2child[parent])==1 and nodeshape==shape(parent) and data_mutable(parent):
+                            write_loc = node2mem[parent].loc
+                            needs_alloc=False
+                            print "yay, inplace opt" 
+                            break                          
+                if needs_alloc:
+                    write_loc = G.new_loc()
+                    G.add_instr(Alloc(node, read_locs, write_loc))
                 G.add_instr(InPlace(node, read_locs, write_loc))
             else:                
+                write_loc = G.new_loc()
                 G.add_instr(ValReturning(node, read_locs, write_loc))
+        node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
     G.set_outputs([node2mem[node].loc for node in outputs])
     return G
+
+def data_mutable(node):
+    if isinstance(node, Result):
+        return not isinstance(node.op, Constant) 
+    elif isinstance(node, Input):
+        return False
 
 class Instr(object):
     def fire(self, c):
