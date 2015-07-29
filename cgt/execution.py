@@ -34,7 +34,6 @@ def load_config():
                 lhs,rhs = pair.split("=")
                 assert lhs in _CONFIG
                 _CONFIG[lhs] = rhs
-        print "CONFIG",_CONFIG
     return _CONFIG
 
 

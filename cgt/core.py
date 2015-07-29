@@ -72,7 +72,7 @@ class Tuple(Type):
     def __iter__(self):
         return iter(self.eltypes)
     def __repr__(self):
-        return "(" + ",".join(map(str,self.eltypes))+")"
+        return "Tup(" + ",".join(map(str,self.eltypes))+")"
 
 class Vector(Type):
     """
@@ -265,6 +265,12 @@ class Node(object):
 def _ndarray_type(value):
     assert isinstance(value, np.ndarray)
     return Tensor(value.dtype, value.ndim)
+
+def _get_value_type(value):
+    if isinstance(value, np.ndarray):
+        return Tensor(value.dtype, value.ndim)
+    elif isinstance(value, tuple):
+        return Tuple(*map(_get_value_type, value))
 
 def _get_value_device(value):
     warnings.warn("todo: properly implement")
@@ -632,21 +638,27 @@ def grad(cost, wrt):
 class Constant(Op):
     call_type = "valret"
     def __init__(self, value):
-        self.value = _as_valid_array(value)
-        assert self.value.dtype != object
+        if isinstance(value, tuple):
+            self.value = value # XXX need to make valid recursively?
+        else:
+            self.value = _as_valid_array(value)
+            assert self.value.dtype != object
     def get_expr(self, parent_exprs):
         return self.get_name()
     def get_name(self):
-        return "const{%s}"%self.value
+        return "const{%s}"%str(self.value)
     def py_apply_valret(self, reads):
         return self.value
     def pullback(self, _inps, _out, _gout):
         return []
     def shp_apply(self, _inputs):
-        return [constant(x) for x in self.value.shape]
+        if isinstance(self.value, np.ndarray):
+            return [constant(x) for x in self.value.shape] 
+        else:
+            return shape(_as_node(self.value))
     def typ_apply(self, inputs):
         assert len(inputs)==0
-        return _ndarray_type(self.value)
+        return _get_value_type(self.value)
     def get_hash(self):
         return str(id(self))
     def get_closure(self, _):

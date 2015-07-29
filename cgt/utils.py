@@ -31,7 +31,7 @@ def error(msg):
     sys.stdout.write("\n")
 
 def is_singleton(x):
-    return np.prod(x.shape)==1
+    return isinstance(x, np.ndarray) and np.prod(x.shape)==1
 
 def safezip(x,y):
     assert len(x) == len(y)
