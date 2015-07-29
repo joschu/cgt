@@ -45,7 +45,7 @@ cdef extern from "cgt_common.h":
 
     ctypedef int cgt_error
 
-    ctypedef void (*cgt_fun)(void*, cgt_array**);
+    ctypedef void (*cgt_fun)(void*, cgt_array**)
 
     void* cgt_alloc(cgt_devtype devtype, size_t size)
     void cgt_free(cgt_devtype devtype, void* ptr)
