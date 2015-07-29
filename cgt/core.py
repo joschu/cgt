@@ -178,11 +178,11 @@ class Node(object):
         self.op = op
         self.parents = parents
     def is_input(self):
-        return isinstance(self, Input)
+        return False
     def is_argument(self):
-        return isinstance(self, Argument)
+        return False
     def is_data(self):
-        return isinstance(self, Data)
+        return False
     def get_dtype(self):
         return self.typ.dtype
     def get_ndim(self):
@@ -427,6 +427,8 @@ class Input(Node):
         self.name = "" if name is None else name
         assert isinstance(self.name, (str,unicode))
         Node.__init__(self, typ, None, [])
+    def is_input(self):
+        return True
     def get_hash(self, _node2hash):
         hashobj = hashlib.md5(str(id(self)))
         # XXX
@@ -447,6 +449,8 @@ class Argument(Input):
             self.fixed_shape = fixed_shape
         else:
             self.fixed_shape = (None,)*self.ndim
+    def is_argument(self):
+        return True
     def __repr__(self):
         return "Arg{%s,%s}"%(self.get_dtype(), self.get_ndim())
     def get_fixed_shape(self):
@@ -481,6 +485,8 @@ class Data(Input):
         self.fixed_shape_mask = (False,)*self.value.ndim if fixed_shape_mask is None else fixed_shape_mask
         Input.__init__(self, _ndarray_type(value), name)
         self.op = GetData(self)
+    def is_data(self):
+        return True
     def get_name(self):
         return self.name
     def get_device(self):

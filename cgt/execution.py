@@ -439,30 +439,29 @@ def make_execution_graph(inputs, outputs):
             write_loc = G.new_loc()
             node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
             i = inputs.index(node)
-            G.add_instr(LoadInput(node, i, write_loc))
+            G.add_instr(LoadInput(i, write_loc))
         else:
             read_locs = [node2mem[parent].loc for parent in node.parents]
             if node.op.call_type == "inplace":
-                needs_alloc=True
-                skip_op=False
+                needs_alloc = True
                 if node.op.writes_to_input >= 0:
-                        write_loc = node2mem[node.parents[node.op.writes_to_input]].loc
-                        needs_alloc=False
+                    write_loc = node2mem[node.parents[node.op.writes_to_input]].loc
+                    needs_alloc = False
                 else:
                     nodeshape = node.op.shp_apply(node.parents)
                     for parent in node.parents:
                         if len(node2child[parent])==1 and nodeshape==shape(parent) and node.dtype == parent.dtype and is_data_mutable(parent):
                             write_loc = node2mem[parent].loc
-                            needs_alloc=False
+                            needs_alloc = False
                             break                          
                 if needs_alloc:
                     write_loc = G.new_loc()
                     shape_locs = [node2mem[shpel].loc for shpel in node2shape[node]] if node.ndim>0 else []
                     G.add_instr(Alloc(node.dtype, shape_locs, write_loc))
-                G.add_instr(InPlace(node, read_locs, write_loc))
+                G.add_instr(InPlace(node.op, read_locs, write_loc))
             else:                
                 write_loc = G.new_loc()
-                G.add_instr(ValReturning(node, read_locs, write_loc))
+                G.add_instr(ValReturning(node.op, read_locs, write_loc))
         node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
     G.set_outputs([node2mem[node].loc for node in outputs])
     return G
@@ -478,8 +477,7 @@ class Instr(object):
         raise NotImplementedError
 
 class LoadInput(Instr):
-    def __init__(self, node, ind, write_loc):
-        self.node = node
+    def __init__(self, ind, write_loc):
         self.ind = ind
         self.write_loc = write_loc
     def fire(self, interp):
@@ -495,19 +493,19 @@ class Alloc(Instr):
         interp.set(self.write_loc, np.zeros(shp, self.dtype))
 
 class InPlace(Instr):
-    def __init__(self, node, read_locs, write_loc):
-        self.node = node
+    def __init__(self, op, read_locs, write_loc):
+        self.op = op
         self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
-        self.node.op.py_apply_inplace(
+        self.op.py_apply_inplace(
             [interp.get(mem) for mem in self.read_locs], 
             interp.get(self.write_loc))
 
 class ValReturning(Instr):
-    def __init__(self, node, read_locs, write_loc):
-        self.node = node
+    def __init__(self, op, read_locs, write_loc):
+        self.op = op
         self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
-        interp.set(self.write_loc, self.node.op.py_apply_valret([interp.get(mem) for mem in self.read_locs]))
+        interp.set(self.write_loc, self.op.py_apply_valret([interp.get(mem) for mem in self.read_locs]))
