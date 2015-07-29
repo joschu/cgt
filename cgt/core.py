@@ -384,6 +384,8 @@ def _as_node(val_or_node):
         return val_or_node
     elif isinstance(val_or_node, (int, float, np.ndarray)):
         return constant(val_or_node)
+    elif isinstance(val_or_node, (list, tuple)): # XXX should we really turn list into tuple?
+        return make_tuple(*val_or_node)
     else:
         raise ValueError("expected numeric data or Node, got object of type %s"%type(val_or_node))
 
@@ -1583,6 +1585,16 @@ class TupleIndex(Op):
         intype = inputs[0].get_type()
         assert isinstance(intype, Tuple)
         return inputs[0].get_type()[self.idx]
+
+class MakeTuple(Op):
+    call_type="valret"
+    def py_apply_valret(self, inputs):
+        return tuple(inputs)
+    def shp_apply(self, inputs):
+        return tuple(shape(x) for x in inputs)
+    def typ_apply(self, inputs):
+        return Tuple(*(x.get_type() for x in inputs))
+    
         
 # TODO what is this shapes() method and which ops need to have it?
 
@@ -1805,8 +1817,8 @@ def shape(x):
     typ = x.get_type()
     if isinstance(typ, Tensor):
         return [size(x, i) for i in xrange(x.ndim)]
-    else:    
-        raise NotImplementedError    
+    else:
+        return tuple(map(shape, x.parents))
         # return tuple(shape(tuple_index(x, i)) for i in xrange(len(typ)))
     
 
@@ -1929,6 +1941,10 @@ def _to_list(x):
 
 def tuple_index(x, i):
     return Result(TupleIndex(i), [x])    
+
+def make_tuple(*xs):
+    return Result(MakeTuple(), list(xs))
+
 
 def getitem(arr, slis):
     arr = _as_node(arr)

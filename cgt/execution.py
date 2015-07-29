@@ -275,12 +275,27 @@ class VarSizeFunc(object):
         return self.callseq.get_outputs_numpy()
 
 
+def tuplify(xs):
+    if isinstance(xs, Node):
+        return xs
+    elif isinstance(xs, tuple):
+        return make_tuple(*map(tuplify, xs))
+    else:
+        raise ValueError("can't tuplify %s"%xs)
+
 def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
     config = load_config()
     backend = backend or config["backend"]
 
+
+    if isinstance(outputs, tuple):
+        outputs = tuplify(outputs)
+    elif isinstance(outputs, list):
+        outputs = map(tuplify, outputs)
+
     single = isinstance(outputs, Node)
     if single: outputs = [outputs]
+
     if dbg: 
         if backend == "python":            
             outputs = dbg.nodes + outputs
@@ -290,8 +305,9 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
     if backend == "python":
         outputs = simplify(outputs)
         eg = make_execution_graph(inputs, outputs)
+        vm = SequentialInterpreter(eg)
         def fn(*invals):
-            out = eg.run(invals)
+            out = vm(invals)
             if dbg and len(dbg.nodes)>0: out = out[len(dbg.nodes):]
             if single: out = out[0]
             return out
@@ -346,18 +362,6 @@ MemInfo = namedtuple("MemInfo",["loc","access"])
 MEM_OVERWRITE = 'overwrite'
 MEM_INCREMENT = 'increment'
 
-class ExecutionGraph(object):
-    """
-    Abstract interface for execution graph, which might be sequential or parallel
-    """
-    def new_loc(self):
-        raise NotImplementedError
-    def add_instr(self, instr):
-        raise NotImplementedError
-    def set_outputs(self, locs):
-        raise NotImplementedError
-
-
 class ExecutionContext(object):
     """
     Run-time information for the current functional call
@@ -375,7 +379,7 @@ class MemLocation(object):
     def get_ref(self):
         return self.val
 
-class SequentialExecution(ExecutionGraph):
+class ExecutionGraph:
     def __init__(self):
         self.locs = []
         self.instrs = []
@@ -386,17 +390,28 @@ class SequentialExecution(ExecutionGraph):
         return loc
     def add_instr(self, instr):
         self.instrs.append(instr)
-    def run(self, args):
-        c = ExecutionContext(args)
-        for instr in self.instrs:
-            instr.fire(c)
-        return [loc.get_ref() for loc in self.output_locs]
     def set_outputs(self, locs):
         self.output_locs = locs
 
+class Interpreter(object):
+    def __call__(self, args):
+        raise NotImplementedError
+
+class SequentialInterpreter(Interpreter):
+    """
+    Executes an execution graph
+    """
+    def __init__(self, eg):
+        self.eg = eg
+    def __call__(self, args):
+        c = ExecutionContext(args)
+        for instr in self.eg.instrs:
+            instr.fire(c)
+        return [loc.get_ref() for loc in self.eg.output_locs]
+
 
 def make_execution_graph(inputs, outputs):
-    G = SequentialExecution()
+    G = ExecutionGraph()
     nodes = list(topsorted(outputs))
     node2mem = {}
 
@@ -405,9 +420,24 @@ def make_execution_graph(inputs, outputs):
         for parent in node.parents:
             node2child[parent].append(node)
 
-    # TODO: incremental versions of stuff
+    analysis = analyze(outputs)
+    node2shape = analysis["node2shape"]
 
-    for node in nodes:        
+    augoutputs = []
+    for node in nodes:
+        shp = node2shape[node]
+        if isinstance(shp, list):
+            augoutputs.extend(shp)
+        else:
+            augoutputs.append(make_tuple(*shp))
+    augoutputs.extend(outputs)
+
+    nodes2 = topsorted(augoutputs)
+    # XXX this only works because of details of topsort implementation
+    # in general we're not guaranteed that the shape components will be computed before the nodes
+
+    # TODO: incremental versions of stuff
+    for node in nodes2:        
         if node.is_argument():
             write_loc = G.new_loc()
             node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
@@ -424,14 +454,14 @@ def make_execution_graph(inputs, outputs):
                 else:
                     nodeshape = node.op.shp_apply(node.parents)
                     for parent in node.parents:
-                        if len(node2child[parent])==1 and nodeshape==shape(parent) and data_mutable(parent):
+                        if len(node2child[parent])==1 and nodeshape==shape(parent) and node.dtype == parent.dtype and data_mutable(parent):
                             write_loc = node2mem[parent].loc
                             needs_alloc=False
-                            print "yay, inplace opt" 
                             break                          
                 if needs_alloc:
                     write_loc = G.new_loc()
-                    G.add_instr(Alloc(node, read_locs, write_loc))
+                    shape_locs = [node2mem[shpel].loc for shpel in node2shape[node]] if node.ndim>0 else []
+                    G.add_instr(Alloc(node.dtype, shape_locs, write_loc))
                 G.add_instr(InPlace(node, read_locs, write_loc))
             else:                
                 write_loc = G.new_loc()
@@ -459,14 +489,13 @@ class LoadInput(Instr):
         self.write_loc.set_to(c.get_input(self.ind))
 
 class Alloc(Instr):
-    def __init__(self, node, read_locs, write_loc):
-        self.node = node
-        self.shape_fun = get_numeric_shape_fun(self.node)
+    def __init__(self, dtype, read_locs, write_loc):
+        self.dtype = dtype
         self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, c):
-        shp = self.shape_fun([mem.get_ref() for mem in self.read_locs])
-        self.write_loc.set_to(np.zeros(shp, self.node.dtype))
+        shp = tuple(mem.get_ref() for mem in self.read_locs)
+        self.write_loc.set_to(np.zeros(shp, self.dtype))
 
 class InPlace(Instr):
     def __init__(self, node, read_locs, write_loc):
