@@ -33,8 +33,17 @@ typedef enum cgt_devtype {
     cgt_gpu
 } cgt_devtype;
 
+typedef enum cgt_typetag {
+    cgt_arraytype,
+    cgt_tupletype
+} cgt_typetag;
+
+typedef struct cgt_object {
+    cgt_typetag typetag;
+} cgt_object;
 
 typedef struct cgt_array {
+    cgt_typetag typetag;    
     int ndim;
     cgt_dtype dtype;
     cgt_devtype devtype;
@@ -43,6 +52,18 @@ typedef struct cgt_array {
     size_t stride;
     bool ownsdata;
 } cgt_array;
+
+cgt_array* new_cgt_array(int ndim, size_t* shape);
+void destroy_cgt_array(cgt_array*);
+
+typedef struct cgt_tuple {
+    cgt_typetag typetag;
+    int len;
+    cgt_object* members;
+} cgt_tuple;
+
+cgt_array* new_cgt_object(int ndim, size_t* shape);
+void destroy_cgt_object(cgt_object*);
 
 static inline size_t cgt_size(const cgt_array* a) {
     size_t out = 1;

@@ -361,36 +361,27 @@ MemInfo = namedtuple("MemInfo",["loc","access"])
 MEM_OVERWRITE = 'overwrite'
 MEM_INCREMENT = 'increment'
 
-class ExecutionContext(object):
-    """
-    Run-time information for the current functional call
-    """
-    def __init__(self, inputs):
-        self.inputs = inputs
-    def get_input(self, i):
-        return self.inputs[i]
-
-class MemLocation(object):
-    def __init__(self):
-        self.val = None
-    def set_to(self, val):
-        self.val = val
-    def get_ref(self):
-        return self.val
-
 class ExecutionGraph:
     def __init__(self):
         self.locs = []
         self.instrs = []
         self.output_locs = []
+        self.cur_idx = 0
     def new_loc(self):
-        loc = MemLocation()
+        loc = MemLocation(self.cur_idx)
+        self.cur_idx += 1
         self.locs.append(loc)
         return loc
     def add_instr(self, instr):
         self.instrs.append(instr)
     def set_outputs(self, locs):
         self.output_locs = locs
+    def num_mem_locs(self):
+        return self.cur_idx
+
+class MemLocation(object):
+    def __init__(self, idx):
+        self.idx = idx
 
 class Interpreter(object):
     def __call__(self, args):
@@ -402,12 +393,19 @@ class SequentialInterpreter(Interpreter):
     """
     def __init__(self, eg):
         self.eg = eg
+        self.storage = [None for _ in xrange(self.eg.num_mem_locs())]
+        self.args = None
     def __call__(self, args):
-        c = ExecutionContext(args)
+        self.args = args
         for instr in self.eg.instrs:
-            instr.fire(c)
-        return [loc.get_ref() for loc in self.eg.output_locs]
-
+            instr.fire(self)
+        return [self.get(loc) for loc in self.eg.output_locs]
+    def get(self, mem):
+        return self.storage[mem.idx]
+    def set(self, mem, val):
+        self.storage[mem.idx] = val
+    def get_input(self, i):
+        return self.args[i]
 
 def make_execution_graph(inputs, outputs):
     G = ExecutionGraph()
@@ -453,7 +451,7 @@ def make_execution_graph(inputs, outputs):
                 else:
                     nodeshape = node.op.shp_apply(node.parents)
                     for parent in node.parents:
-                        if len(node2child[parent])==1 and nodeshape==shape(parent) and node.dtype == parent.dtype and data_mutable(parent):
+                        if len(node2child[parent])==1 and nodeshape==shape(parent) and node.dtype == parent.dtype and is_data_mutable(parent):
                             write_loc = node2mem[parent].loc
                             needs_alloc=False
                             break                          
@@ -469,14 +467,14 @@ def make_execution_graph(inputs, outputs):
     G.set_outputs([node2mem[node].loc for node in outputs])
     return G
 
-def data_mutable(node):
+def is_data_mutable(node):
     if isinstance(node, Result):
         return not isinstance(node.op, Constant) 
     elif isinstance(node, Input):
         return False
 
 class Instr(object):
-    def fire(self, c):
+    def fire(self, interp):
         raise NotImplementedError
 
 class LoadInput(Instr):
@@ -484,32 +482,32 @@ class LoadInput(Instr):
         self.node = node
         self.ind = ind
         self.write_loc = write_loc
-    def fire(self, c):
-        self.write_loc.set_to(c.get_input(self.ind))
+    def fire(self, interp):
+        interp.set(self.write_loc, interp.get_input(self.ind))
 
 class Alloc(Instr):
     def __init__(self, dtype, read_locs, write_loc):
         self.dtype = dtype
         self.read_locs = read_locs
         self.write_loc = write_loc
-    def fire(self, c):
-        shp = tuple(mem.get_ref() for mem in self.read_locs)
-        self.write_loc.set_to(np.zeros(shp, self.dtype))
+    def fire(self, interp):
+        shp = tuple(interp.get(mem) for mem in self.read_locs)
+        interp.set(self.write_loc, np.zeros(shp, self.dtype))
 
 class InPlace(Instr):
     def __init__(self, node, read_locs, write_loc):
         self.node = node
         self.read_locs = read_locs
         self.write_loc = write_loc
-    def fire(self, c):
+    def fire(self, interp):
         self.node.op.py_apply_inplace(
-            [mem.get_ref() for mem in self.read_locs], 
-            self.write_loc.get_ref())
+            [interp.get(mem) for mem in self.read_locs], 
+            interp.get(self.write_loc))
 
 class ValReturning(Instr):
     def __init__(self, node, read_locs, write_loc):
         self.node = node
         self.read_locs = read_locs
         self.write_loc = write_loc
-    def fire(self,c):
-        self.write_loc.set_to(self.node.op.py_apply_valret([mem.get_ref() for mem in self.read_locs]))
+    def fire(self, interp):
+        interp.set(self.write_loc, self.node.op.py_apply_valret([interp.get(mem) for mem in self.read_locs]))

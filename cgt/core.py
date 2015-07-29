@@ -2334,11 +2334,6 @@ def transpose(arr, axes=None):
 def batched_matmul(x, y):
     return Result(BatchedMul22(False,False), [x,y])
 
-# def idxmap(n, fn):
-#     idxvar = cgt.scalar(dtype='i8')
-#     innerop = Composition([idxvar], [fn(idxvar)])
-#     return IdxMap(innerop)(idxvar)
-
 def alloc_from_shp(shp, typ):
     if isinstance(shp, tuple):
         raise NotImplementedError
