@@ -9,7 +9,6 @@ import os.path as osp
 
 
 cdef extern from "cgt_common.h":
-
     struct cgt_array:
         int ndim
         cgt_dtype dtype

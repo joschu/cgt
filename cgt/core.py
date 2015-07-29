@@ -327,7 +327,7 @@ class Op(object):
         Return a string that uniquely identifies the value of this Op.
         Should ideally be fixed across program runs
         """
-        return cPickle.dumps(self.__dict__)
+        return cPickle.dumps(self.__dict__, -1)
     def get_name(self):
         """
         Get a human-readable description of the Op, including its attributes
@@ -1613,137 +1613,8 @@ class MakeTuple(Op):
     def typ_apply(self, inputs):
         return Tuple(*(x.get_type() for x in inputs))
     
-        
-# TODO what is this shapes() method and which ops need to have it?
-
 def unpack(tup):
     return [Result(TupleIndex(i),[tup]) for i in xrange(len(tup.get_type()))]
-
-class EasyPyOp(Op):
-
-    def numeric_forward(self, *args):
-        raise NotImplementedError
-    def numeric_backward(self, *args):
-        raise NotImplementedError
-    def shp_apply(self, inputs):
-        raise NotImplementedError
-    def input_types(self):
-        raise NotImplementedError
-    def output_type(self):
-        raise NotImplementedError
-
-    def typ_apply(self, inputs):
-        assert (x.get_type() == reqtype for (x,reqtype) in utils.safezip(inputs, self.input_types()))
-        return self.output_type()
-    def get_diff(self, inputs):
-        return [True]*len(inputs)
-    def get_numeric_py(self):
-        return self.numeric_forward
-    def pullback(self, inputs, output, goutput):
-        class PBOp(Op):
-            def get_numeric_py(self1): #pylint: disable=E0213
-                def fn(*vals):
-                    return self.numeric_backward(*vals)
-                return fn
-            def typ_apply(self1, inputs): #pylint: disable=E0213
-                return Tuple(x.get_type() for x in inputs[:-2])
-            def shp_apply(self1, inputs): #pylint: disable=E0213
-                return [shape(x) for x in inputs[:-2]]
-            def shapes(self):
-                return map(shape, inputs)
-        return unpack(Result(PBOp(), inputs + [output, goutput]))
-
-
-class EasyCodeOp(Op):
-    def __init__(self, lang):
-        assert lang in ("c","cuda")
-        self.lang = lang
-    def forward_code(self):
-        raise NotImplementedError
-    def pullback_code(self):
-        raise NotImplementedError
-    def shp_apply(self):
-        raise NotImplementedError
-    def input_types(self):
-        raise NotImplementedError
-    def output_type(self):
-        raise NotImplementedError
-
-    def c_includes(self):
-        return []
-    def cuda_includes(self):
-        return []
-
-    def typ_apply(self, inputs):
-        assert (x.get_type() == reqtype for (x,reqtype) in utils.safezip(inputs, self.input_types()))
-        return self.output_type()
-    def get_diff(self, inputs):
-        return [True]*len(inputs)
-    def get_numeric_py(self):
-        raise MethodNotDefined
-
-    def c_code(self, _inputs):
-        return self.code("c")
-    def cuda_code(self, _inputs):
-        return self.code("cuda", funcname)
-    def code(self, lang, funcname):
-        if lang != self.lang:
-            raise MethodNotDefined
-        forward_name = "FUNCTION"
-        orig_code = self.forward_code()
-        if forward_name not in orig_code:
-            raise ValueError("forward code should have function named %s"%forward_name)            
-        return self.forward_code().replace(forward_name,funcname)
-    def pullback(self, inputs, output, goutput):
-        class PBOp(Op):
-            def get_numeric_py(self1): #pylint: disable=E0213
-                raise MethodNotDefined
-            def typ_apply(self1, inputs): #pylint: disable=E0213
-                return Tuple(x.get_type() for x in inputs[:-2])
-            def shp_apply(self1, inputs): #pylint: disable=E0213
-                return [shape(x) for x in inputs[:-2]]
-            def shapes(self):
-                return map(shape, inputs)
-            def c_code(self1, _inputs): #pylint: disable=E0213
-                return self.code("c"), 
-            def cuda_code(self1, _inputs): #pylint: disable=E0213
-                return self.code("cuda"), 
-            def code(self1, lang, funcname): #pylint: disable=E0213
-                if lang != self.lang:
-                    raise MethodNotDefined
-                pullback_name = "FUNCTION"
-                orig_code = self.pullback_code()
-                if pullback_name not in orig_code:
-                    raise ValueError("pullback code should have function named %s"%pullback_name)        
-                return orig_code.replace(pullback_name,funcname)
-
-        return unpack(Result(PBOp(), inputs + [output, goutput]))
-
-
-
-
-# Higher-order Operations
-# ----------------------------------------------------------------
-
-# class IdxMap(Op):
-#     def __init__(self, innerop):
-#         self.innerop = innerop
-#     def get_diff(self, inputs):
-#         return [False] + self.innerop.get_diff()
-#     def get_numeric_py(self):
-#         def fn(args):
-#             n = args[0]
-#             otherargs = args[1:]
-#             return np.array([self.innerfn(*[otherarg[i] for otherarg in otherargs]) for i in xrange(n)])
-#     # def pullback(self, inputs, _output, goutput):
-#     #     return [goutput.dot(inputs[0]), inputs[1].dot(goutput)]
-#     # def shp_apply(self, inputs):
-#     #     return [size(inputs[0],0), size(inputs[1],0)]
-#     # def typ_apply(self, _inputs):
-#     #     return Tensor(floatX, 2)
-#     # XXX unfinished
-
-
 
 # Assertion and debug operations
 # ----------------------------------------------------------------

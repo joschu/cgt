@@ -237,5 +237,6 @@ class AffineTestCase(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    AffineTestCase().setUp()
-    AffineTestCase().runTest()
+    case = AffineTestCase()
+    case.setUp()
+    case.runTest()

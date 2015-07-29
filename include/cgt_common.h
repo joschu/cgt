@@ -62,8 +62,12 @@ typedef struct cgt_tuple {
     cgt_object* members;
 } cgt_tuple;
 
-cgt_array* new_cgt_object(int ndim, size_t* shape);
-void destroy_cgt_object(cgt_object*);
+cgt_array* new_cgt_tuple(int ndim, size_t* shape);
+void destroy_cgt_tuple(cgt_object*);
+
+static inline cgt_typetag cgt_get_tag(cgt_object* o) {
+    return ((cgt_typetag*)o)[0];
+}
 
 static inline size_t cgt_size(const cgt_array* a) {
     size_t out = 1;

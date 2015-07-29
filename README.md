@@ -2,6 +2,7 @@
 ## Dependencies
 
 - Numpy
+- Cython
 - CUDA (Optional)
 
 ## Build

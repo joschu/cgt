@@ -70,9 +70,11 @@ target_link_libraries(cgt ${CUDA_CUDART_LIBRARY})
 target_include_directories(cgt PRIVATE ${CUDA_INCLUDE_DIRS} ${CGT_INCLUDE_DIR})
 
 
-cython_add_module(cycgt ${CMAKE_SOURCE_DIR}/src/cycgt.pyx)
-target_link_libraries(cycgt cgt)
-target_include_directories(cycgt PRIVATE ${NUMPY_INCLUDE_DIR} ${CGT_INCLUDE_DIR})
+cython_add_module(cycgt2 ${CMAKE_SOURCE_DIR}/src/cycgt2.pyx ${CMAKE_SOURCE_DIR}/include/execution.h)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cycgt2.pyx PROPERTIES CYTHON_IS_CXX TRUE)
+target_include_directories(cycgt2 PRIVATE ${NUMPY_INCLUDE_DIR} ${CGT_INCLUDE_DIR})
+target_link_libraries(cycgt2 cgt)
+
 
 # add_custom_command(
 #   COMMAND ./do_autogen.py ${CMAKE_BINARY_DIR}
