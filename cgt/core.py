@@ -848,9 +848,9 @@ class ElwiseUnary(Op):
         return Tensor(out_type, inputs[0].get_ndim())
     def c_code(self, inputs):
         info = self.info
-        return """
+        return r"""
 static inline %(cdtype)s scalar_CGT_FUNCNAME(%(cdtype)s x) {return %(cexpr)s;}
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
+extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     int s = cgt_size(io[0]);
     %(cdtype)s* in = (%(cdtype)s*)io[0]->data;
     %(cdtype)s* out = (%(cdtype)s*)io[1]->data;
@@ -942,7 +942,7 @@ class ElwiseBinary(Op):
         index1 = "0" if self.scalar_mask[1] else "i"
         return r"""
 static inline %(cdtype2)s scalar_CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
+extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     int s = cgt_size(io[%(ind4shape)s]);
     %(cdtype0)s* in0 = (%(cdtype0)s*)io[0]->data;
     %(cdtype1)s* in1 = (%(cdtype1)s*)io[1]->data;
@@ -1012,11 +1012,14 @@ class Size(Op):
         return [("ax",ctypes.c_int,self.axis)]
     def c_code(self, _):
         return r"""
-void CGT_FUNCNAME(void* cl0, cgt_array** io) {
+extern "C" cgt_array* CGT_FUNCNAME(void* cl0, cgt_array** io) {
 CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
-    io[1] = new_cgt_array(0, NULL, cgt_i8, cgt_cpu);
-    ((long*)io[1]->data)[0] = io[0]->shape[cl->ax];
+    cgt_array* in = io[0];
+    cgt_array* out = new cgt_array(0, NULL, cgt_i8, cgt_cpu);
+    ((long*)out->data)[0] = in->shape[cl->ax];
+    return out;
 }"""
+# XXX use safer indexing method
 
 class Reshape(Op):
     # XXX restore after we're sure the right thing happens with python impls
@@ -1708,7 +1711,7 @@ def shape(x):
     if isinstance(typ, Tensor):
         return [size(x, i) for i in xrange(x.ndim)]
     else:
-        return tuple(map(shape, x.parents))
+        return map(shape, x.parents)
         # return tuple(shape(tuple_index(x, i)) for i in xrange(len(typ)))
     
 
@@ -2214,21 +2217,19 @@ def batched_matmul(x, y):
 
 def alloc_from_shp(shp, typ):
     if isinstance(shp, tuple):
-        raise NotImplementedError
-        # return tuple(alloc_from_shp(shpel,typel) for (shpel,typel) in utils.safezip(shp,typ))
+        return tuple(alloc_from_shp(shpel,typel) for (shpel,typel) in utils.safezip(shp,typ))
     else:
         return np.empty(shp,typ.dtype)
 
 def alloc_output(node, vals):
     typ = node.get_type()
-    assert isinstance(typ, Tensor)
     shp = get_numeric_shape_fun(node)(vals)
     return alloc_from_shp(shp,typ)
 
 def get_numeric_shape_fun(node):
-
     args = [make_argument(p.get_type()) for p in node.parents]
-    outputs = simplify(node.op.shp_apply(args))
+    # outputs = simplify(node.op.shp_apply(args))
+    outputs = node.op.shp_apply(args)
     nodes = topsorted(outputs)
     def fn(vals):
         node2val = {node:val for (node,val) in utils.safezip(args, vals)}

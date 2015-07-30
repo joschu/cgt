@@ -15,20 +15,19 @@ public:
     SequentialInterpreter(ExecutionGraph* eg) : 
         eg(eg),
         storage(eg->n_mem_locs()),
-        args(NULL),
-        output(new_cgt_tuple(eg->n_outputs()))
+        args(NULL)
     {
     }
 
     cgt_object* get(MemLocation m) {
-        return storage[m.index];
+        return storage[m.index].get();
     }
     void set(MemLocation m, cgt_object* val) {
         storage[m.index] = val;
     }
     cgt_object* getarg(int argind) {
         cgt_assert(argind < args->len);        
-        return args->members[argind];
+        return args->members[argind].get();
     }
     cgt_tuple* run(cgt_tuple* newargs) {
         cgt_assert(newargs != NULL);
@@ -38,27 +37,20 @@ public:
             instr->fire(this);
         }
         args = NULL;
+        cgt_tuple* out = new cgt_tuple(eg->n_outputs());
         for (int i=0; i < eg->n_outputs(); ++i) {
             int index = eg->get_output_locs()[i].index;
-            output->members[i] = get(eg->get_output_locs()[i]);
+            out->setitem(i, get(eg->get_output_locs()[i]));
         }
-        return output;
+        return out;
         // todo actually do something with outputs
     }
-    void alloc_array(MemLocation mem, int ndim, size_t* shape, cgt_dtype dtype) override {
-        set(mem, (cgt_object*)new_cgt_array(ndim, shape, dtype, cgt_cpu)); // XXX
-    }
-    void alloc_tuple(MemLocation mem, int len) override {
-        set(mem, (cgt_object*)new_cgt_tuple(len)); // XXX
-    }
     ~SequentialInterpreter() {
-        delete output;
     }
 private:
     ExecutionGraph* eg;
-    vector<cgt_object*> storage;
+    vector<IRC<cgt_object>> storage;
     cgt_tuple* args;
-    cgt_tuple* output;
 };
 
 Interpreter* create_interpreter(ExecutionGraph* eg) {
@@ -77,8 +69,7 @@ void Alloc::fire(Interpreter* interp) {
         cgt_assert(sizeval->dtype == cgt_i8);
         shape[i] = idx<size_t>(sizeval, 0); 
     }
-    // interp->set(writeloc, cgt_alloc_array(ndim, shape, this->dtype));    
-    interp->alloc_array(writeloc, ndim, shape, this->dtype);
+    interp->set(writeloc, new cgt_array(ndim, shape, dtype, cgt_cpu));
 }
 
 void InPlace::fire(Interpreter* interp) {
@@ -94,13 +85,11 @@ void InPlace::fire(Interpreter* interp) {
 // TODO actually allocate tuple
 void ValReturning::fire(Interpreter* interp) {
     int n_inputs = readlocs.size();
-    vector<cgt_object*> args(n_inputs+1);
+    vector<cgt_object*> args(n_inputs);
     for (int i = 0; i < n_inputs; ++i) {
         args[i] = interp->get(readlocs[i]);
-    }
-    args[n_inputs] = interp->get(writeloc);
-    closure(args.data());
-    interp->set(writeloc, args[n_inputs]); // XXX
+    }    
+    interp->set(writeloc, closure(args.data())); // XXX
 }
 
 }

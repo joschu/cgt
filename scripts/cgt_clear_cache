@@ -1,0 +1,13 @@
+#!/usr/bin/env python
+import cgt,os.path as osp, subprocess,sys
+config = cgt.load_config()
+cache_dir = config["cache_dir"]
+cmd = "rm -rf %s"%osp.expandvars(cache_dir)
+while True:
+    sys.stderr.write("About to run \x1b[32m%s\x1b[0m. OK? (y/n): "%cmd)
+    yn = raw_input()
+    if yn=='y':
+        subprocess.check_call(cmd,shell=True)
+        break
+    elif yn=='n': 
+        break

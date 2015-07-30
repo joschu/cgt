@@ -45,7 +45,7 @@ def get_compile_info():
 
         config = load_config()
 
-        import cycgt #pylint: disable=F0401
+        import cycgt2 as cycgt #pylint: disable=F0401
         CGT_BUILD_ROOT = osp.dirname(osp.dirname(osp.realpath(cycgt.__file__)))
 
         cmake_info = {}
@@ -92,12 +92,13 @@ def compile_file(fname, libpath, extra_link_flags = ""):
         d.update(cudalibs = info["CUDA_LIBRARIES"], cudaroot = info["CUDA_ROOT"], cudalibdir = info["CUDA_LIBRARY_DIR"])
 
     if sys.platform == "darwin":
-        if fname.endswith(".c"):
+        if fname.endswith(".cc"):
             cap(r'''
 cd %(cacheroot)s && \
-cc -fPIC -O3 -DNDEBUG %(srcpath)s -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-cc -fPIC -O3 -DNDEBUG %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
+c++ -fPIC -O3 -DNDEBUG %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ -fPIC -O3 -DNDEBUG %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
             '''%d)
+        # TODO set up way to switch to -O0 -g
         elif fname.endswith(".cu"):
             cap(r'''
 cd %(cacheroot)s && \
@@ -107,10 +108,10 @@ c++ -fPIC -O3 -DNDEBUG -fPIC -dynamiclib -Wl,-headerpad_max_install_names %(cuda
                 # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
 
     else:
-        if fname.endswith(".c"):
+        if fname.endswith(".cc"):
             cap('''
-cc -fPIC -O3 -DNDEBUG %(srcpath)s -std=c99 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-cc -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
+c++ -fPIC -O3 -DNDEBUG %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
             '''%d)
         elif fname.endswith(".cu"):
             cap(r'''
@@ -175,7 +176,7 @@ def get_impl(node, devtype):
         s = StringIO()        
         if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
         print "compiling %(libpath)s for node %(node)s"%locals()
-        ext = "c" if devtype == "cpu" else "cu"
+        ext = "cc" if devtype == "cpu" else "cu"
         srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
         # write c code to tmp file
         s = StringIO()

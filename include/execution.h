@@ -1,3 +1,4 @@
+#pragma once
 #include "cgt_common.h"
 #include <vector>
 
@@ -6,13 +7,25 @@ using std::vector;
 
 // note: no-args initializers are only here because they're required by cython
 
-struct FuncClosure {
-    cgt_fun fptr;
+class InPlaceFun {
+public:
+    cgt_inplacefun fptr;
     void* data;
-    FuncClosure(cgt_fun fptr, void* data) : fptr(fptr), data(data) {}
-    FuncClosure() : fptr(NULL), data(NULL) {}
+    InPlaceFun(cgt_inplacefun fptr, void* data) : fptr(fptr), data(data) {}
+    InPlaceFun() : fptr(NULL), data(NULL) {}
     void operator()(cgt_object** args) {
         (*fptr)(data, args);
+    }
+};
+
+struct ValRetFun {
+public:
+    cgt_valretfun fptr;
+    void* data;
+    ValRetFun(cgt_valretfun fptr, void* data) : fptr(fptr), data(data) {printf("value %zui\n", ((size_t*)data)[0]);}
+    ValRetFun() : fptr(NULL), data(NULL) {}
+    cgt_object* operator()(cgt_object** args) {
+        return (*fptr)(data, args);
     }
 };
 
@@ -59,8 +72,6 @@ public:
     virtual cgt_object* get(MemLocation)=0;
     virtual void set(MemLocation, cgt_object*)=0;
     virtual cgt_object* getarg(int)=0;
-    virtual void alloc_array(MemLocation loc, int ndim, size_t* shape, cgt_dtype) = 0;
-    virtual void alloc_tuple(MemLocation loc, int len) = 0;
 };
 
 Interpreter* create_interpreter(ExecutionGraph*);
@@ -89,24 +100,24 @@ private:
 
 class InPlace : public Instruction  {
 public:
-    InPlace(vector<MemLocation> readlocs, MemLocation writeloc, FuncClosure closure)
+    InPlace(vector<MemLocation> readlocs, MemLocation writeloc, InPlaceFun closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    FuncClosure closure;
+    InPlaceFun closure;
 };
 
 class ValReturning : public Instruction  {
 public:
-    ValReturning(vector<MemLocation> readlocs, MemLocation writeloc, FuncClosure closure)
+    ValReturning(vector<MemLocation> readlocs, MemLocation writeloc, ValRetFun closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    FuncClosure closure;
+    ValRetFun closure;
 };
 
 

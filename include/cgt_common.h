@@ -2,10 +2,7 @@
 
 #include "stddef.h"
 #include "stdbool.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "IRC.h"
 
 // ================================================================
 // Basic structs and enums
@@ -33,47 +30,49 @@ typedef enum cgt_devtype {
 } cgt_devtype;
 
 typedef enum cgt_typetag {
+    cgt_undef,
     cgt_arraytype,
     cgt_tupletype
 } cgt_typetag;
 
-typedef struct cgt_object {
-    cgt_typetag typetag;
-} cgt_object;
+class cgt_object : public RefCountedBase<cgt_object> {
+public:
+    cgt_object() : kind(cgt_undef) {}
+    cgt_object(cgt_typetag kind) : kind(kind) {}
+    cgt_typetag kind;
+};
 
-typedef struct cgt_array {
-    cgt_typetag typetag;    
+class cgt_array : public cgt_object {
+public:
+    cgt_array(int ndim, size_t* shape, cgt_dtype, cgt_devtype);
+    ~cgt_array();
     int ndim;
     cgt_dtype dtype;
     cgt_devtype devtype;
     size_t* shape;
     void* data;
     bool ownsdata;
-} cgt_array;
+};
 
-cgt_array* new_cgt_array(int ndim, size_t* shape, cgt_dtype, cgt_devtype);
-void delete_cgt_array(cgt_array*);
 
-typedef struct cgt_tuple {
-    cgt_typetag typetag;
-    int len;
-    cgt_object** members;
-} cgt_tuple;
+#define IRC IntrusiveRefCntPtr
 
-cgt_tuple* new_cgt_tuple(int ndim);
-void delete_cgt_tuple(cgt_tuple*);
+static inline bool cgt_is_array(cgt_object* o) {return o->kind==cgt_arraytype;}
+static inline bool cgt_is_tuple(cgt_object* o) {return o->kind==cgt_tupletype;}
 
-static inline cgt_typetag cgt_type(cgt_object* o) {
-    return ((cgt_typetag*)o)[0];
-}
-
-static inline bool cgt_is_array(cgt_object* o) {
-    return cgt_type(o) == cgt_arraytype;
-}
-
-static inline bool cgt_is_tuple(cgt_object* o) {
-    return cgt_type(o) == cgt_tupletype;
-}
+class cgt_tuple : public cgt_object {
+public:
+    cgt_tuple(size_t len);
+    void setitem(int i, cgt_object* o) {
+        members[i] = o;
+    }
+    cgt_object* getitem(int i) {
+        return members[i].get();
+    }
+    ~cgt_tuple();
+    size_t len;
+    IRC<cgt_object>* members;
+};
 
 static inline size_t cgt_size(const cgt_array* a) {
     size_t out = 1;
@@ -107,7 +106,8 @@ static inline size_t cgt_nbytes(const cgt_array* a) {
     return cgt_size(a) * cgt_itemsize(a->dtype);
 }
 
-typedef void (*cgt_fun)(void*, cgt_object**);
+typedef void (*cgt_inplacefun)(void*, cgt_object**);
+typedef cgt_object* (*cgt_valretfun)(void*, cgt_object**);
 
 // ================================================================
 // Error handling 
@@ -158,10 +158,3 @@ void* cgt_alloc(char devtype, size_t size);
 void cgt_free(char devtype, void* ptr);
 void cgt_memcpy(char dest_type, char src_type, void* dest_ptr, void* src_ptr, size_t nbytes);
 
-
-
-
-
-#ifdef __cplusplus
-}
-#endif
