@@ -369,6 +369,7 @@ class ExecutionGraph:
 
 class MemLocation(object):
     def __init__(self, idx):
+        assert isinstance(idx, int)
         self.index = idx
     def to_json(self):
         return self.index
@@ -416,13 +417,18 @@ def make_execution_graph(inputs, outputs):
     analysis = analyze(outputs)
     node2shape = analysis["node2shape"]
 
+    tupnode2shpnode = {}
+    # XXX won't work if we have nested tuples. or will it?
+
     augoutputs = []
     for node in nodes:
         shp = node2shape[node]
         if isinstance(shp, list):
             augoutputs.extend(shp)
         else:
-            augoutputs.append(make_tuple(*shp))
+            newnode = make_tuple(*shp)
+            tupnode2shpnode[node] = newnode
+            augoutputs.append(newnode)
     augoutputs.extend(outputs)
 
     nodes2 = topsorted(augoutputs)
@@ -452,8 +458,12 @@ def make_execution_graph(inputs, outputs):
                             break                          
                 if needs_alloc:
                     write_loc = G.new_loc()
-                    shape_locs = [node2mem[shpel].loc for shpel in node2shape[node]] if node.ndim>0 else []
-                    G.add_instr(Alloc(node.dtype, shape_locs, write_loc))
+                    if isinstance(node.typ, Tensor):
+                        shape_locs = [node2mem[shpel].loc for shpel in node2shape[node]]
+                        G.add_instr(Alloc(node.dtype, shape_locs, write_loc))
+                    else:
+                        shpnode = tupnode2shpnode[node]
+                        G.add_instr(AllocTup(node.get_type(), node2mem[shpnode].loc, write_loc))
                 G.add_instr(InPlace(node, read_locs, write_loc))
             else:                
                 write_loc = G.new_loc()
@@ -498,6 +508,18 @@ class Alloc(Instr):
         interp.set(self.write_loc, np.zeros(shp, self.dtype))
     def to_json(self):
         return {"type" : "Alloc", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json()}
+
+
+class AllocTup(Instr):
+    def __init__(self, typ, read_loc, write_loc):
+        self.typ = typ
+        self.read_loc = read_loc
+        self.write_loc = write_loc
+    def fire(self, interp):
+        shp = interp.get(self.read_loc)
+        interp.set(self.write_loc, alloc_from_shp(shp, self.typ))
+    def to_json(self):
+        return {"type" : "AllocTup"} # XXX
 
 
 class InPlace(Instr):

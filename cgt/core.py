@@ -241,6 +241,11 @@ class Node(object):
         return getitem(self, slis)
     def __iter__(self):
         raise TypeError("Node is not iterable")
+    def __len__(self):
+        if isinstance(self.typ, Tuple):
+            return len(self.typ)
+        else:
+            raise ValueError("Node of type Tensor has no __len__")
     def __repr__(self):
         return self.get_name()
 
@@ -614,10 +619,10 @@ def pullback(outputs, goutputs, wrt):
                 gpars = node.op.pullback(node.parents, node, gnode)
                 for (par,gpar) in utils.safezip(node.parents, gpars):
                     var2gs[par].append(gpar)
-                    if gpar is not None:
-                        assert (par.get_ndim() == gpar.get_ndim())
-                        for (s0,s1) in zip(shape(par), shape(gpar)):
-                            assert_(equal(s0,s1),"node: "+str(node))
+                    # if gpar is not None:
+                    #     assert (par.get_ndim() == gpar.get_ndim())
+                    #     for (s0,s1) in zip(shape(par), shape(gpar)):
+                    #         assert_(equal(s0,s1),"node: "+str(node))
 
     # only we already summed up the gradients for the input nodes, so just take
     # 0th element
@@ -1711,7 +1716,7 @@ def shape(x):
     if isinstance(typ, Tensor):
         return [size(x, i) for i in xrange(x.ndim)]
     else:
-        return map(shape, x.parents)
+        return tuple(map(shape, x.parents))
         # return tuple(shape(tuple_index(x, i)) for i in xrange(len(typ)))
     
 
@@ -2070,7 +2075,7 @@ def do_analysis(node, analysis):
     analysis["hash2node"][h] = node
     # -- SHAPE --
     if node.is_input():
-        node2shape[node] = [size(node, i) for i in xrange(node.get_ndim())]
+        node2shape[node] = shape(node)
     elif isinstance(node.op, TupleIndex):
         node2shape[node] = node2shape[node.parents[0]][node.op.idx]
     else:
@@ -2216,10 +2221,10 @@ def batched_matmul(x, y):
     return Result(BatchedMul22(False,False), [x,y])
 
 def alloc_from_shp(shp, typ):
-    if isinstance(shp, tuple):
-        return tuple(alloc_from_shp(shpel,typel) for (shpel,typel) in utils.safezip(shp,typ))
-    else:
+    if all(isinstance(el, int) for el in shp):
         return np.empty(shp,typ.dtype)
+    else:
+        return tuple(alloc_from_shp(shpel,typel) for (shpel,typel) in utils.safezip(shp,typ))
 
 def alloc_output(node, vals):
     typ = node.get_type()
@@ -2230,13 +2235,17 @@ def get_numeric_shape_fun(node):
     args = [make_argument(p.get_type()) for p in node.parents]
     # outputs = simplify(node.op.shp_apply(args))
     outputs = node.op.shp_apply(args)
+
+    singletuple = not isinstance(outputs, list)
+    if singletuple: # XXX
+        outputs = [make_tuple(*outputs)]
     nodes = topsorted(outputs)
     def fn(vals):
         node2val = {node:val for (node,val) in utils.safezip(args, vals)}
         for node in nodes:
             if not node.is_argument():
                 node2val[node] = py_numeric_apply(node, [node2val[p] for p in node.parents])
-        return [node2val[node] for node in outputs]
+        return node2val[outputs[0]] if singletuple else [node2val[node] for node in outputs]
     return fn
 
 def py_numeric_apply(node, vals):
