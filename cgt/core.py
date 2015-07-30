@@ -291,20 +291,45 @@ def num_components(node):
 class MethodNotDefined(Exception):
     pass
 
+
+
+class OpImpl(object):
+    def __init__(self, hashfields):
+        self._hashfields = hashfields
+
+    def hash(self):
+        """
+        Used to determine whether an impl needs to be compiled.
+        The hash is determined by self._hashfields.
+        """
+        assert self._hashfields is not None
+        s = "\0".join(repr(field) for field in self._hashfields)
+        return hashlib.md5(s).hexdigest()
+
+class PyImpl(OpImpl):
+    def __init__(self, inplace_func=None, valret_func=None):
+        assert (inplace_func is None) != (valret_func is None)
+        OpImpl.__init__(self, [id(inplace_func), id(valret_func)])
+        self.inplace_func = inplace_func
+        self.valret_func = valret_func
+
+class CImpl(OpImpl):
+    def __init__(self, code, includes, link_flags):
+        OpImpl.__init__(self, [code, includes, link_flags])
+        self.code = code
+        self.includes = includes
+        self.link_flags = link_flags
+
 class Op(object):
     """
     Describes an operation that will be performed on some data.
     """
 
     # attributes that can be overwritten in subclasses
-    dynamic_data = False # op contains to data that might be changed externally
-    gpu_uses_c = False # even if output on GPU, use C implementation, not CUDA
+    volatile_data = False # op contains to data that might be changed externally
+    # gpu_uses_c = False # even if output on GPU, use C implementation, not CUDA
     call_type = 'inplace' # or valret
     writes_to_input = -1
-    c_extra_includes = []
-    c_extra_link_flags = ""
-    cuda_extra_includes = []
-    cuda_extra_link_flags = ""
 
     def shp_apply(self, parents):
         """
@@ -338,32 +363,32 @@ class Op(object):
         Get a human-readable description of the Op, including its attributes
         """
         return type(self).__name__.lower()
-    def py_apply_inplace(self, reads, write):
-        """
-        Apply python implementation of op to numeric inputs and outputs in-place
-        """
-        raise MethodNotDefined
-    def py_apply_valret(self, reads):
-        """
-        Apply and return value.
-        """
-        raise MethodNotDefined
-    def get_closure(self, _inputs):
-        """
-        XXX writeme
-        """
-        return None
-    def c_code(self, inputs):
-        """
-        Return C code implementing this function, with the name of the function replaced by CGT_FUNCNAME.
-        """
-        raise MethodNotDefined
-    def cuda_code(self, inputs):
-        """
-        See c_code
-        This code will be compiled with nvcc
-        """
-        raise MethodNotDefined
+    # def py_apply_inplace(self, reads, write):
+    #     """
+    #     Apply python implementation of op to numeric inputs and outputs in-place
+    #     """
+    #     raise MethodNotDefined
+    # def py_apply_valret(self, reads):
+    #     """
+    #     Apply and return value.
+    #     """
+    #     raise MethodNotDefined
+    # def get_closure(self, _inputs):
+    #     """
+    #     XXX writeme
+    #     """
+    #     return None
+    # def c_code(self, inputs):
+    #     """
+    #     Return C code implementing this function, with the name of the function replaced by CGT_FUNCNAME.
+    #     """
+    #     raise MethodNotDefined
+    # def cuda_code(self, inputs):
+    #     """
+    #     See c_code
+    #     This code will be compiled with nvcc
+    #     """
+    #     raise MethodNotDefined
     def get_replacement(self, _newparents, _analysis):
         """
         Return the name of this node
@@ -386,6 +411,13 @@ class Op(object):
 
     def __repr__(self):
         return self.get_name()
+
+    def get_py_impl(self):
+        raise MethodNotDefined
+    def get_c_impl(self):
+        raise MethodNotDefined
+    def get_cuda_impl(self):
+        raise MethodNotDefined
 
 def _as_node(val_or_node):
     """
@@ -660,8 +692,9 @@ class Constant(Op):
         return self.get_name()
     def get_name(self):
         return "const{%s}"%str(self.value)
-    def py_apply_valret(self, reads):
-        return self.value
+    def get_py_impl(self):
+        def f(reads): return self.value
+        return PyImpl(valret_func=f)
     def pullback(self, _inps, _out, _gout):
         return []
     def shp_apply(self, _inputs):
@@ -677,6 +710,7 @@ class Constant(Op):
     def get_closure(self, _):
         raise NotImplementedError # TODO
     def c_code(self, inputs):
+        raise RuntimeError # move to get_*_impl
         return """
 typedef struct constcl {void* ptr} constcl; 
 void CGT_FUNCNAME(void* cldata, cgt_array** io) {
@@ -698,8 +732,10 @@ class Fill(Op):
         return [False]*num_inputs
     def get_name(self):
         return "fill{%g}"%self.value
-    def py_apply_inplace(self, reads, write):
-        write[...] = self.value
+    def get_py_impl(self):
+        def f(reads, write):
+            write[...] = self.value
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         raise exceptions.NonDifferentiable
     def shp_apply(self, inputs):
@@ -723,10 +759,10 @@ class Arange(Op):
         self.dtype = dtype
     def get_diff(self, num_inputs):
         return [False]*num_inputs
-    def get_numeric_py(self):
-        def fn(start,stop,step):
-            return np.arange(start,stop,step, self.dtype)
-        return fn
+    def get_py_impl(self):
+        def f((start, stop, step)):
+            return np.arange(start, stop, step, self.dtype)
+        return PyImpl(valret_func=f)
     def pullback(self, inputs, output, goutput):
         raise exceptions.NonDifferentiable
     def shp_apply(self, inputs):
@@ -740,7 +776,7 @@ class ScalarRng(Op):
     """
     (shape...) -> array filled with iid random numbers, from either uniform or normal distribution
     """
-    dynamic_data = True
+    volatile_data = True
     def __init__(self, kind):
         assert kind in ("uniform","gaussian")
         self.kind = kind
@@ -749,6 +785,7 @@ class ScalarRng(Op):
     def get_name(self):
         return "rng{%s}"%self.kind
     def get_numeric_py(self):
+        raise RuntimeError # move to get_py_impl
         if self.kind == "uniform": return lambda *shp: np.random.rand(*shp).astype(floatX)
         elif self.kind == "gaussian": return lambda *shp: np.random.randn(*shp).astype(floatX)
     def pullback(self, inputs, output, goutput):
@@ -830,8 +867,10 @@ class ElwiseUnary(Op):
         return self.opname
     def get_hash(self):
         return utils.hash_seq1(self.opname)
-    def py_apply_inplace(self, reads, write):
-        self.info.pyfunc(reads[0], out=write)
+    def get_py_impl(self):
+        def f(reads, write):
+            self.info.pyfunc(reads[0], out=write)
+        return PyImpl(inplace_func=f)
     def get_replacement(self, _newparents, _analysis):
         return None
     def pullback(self, (x,), y, gy): #pylint: disable=W0613
@@ -854,6 +893,7 @@ class ElwiseUnary(Op):
             out_type = typeinfo
         return Tensor(out_type, inputs[0].get_ndim())
     def c_code(self, inputs):
+        raise RuntimeError # move this to get_c_impl
         info = self.info
         return r"""
 static inline %(cdtype)s scalar_CGT_FUNCNAME(%(cdtype)s x) {return %(cexpr)s;}
@@ -867,6 +907,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 }
 """%dict(cdtype=np2c[inputs[0].dtype],cexpr=info.cexpr)
     def cuda_code(self, inputs):
+        raise RuntimeError # move this to get_cuda_impl
         info = self.info
         npdtype = inputs[0].dtype
         return """
@@ -884,6 +925,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 }
 """%dict(cdtype=np2c[npdtype],cexpr=info.cexpr)
     def cuda_includes(self):
+        raise RuntimeError # move this to get_cuda_impl
         return ["cgt_cuda.h","cgt_common.h"]
 
 class ElwiseBinary(Op):
@@ -902,11 +944,13 @@ class ElwiseBinary(Op):
         return "(%s %s %s)"%(parent_exprs[0], self.opname, parent_exprs[1])
     def get_name(self):
         return BINARY_INFO[self.opname].short
-    def py_apply_inplace(self, reads, write):
-        x,y = reads
-        if self.scalar_mask==(False,False):
-            assert x.shape==y.shape, "Implicit broadcasting isn't allowed. Use the broadcast(...) function"
-        self.info.pyfunc(x,y, out=write)
+    def get_py_impl(self):
+        def f(reads, write):
+            x,y = reads
+            if self.scalar_mask==(False,False):
+                assert x.shape==y.shape, "Implicit broadcasting isn't allowed. Use the broadcast(...) function"
+            self.info.pyfunc(x,y, out=write)
+        return PyImpl(inplace_func=f)
     def get_replacement(self, parents, analysis):
         node2sv = analysis["node2sv"]
         ind4shape = 1 if self.scalar_mask[0] else 0
@@ -940,6 +984,7 @@ class ElwiseBinary(Op):
         ind4shape = 1 if self.scalar_mask[0] else 0
         return Tensor(out_type, inputs[ind4shape].ndim)
     def c_code(self, inputs):
+        raise RuntimeError # move to get_*_impl
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
         npdtype1 = inputs[1].dtype
@@ -962,8 +1007,10 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 """%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
     cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape)  
     def c_includes(self):
+        raise RuntimeError # move to get_*_impl
         return ["cgt_common.h","math.h"]
     def cuda_code(self, inputs):
+        raise RuntimeError # move to get_*_impl
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
         npdtype1 = inputs[1].dtype
@@ -984,6 +1031,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 }
 """%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],cexpr=self.info.cexpr,funcname=funcname, index="0" if self.kind==ElwiseBinary.ST else "i")  
     def cuda_includes(self):
+        raise RuntimeError # move to get_*_impl
         return ["cgt_cuda.h","cgt_common.h"]
 
 
@@ -1001,8 +1049,10 @@ class Size(Op):
         return [False]
     def get_name(self):
         return "size{%i}"%self.axis
-    def py_apply_valret(self, reads):
-        return np.array(reads[0].shape[self.axis])
+    def get_py_impl(self):
+        def f(reads):
+            return np.array(reads[0].shape[self.axis])
+        return PyImpl(valret_func=f)
     def pullback(self, inputs, output, goutput):
         raise exceptions.NonDifferentiable
     def shp_apply(self, _inputs):
@@ -1018,6 +1068,7 @@ class Size(Op):
     def get_closure(self, inputs):
         return [("ax",ctypes.c_int,self.axis)]
     def c_code(self, _):
+        raise RuntimeError # move to get_*_impl
         return r"""
 extern "C" cgt_array* CGT_FUNCNAME(void* cl0, cgt_array** io) {
 CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
@@ -1034,8 +1085,10 @@ class Reshape(Op):
     call_type = "valret"
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
-    def py_apply_valret(self, reads):
-        return reads[0].reshape(reads[1:])
+    def get_py_impl(self):
+        def f(reads):
+            return reads[0].reshape(reads[1:])
+        return PyImpl(valret_func=f)
     def pullback(self, inputs, _out, gout):
         return [reshape(gout, shape(inputs[0]))] + [None]*(len(inputs)-1)
     def shp_apply(self, inputs):
@@ -1045,16 +1098,18 @@ class Reshape(Op):
     def get_closure(self, parents):
         return [(ctypes.c_int,len(parents))]
     def c_code(self, _inputs):
+        raise RuntimeError # move to get_*_impl
         return "void CGT_FUNCNAME(void* cldata, cgt_array** io) {io[*((int*)cldata)]->data = io[0]->data; io[0]->ownsdata=false;}"
 
 class Concatenate(Op):
+    call_type = "valret"
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, num_inputs):
         return [True]*num_inputs
-    call_type = "valret"
-    def py_apply_valret(self, reads):
-        return np.concatenate(reads,axis=self.axis)
+    def get_py_impl(self):
+        def f(reads): return np.concatenate(reads,axis=self.axis)
+        return PyImpl(valret_func=f)
     def pullback(self, inputs, _output, gout):
         start = 0
         out = []
@@ -1074,6 +1129,7 @@ class Stack(Op):
     def get_diff(self, num_inputs):
         return [True for _ in xrange(num_inputs)]
     def get_numeric_py(self):
+        raise RuntimeError # move to get_*_impl
         def fn(*vals):
             return np.array(vals)
         return fn
@@ -1090,15 +1146,17 @@ class Repeat(Op):
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, num_inputs):
-        return [True] + [False for _ in xrange(num_inputs-1)]    
-    def py_apply_inplace(self, reads, write):
-        arr = reads[0]
-        numreps = reads[1:]
-        shp = arr.shape
-        assert all(shp[i] == 1 for i in self.axes)
-        for (ax,numrep) in utils.safezip(self.axes, numreps):
-            arr = np.repeat(arr, numrep, ax)
-        np.copyto(write, arr)
+        return [True] + [False for _ in xrange(num_inputs-1)]
+    def get_py_impl(self):
+        def f(reads, write):
+            arr = reads[0]
+            numreps = reads[1:]
+            shp = arr.shape
+            assert all(shp[i] == 1 for i in self.axes)
+            for (ax,numrep) in utils.safezip(self.axes, numreps):
+                arr = np.repeat(arr, numrep, ax)
+            np.copyto(write, arr)
+        return PyImpl(inplace_func=f)
     def get_replacement(self, parents, analysis):
         if parents[0] in analysis["node2sv"]:
             value = analysis["node2sv"][parents[0]]
@@ -1120,8 +1178,10 @@ class Transpose(Op):
         self.axes = axes
     def get_diff(self, _):
         return [True]
-    def py_apply_inplace(self, reads, write):
-        np.copyto(write, reads[0].transpose(self.axes))
+    def get_py_impl(self):
+        def f(reads, write):
+            np.copyto(write, reads[0].transpose(self.axes))
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         return [transpose(goutput, utils.invert_perm(self.axes))] # XXX is this right?
     def shp_apply(self, inputs):
@@ -1130,6 +1190,7 @@ class Transpose(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def c_code(self, inputs):
+        raise RuntimeError # move to get_c_impl
         return r"""
         void CGT_FUNCNAME(void* cldata, cgt_array** io) {
             cgt_array *in = io[0], *out = io[1];
@@ -1150,12 +1211,14 @@ class Transport(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def get_numeric_py(self):
+        raise RuntimeError # move to get_*_impl
         def fn(x):
             return x
         return fn
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def c_code(self, _inputs):
+        raise RuntimeError # move to get_*_impl
         return """
 void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     cgt_memcpy(io[1]->devtype, io[0]->devtype, io[1]->data, io[0]->data, cgt_nbytes(io[0]));    
@@ -1168,10 +1231,12 @@ class RFFT(Op):
         self.axes = axes
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
-    def py_apply_inplace(self, reads, write):
-        x = reads[0]
-        shp = map(int,reads[1:])
-        np.copyto(write, np.fft.fftn(x,shp,self.axes))
+    def get_py_impl(self):
+        def f(reads, write):
+            x = reads[0]
+            shp = map(int,reads[1:])
+            np.copyto(write, np.fft.fftn(x,shp,self.axes))
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, _outputs, goutput):
         return real(Result(RFFT(self.axes),[goutput]+inputs[1:]))
     def shp_apply(self, inputs):
@@ -1188,12 +1253,14 @@ class IRFFT(Op):
         self.axes = axes
     def get_diff(self, _):
         return [True]
-    def py_apply_inplace(self, reads, write):
-        x = reads[0]
-        shp = map(int,reads[1:])
-        slis = [slice(0,None) for _ in xrange(x.ndim)]
-        for (ax,s) in zip(self.axes,shp): slis[ax] = slice(0, s)
-        np.copyto(write, np.real(np.fft.ifftn(x,axes=self.axes)[slis]))
+    def get_py_impl(self):
+        def f(reads, write):
+            x = reads[0]
+            shp = map(int,reads[1:])
+            slis = [slice(0,None) for _ in xrange(x.ndim)]
+            for (ax,s) in zip(self.axes,shp): slis[ax] = slice(0, s)
+            np.copyto(write, np.real(np.fft.ifftn(x,axes=self.axes)[slis]))
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, _outputs, goutput):
         return Result(IRFFT(self.axes),[goutput]) # XXX is this right?
     def shp_apply(self, inputs):
@@ -1217,8 +1284,10 @@ class Sum(Op):
         return [True]
     def get_name(self):
         return "sum{%s}"%(",".join(map(str,self.axes)))
-    def py_apply_inplace(self, reads, write):
-        reads[0].sum(axis = self.axes or None, out=write, keepdims=True)
+    def get_py_impl(self):
+        def f(reads, write):
+            reads[0].sum(axis = self.axes or None, out=write, keepdims=True)
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         return [Result(Repeat(self.axes), [goutput] + [size(inputs[0],ax) for ax in self.axes])]
     def shp_apply(self, inputs):
@@ -1228,6 +1297,7 @@ class Sum(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def c_code(self, inputs):
+        raise RuntimeError # move to get_*_impl
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < in->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
@@ -1258,8 +1328,10 @@ class Max(Op):
         return [True]
     def get_name(self):
         return "max{%s}"%(",".join(map(str,self.axes)))
-    def py_apply_inplace(self, reads, write):
-        reads[0].max(axis=self.axes or None,keepdims=True, out=write)
+    def get_py_impl(self):
+        def f(reads, write):
+            reads[0].max(axis=self.axes or None,keepdims=True, out=write)
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         x = inputs[0]
         inputpat = "x"*x.ndim
@@ -1281,8 +1353,10 @@ class Argmax(Op):
         return [False]
     def get_name(self):
         return "argmax{%s}"%self.axis
-    def get_numeric_py(self):
-        return lambda x : x.argmax(axis=self.axis,keepdims=True)
+    def get_py_impl(self):
+        def f(reads):
+            return reads[0].argmax(axis=self.axis or None, keepdims=True)
+        return PyImpl(valret_func=f)
     def shp_apply(self, inputs):
         x = inputs[0]
         s = shape(x)
@@ -1307,13 +1381,15 @@ class GetSli(Op):
         self.axis = axis
     def get_diff(self, _):
         return [True,False,False,False]
-    def py_apply_valret(self, reads):
-        x,start,stop,step=reads
-        slices = [slice(None,None,None) for _ in xrange(x.ndim)]
-        slices[self.axis] = slice(start,stop,step)
-        if step < 0:
-            raise NotImplementedError
-        return x[slices]
+    def get_py_impl(self):
+        def f(reads):
+            x,start,stop,step=reads
+            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+            slices[self.axis] = slice(start,stop,step)
+            if step < 0:
+                raise NotImplementedError
+            return x[slices]
+        return PyImpl(valret_func=f)
     def pullback(self, inputs, output, goutput):
         ginput = zeros_like(inputs[0])
         return [Result(IncSli(self.axis), [ginput] + inputs[1:] + [goutput])] + [None]*3
@@ -1327,6 +1403,7 @@ class GetSli(Op):
         assert inputs[1].dtype == inputs[2].dtype == inputs[3].dtype == 'i8'
         return inputs[0].get_type()
     def c_code(self, inputs):
+        raise RuntimeError # move to get_c_impl
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < out->shape[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
@@ -1355,12 +1432,14 @@ class IncSli(Op):
         self.axis = axis
     def get_diff(self, _):
         return [True,False,True,True]
-    def py_apply_inplace(self, reads, write):
-        x, start, stop, step, y=reads
-        newx = x.copy()
-        slices = [slice(None,None,None) for _ in xrange(x.ndim)]
-        slices[self.axis] = slice(start,stop,step)
-        write[slices] += y # XXX check that it's incremental
+    def get_py_impl(self):
+        def f(reads, write):
+            x, start, stop, step, y=reads
+            newx = x.copy()
+            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+            slices[self.axis] = slice(start,stop,step)
+            write[slices] += y # XXX check that it's incremental
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         _x, start, stop, step, _y = inputs
         gx = goutput
@@ -1371,6 +1450,7 @@ class IncSli(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def c_code(self, inputs):
+        raise RuntimeError # move this to get_c_impl
         x = inputs[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
@@ -1399,8 +1479,10 @@ void CGT_FUNCNAME(void* cldata, cgt_array** io) {
 class GetFlatIndices(Op):
     def get_diff(self, _):
         return [True,False]
-    def py_apply_inplace(self, reads, write):
-        np.copyto(write, reads[0].flat[reads[1]])
+    def get_py_impl(self):
+        def f(reads, write):
+            np.copyto(write, reads[0].flat[reads[1]])
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         x,inds = inputs
         ginput = zeros_like(x)
@@ -1416,9 +1498,11 @@ class IncFlatIndices(Op):
     writes_to_input = 0
     def get_diff(self, _):
         return [True,False,True]
-    def py_apply_inplace(self, reads, write):
-        x,inds,y = reads
-        write.flat[inds] += y # XXX
+    def get_py_impl(self):
+        def f(reads, write):
+            x,inds,y = reads
+            write.flat[inds] += y # XXX
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         raise MethodNotDefined
         _x, inds, _y = inputs 
@@ -1436,14 +1520,16 @@ class IncFlatIndices(Op):
 
 
 class Mul21(Op):
-    c_extra_includes = ["cblas.h"]
+    # c_extra_includes = ["cblas.h"]
 
     def __init__(self, tA):
         self.tA = tA
-    def py_apply_inplace(self, reads, write):
-        x,y = reads
-        if self.tA: x = x.T
-        x.dot(y, out=write)
+    def get_py_impl(self):
+        def f(reads, write):
+            x,y = reads
+            if self.tA: x = x.T
+            x.dot(y, out=write)
+        return PyImpl(inplace_func=f)
     def get_replacement(self, inputs, analysis):
         if inputs[1] in analysis["node2sv"]:
             return sum(inputs[0],0 if self.tA else 1) * analysis["node2sv"][inputs[1]]
@@ -1460,11 +1546,13 @@ class Mul22(Op):
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
-    def py_apply_inplace(self, reads, write):
-        x,y = reads
-        if self.tA: x = x.T
-        if self.tB: y = y.T
-        x.dot(y, out=write)
+    def get_py_impl(self):
+        def f(reads, write):
+            x,y = reads
+            if self.tA: x = x.T
+            if self.tB: y = y.T
+            x.dot(y, out=write)
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         return [Result(Mul22(False, not self.tB), [goutput, inputs[1]]),
                 Result(Mul22(not self.tA, False), [inputs[0], goutput])]
@@ -1474,11 +1562,14 @@ class Mul22(Op):
         assert inputs[0].get_dtype()==floatX and inputs[1].get_dtype()==floatX
         return inputs[0].get_type()
     def get_closure(self, inputs):
+        raise RuntimeError # move to get_c_impl
         return [(ctypes.c_bool, self.tA), (ctypes.c_bool, self.tB)]
     def c_name(self, npdtype):
+        raise RuntimeError # move to get_c_impl
         return "mul22_%s"%(npdtype)
     # best gemm docs: https://software.intel.com/en-us/node/520775
     def c_code(self, inputs):
+        raise RuntimeError # move to get_c_impl
         npdtype = inputs[0].dtype
         try:
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
@@ -1505,9 +1596,11 @@ class BatchedMul22(Op):
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
-    def py_apply_inplace(self, (x,y), z):
-        for (xmat, ymat, zmat) in zip(x,y, z):
-            xmat.dot(ymat, out=zmat)
+    def get_py_impl(self):
+        def f((x,y), z):
+            for (xmat, ymat, zmat) in zip(x,y, z):
+                xmat.dot(ymat, out=zmat)
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         return [Result(BatchedMul22(False, not self.tB), [goutput, inputs[1]]),
                 Result(BatchedMul22(not self.tA, False), [inputs[0], goutput])]
@@ -1518,8 +1611,10 @@ class BatchedMul22(Op):
         return inputs[0].get_type()
 
 class Outer(Op):
-    def py_apply_inplace(self, reads, write):
-        np.outer(reads[0], reads[1], out=write)
+    def get_py_impl(self):
+        def f(reads, write):
+            np.outer(reads[0], reads[1], out=write)
+        return PyImpl(inplace_func=f)
     def pullback(self, inputs, _output, goutput):
         return [goutput.dot(inputs[0]), inputs[1].dot(goutput)]
     def shp_apply(self, inputs):
@@ -1534,8 +1629,10 @@ class Outer(Op):
 
 class Dot(Op):
     call_type = "valret"
-    def py_apply_valret(self, reads):
-        return np.dot(reads[0], reads[1])
+    def get_py_impl(self):
+        def f(reads):
+            return np.dot(reads[0], reads[1])
+        return PyImpl(valret_func=f)
     def pullback(self, inputs, _output, goutput):
         x, y = inputs
         return [y*goutput, x*goutput]
@@ -1548,6 +1645,7 @@ class Dot(Op):
 # ----------------------------------------------------------------
 
 class Composition(Op):
+    call_type = "valret"
     def __init__(self, inputs, outputs):
         self._inputs = inputs
         self._outputs = outputs
@@ -1576,9 +1674,11 @@ class Composition(Op):
 
     def get_diff(self, _):
         return self._diff
-    def get_numeric_py(self):
+    def get_py_impl(self):
         f = make_function(self._inputs, self._outputs)
-        return lambda num_inputs: tuple(f(num_inputs))
+        def py_impl(num_inputs):
+            return tuple(f(num_inputs))
+        return PyImpl(valret_func=py_impl)
     def pullback(self, inputs, output, goutput):
         # repl = {}
         # repl.update(utils.safezip(self._inputs, inputs))
@@ -1606,8 +1706,10 @@ class TupleIndex(Op):
     call_type="valret"
     def __init__(self, idx):
         self.idx = idx
-    def py_apply_valret(self, reads):
-        return reads[0][self.idx]
+    def get_py_impl(self):
+        def f(reads):
+            return reads[0][self.idx]
+        return PyImpl(valret_func=f)
     def shp_apply(self, inputs):
         return shape(inputs[0])[self.idx]
     def typ_apply(self, inputs):
@@ -1617,8 +1719,10 @@ class TupleIndex(Op):
 
 class MakeTuple(Op):
     call_type="valret"
-    def py_apply_valret(self, inputs):
-        return tuple(inputs)
+    def get_py_impl(self):
+        def f(inputs):
+            return tuple(inputs)
+        return PyImpl(valret_func=f)
     def shp_apply(self, inputs):
         return tuple(shape(x) for x in inputs)
     def typ_apply(self, inputs):
@@ -1642,10 +1746,12 @@ class Assertion(Op):
         return Tensor('i8',0)
     def shp_apply(self, _):
         return []
-    def py_apply_inplace(self, reads, write):
-        x = reads[0]
-        if not x.item():
-            self.display_error()
+    def get_py_impl(self):
+        def f(reads, write):
+            x = reads[0]
+            if not x.item():
+                self.display_error()
+        return PyImpl(inplace_func=f)
     def display_error(self):
         print "Stack trace at failed assertion:"
         print "**************************"        
@@ -1663,9 +1769,11 @@ class DebugFunc(Op):
         return Tensor('i8',0)
     def shp_apply(self, _):
         return []
-    def py_apply_inplace(self, reads, write):
-        def fn(*reads):
-            self.yourfunc(*reads)
+    def get_py_impl(self):
+        def f(reads, write):
+            def fn(*reads):
+                self.yourfunc(*reads)
+        return PyImpl(inplace_func=f)
 
 def assert_(x,msg=None):
     add_debug_node(Result(Assertion(msg or "(empty)"), [x]))
@@ -2109,7 +2217,7 @@ def _try_repl(node, analysis, repl):
         return analysis["hash2node"][h]
     parents = node.parents
     # -- CONSTANT PROP --
-    if all(isinstance(par.op, Constant) for par in parents) and not node.op.dynamic_data:
+    if all(isinstance(par.op, Constant) for par in parents) and not node.op.volatile_data:
         return constant(py_numeric_apply(node, [p.op.value for p in parents]))
     # -- SIZE --
     if isinstance(node.op, Size):
@@ -2251,11 +2359,16 @@ def get_numeric_shape_fun(node):
     return fn
 
 def py_numeric_apply(node, vals):
+    try:
+        py_impl = node.op.get_py_impl()
+    except MethodNotDefined:
+        print 'Op %s has no Python implementation' % repr(node.op)
+        raise
     if node.op.call_type == "valret":
-        out = node.op.py_apply_valret(vals)
+        out = py_impl.valret_func(vals)
     else:
         out = alloc_output(node,vals)
-        node.op.py_apply_inplace(vals, out)
+        py_impl.inplace_func(vals, out)
     return out
 
 def tuplify(xs):

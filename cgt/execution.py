@@ -14,33 +14,34 @@ def _get_cgt_src_root():
 _CONFIG = None
 def load_config():
     global _CONFIG
-    if _CONFIG is None:
-        from configobj import ConfigObj
-        from validate import Validator
-        rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
-        specfilename = osp.join(_get_cgt_src_root(), "cgtrc_spec.ini")
-        _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)
-        val = Validator()
-        test = _CONFIG.validate(val,preserve_errors=True)
-        if test is not True:
-            for (k,v) in test.items():
-                if v is not True:
-                    utils.error("%s: %s in %s"%(k,v.message,rcfileloc))
-            raise ValueError
-        envflags = os.getenv("CGT_FLAGS")
-        if envflags:
-            pairs = envflags.split(",")
-            for pair in pairs:
-                lhs,rhs = pair.split("=")
-                assert lhs in _CONFIG
-                _CONFIG[lhs] = rhs
+    if _CONFIG is not None:
+        return _CONFIG
+
+    from configobj import ConfigObj
+    from validate import Validator
+    rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
+    specfilename = osp.join(_get_cgt_src_root(), "cgtrc_spec.ini")
+    _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)
+    val = Validator()
+    test = _CONFIG.validate(val,preserve_errors=True)
+    if test is not True:
+        for (k,v) in test.items():
+            if v is not True:
+                utils.error("%s: %s in %s"%(k,v.message,rcfileloc))
+        raise ValueError
+    envflags = os.getenv("CGT_FLAGS")
+    if envflags:
+        pairs = envflags.split(",")
+        for pair in pairs:
+            lhs,rhs = pair.split("=")
+            assert lhs in _CONFIG
+            _CONFIG[lhs] = rhs
     return _CONFIG
 
 
 _COMPILE_CONFIG = None
 def get_compile_info():
     global _COMPILE_CONFIG
-    
     if _COMPILE_CONFIG is None:
 
         config = load_config()
@@ -258,7 +259,6 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
     config = load_config()
     backend = backend or config["backend"]
 
-
     if isinstance(outputs, tuple):
         outputs = tuplify(outputs)
     elif isinstance(outputs, list):
@@ -272,11 +272,12 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
             outputs = dbg.nodes + outputs
         else:
             utils.warn("Debugging nodes can currently only be used with the python backend, but %s was selected. Ignoring"%backend)
-    
+
     if backend == "python":
         outputs = simplify(outputs)
         eg = make_execution_graph(inputs, outputs)
-        vm = SequentialInterpreter(eg)
+        oplib = OpLibrary()
+        vm = SequentialInterpreter(eg, oplib)
         def fn(*invals):
             out = vm(invals)
             if dbg and len(dbg.nodes)>0: out = out[len(dbg.nodes):]
@@ -328,10 +329,78 @@ def numeric_eval(outputs, arg2val):
 ################################################################
 ### Execution graph 
 ################################################################
+class OpLibrary(object):
+    """
+    Stores compiled Op implementations. Performs just-in-time compiling.
+    """
+
+    def __init__(self):
+        self.op2implhash = {}
+        self.implhash2binary = {}
+
+    def _get_op_impl(self, op):
+        """
+        Grabs the preferred implementation of an op, falling back to
+        Python if necessary
+        """
+        # TODO: C and CUDA, with fallback to Python
+        # This implementation just uses the Python Impl
+        try:
+            impl = op.get_py_impl()
+            return impl
+        except MethodNotDefined:
+            print 'Op %s has no Python implementation' % repr(op)
+            raise
+
+    def _compile_impl(self, op, impl):
+        # "Compile" refers to extracting and processing an implementation
+        # so "compiling" a Python implementation just means to form the Python
+        # function that computes the Op
+        # a Python "binary" is just this function
+
+        binary = None
+
+        # Only works with Python impls now
+        assert isinstance(impl, PyImpl)
+        if op.call_type == "inplace":
+            assert impl.inplace_func is not None
+            binary = impl.inplace_func
+        else:
+            assert impl.valret_func is not None
+            binary = impl.valret_func
+
+        return binary
+
+    def _fetch_binary(self, op):
+        """
+        Gets the binary for an Op, compiling its Impl if necessary.
+        Assumes that if get_*_impl() is called on an Op twice, then the two Impls have the same hashes.
+        """
+
+        # If Op has never been seen, check if its impl has been compiled,
+        # and compile if necessary
+        if op not in self.op2implhash:
+            impl = self._get_op_impl(op)
+            implhash = self.op2implhash[op] = impl.hash()
+            if implhash in self.implhash2binary:
+                return self.implhash2binary[implhash]
+            binary = self.implhash2binary[implhash] = self._compile_impl(op, impl)
+            return binary
+        # We saw the Op before, just return its compiled impl directly
+        implhash = self.op2implhash[op]
+        assert implhash in self.implhash2binary
+        return self.implhash2binary[implhash]
+
+    def apply_inplace(self, op, reads, write):
+        self._fetch_binary(op)(reads, write)
+    def apply_valret(self, op, reads):
+        return self._fetch_binary(op)(reads)
+
+
 
 MemInfo = namedtuple("MemInfo",["loc","access"])
-MEM_OVERWRITE = 'overwrite'
-MEM_INCREMENT = 'increment'
+MEM_OVERWRITE = "overwrite"
+MEM_INCREMENT = "increment"
 
 class ExecutionGraph:
     def __init__(self, n_args):
@@ -375,13 +444,18 @@ class Interpreter(object):
         raise NotImplementedError
     def getarg(self, i):
         raise NotImplementedError
+    def apply_op_inplace(self, op, reads, write):
+        raise NotImplementedError
+    def apply_op_valret(self, op, reads):
+        raise NotImplementedError
 
 class SequentialInterpreter(Interpreter):
     """
     Executes an execution graph
     """
-    def __init__(self, eg):
+    def __init__(self, eg, oplib):
         self.eg = eg
+        self.oplib = oplib
         self.storage = [None for _ in xrange(self.eg.n_locs())]
         self.args = None
     def __call__(self, args):
@@ -395,6 +469,10 @@ class SequentialInterpreter(Interpreter):
         self.storage[mem.index] = val
     def getarg(self, i):
         return self.args[i]
+    def apply_op_inplace(self, op, reads, write):
+        self.oplib.apply_inplace(op, reads, write)
+    def apply_op_valret(self, op, reads):
+        return self.oplib.apply_valret(op, reads)
 
 def make_execution_graph(inputs, outputs):
     G = ExecutionGraph(len(inputs))
@@ -501,7 +579,6 @@ class Alloc(Instr):
     def to_json(self):
         return {"type" : "Alloc", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json()}
 
-
 class AllocTup(Instr):
     def __init__(self, typ, read_loc, write_loc):
         self.typ = typ
@@ -519,8 +596,8 @@ class InPlace(Instr):
         self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
-        self.node.op.py_apply_inplace(
-            [interp.get(mem) for mem in self.read_locs], 
+        interp.apply_op_inplace(self.node.op,
+            [interp.get(mem) for mem in self.read_locs],
             interp.get(self.write_loc))
     def to_json(self):
         return {"type" : "InPlace", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
@@ -531,6 +608,6 @@ class ValReturning(Instr):
         self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
-        interp.set(self.write_loc, self.node.op.py_apply_valret([interp.get(mem) for mem in self.read_locs]))
+        interp.set(self.write_loc, interp.apply_op_valret(self.node.op, [interp.get(mem) for mem in self.read_locs]))
     def to_json(self):
         return {"type" : "ValReturning", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}

@@ -16,11 +16,13 @@ class SinCos(cgt.Op):
     call_type = "valret"
     def typ_apply(self, inputs):
         return cgt.Tuple(cgt.Tensor(cgt.floatX, 0), cgt.Tensor(cgt.floatX, 0))
-    def py_apply_valret(self, reads):
-        x = reads[0]
-        return (np.sin(x), np.cos(x))
     def shp_apply(self, inputs):
         return (cgt.shape(inputs[0]), cgt.shape(inputs[0]))
+    def get_py_impl(self):
+        def f(reads):
+            x = reads[0]
+            return (np.sin(x), np.cos(x))
+        return cgt.PyImpl(valret_func=f)
     c_extra_link_flags = "-lm"
     c_extra_includes = ["math.h"]
 
@@ -38,12 +40,14 @@ class SinCos2(cgt.Op):
     call_type = "inplace"
     def typ_apply(self, inputs):
         return cgt.Tuple(cgt.Tensor(cgt.floatX, 0), cgt.Tensor(cgt.floatX, 0))
-    def py_apply_inplace(self, reads, write):
-        x = reads[0]
-        write[0][...] = np.sin(x)
-        write[1][...] = np.cos(x)
     def shp_apply(self, inputs):
         return (cgt.shape(inputs[0]), cgt.shape(inputs[0]))
+    def get_py_impl(self):
+        def f(reads, write):
+            x = reads[0]
+            write[0][...] = np.sin(x)
+            write[1][...] = np.cos(x)
+        return cgt.PyImpl(inplace_func=f)
     c_extra_link_flags = "-lm"
     c_extra_includes = ["math.h"]
 
