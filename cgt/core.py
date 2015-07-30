@@ -1,4 +1,4 @@
-import sys, numpy as np, hashlib, copy, cPickle, re, operator, ctypes, warnings, subprocess, StringIO
+import sys, numpy as np, hashlib, copy, cPickle, re, operator, ctypes, warnings, subprocess
 from collections import defaultdict,namedtuple
 import traceback
 import __builtin__
@@ -345,7 +345,7 @@ class Op(object):
         raise MethodNotDefined
     def get_closure(self, _inputs):
         """
-        Return a ctypes Structure which will be passed as the first argument to the C/CUDA function.
+        XXX writeme
         """
         return None
     def c_code(self, inputs):
@@ -668,7 +668,7 @@ class Constant(Op):
     def get_hash(self):
         return str(id(self))
     def get_closure(self, _):
-        return [(ctypes.c_void_p, self.value.ctypes.data)] # XXX wont work for gpu
+        raise NotImplementedError # TODO
     def c_code(self, inputs):
         return """
 typedef struct constcl {void* ptr} constcl; 
@@ -1009,13 +1009,14 @@ class Size(Op):
             if fixed_shape[self.axis] is not None:
                 return constant(fixed_shape[self.axis])
     def get_closure(self, inputs):
-        return [(ctypes.c_int, self.axis)]
+        return [("ax",ctypes.c_int,self.axis)]
     def c_code(self, _):
         return r"""
-        typedef struct axcl {int ax} axcl;
-        void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-            ((long*)io[1]->data)[0] = io[0]->shape[((axcl*)cldata)->ax];
-        }"""
+void CGT_FUNCNAME(void* cl0, cgt_array** io) {
+CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
+    io[1] = new_cgt_array(0, NULL, cgt_i8, cgt_cpu);
+    ((long*)io[1]->data)[0] = io[0]->shape[cl->ax];
+}"""
 
 class Reshape(Op):
     # XXX restore after we're sure the right thing happens with python impls

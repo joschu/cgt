@@ -2,7 +2,7 @@ from core import *
 from collections import defaultdict
 import os
 import os.path as osp
-
+from StringIO import StringIO
 # ================================================================
 # Execution
 # ================================================================
@@ -120,6 +120,13 @@ c++  -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s
             '''%d
             )
 
+ctypes2str = {
+    ctypes.c_int : "int",
+    ctypes.c_long : "long",
+    ctypes.c_void_p : "void*",
+    ctypes.c_double : "double",
+    ctypes.c_float : "float"
+}
 
 def get_impl(node, devtype):
 
@@ -135,23 +142,46 @@ def get_impl(node, devtype):
         includes = ["cgt_common.h","stdint.h","stddef.h"] + node.op.c_extra_includes
     else:
         includes = ["cgt_common.h","cgt_cuda.h"] + node.op.cuda_extra_includes
+
+    struct_code = StringIO()
+    vals = []
+    fields = []
+    triples = node.op.get_closure(node.parents)
+    if triples is None:
+        closure = ctypes.c_void_p(0)
+    else:
+        struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
+        for (fieldname,fieldtype,val) in triples:
+            vals.append(val)
+            struct_code.write(ctypes2str[fieldtype])
+            struct_code.write(" ")
+            struct_code.write(fieldname)
+            struct_code.write(";\n")
+            fields.append((fieldname,fieldtype))
+        struct_code.write("} CGT_FUNCNAME_closure;\n")
+
+        class S(ctypes.Structure):
+            _fields_ = fields
+        closure = S(*vals)
+
+
     h = hashlib.md5(code_raw).hexdigest()[:10]
     funcname = devtype + node.op.__class__.__name__ + h
     ci = get_compile_info()
     CACHE_ROOT = ci["CACHE_ROOT"]
     libpath = osp.join(CACHE_ROOT, funcname + ".so")
-    closure = node.op.get_closure(node.parents)
 
     if not osp.exists(libpath):
-        s = StringIO.StringIO()        
+        s = StringIO()        
         if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
         print "compiling %(libpath)s for node %(node)s"%locals()
         ext = "c" if devtype == "cpu" else "cu"
         srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
         # write c code to tmp file
-        s = StringIO.StringIO()
+        s = StringIO()
         for filename in includes:
             s.write('#include "%s"\n'%filename)
+        s.write(struct_code.getvalue().replace("CGT_FUNCNAME",funcname))
         code = code_raw.replace("CGT_FUNCNAME",funcname)
         s.write(code)
         with open(srcpath,"w") as fh:
@@ -311,7 +341,8 @@ MEM_OVERWRITE = 'overwrite'
 MEM_INCREMENT = 'increment'
 
 class ExecutionGraph:
-    def __init__(self):
+    def __init__(self, n_args):
+        self.n_args = n_args
         self.locs = []
         self.instrs = []
         self.output_locs = []
@@ -337,9 +368,9 @@ class ExecutionGraph:
 
 class MemLocation(object):
     def __init__(self, idx):
-        self.idx = idx
+        self.index = idx
     def to_json(self):
-        return self.idx
+        return self.index
 
 class Interpreter(object):
     def __call__(self, args):
@@ -365,14 +396,14 @@ class SequentialInterpreter(Interpreter):
             instr.fire(self)
         return [self.get(loc) for loc in self.eg.output_locs]
     def get(self, mem):
-        return self.storage[mem.idx]
+        return self.storage[mem.index]
     def set(self, mem, val):
-        self.storage[mem.idx] = val
+        self.storage[mem.index] = val
     def getarg(self, i):
         return self.args[i]
 
 def make_execution_graph(inputs, outputs):
-    G = ExecutionGraph()
+    G = ExecutionGraph(len(inputs))
     nodes = list(topsorted(outputs))
     node2mem = {}
 
@@ -478,7 +509,7 @@ class InPlace(Instr):
             [interp.get(mem) for mem in self.read_locs], 
             interp.get(self.write_loc))
     def to_json(self):
-        return {"type" : "InPlace", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : "todo"}
+        return {"type" : "InPlace", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
 
 class ValReturning(Instr):
     def __init__(self, node, read_locs, write_loc):
@@ -488,4 +519,4 @@ class ValReturning(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, self.node.op.py_apply_valret([interp.get(mem) for mem in self.read_locs]))
     def to_json(self):
-        return {"type" : "ValReturning", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : "todo"}
+        return {"type" : "ValReturning", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}

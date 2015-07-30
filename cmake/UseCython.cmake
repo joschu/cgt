@@ -95,8 +95,6 @@ function( compile_pyx _name generated_file )
   foreach( pyx_file ${ARGN} )
     get_filename_component( pyx_file_basename "${pyx_file}" NAME_WE )
 
-    message("HI ${pyx_file}")
-
     # Determine if it is a C or C++ file.
     get_source_file_property( property_is_cxx ${pyx_file} CYTHON_IS_CXX )
     if( 1 )
@@ -111,7 +109,8 @@ function( compile_pyx _name generated_file )
     get_filename_component( pyx_path ${pyx_location} PATH )
     # I removed the following lines because they cause an error and don't seem to be necessary
     # get_directory_property( cmake_include_directories DIRECTORY ${pyx_path} INCLUDE_DIRECTORIES )
-    # list( APPEND cython_include_directories ${cmake_include_directories} )
+
+    list( APPEND cython_include_directories ${cmake_include_directories} )
     list( APPEND pyx_locations "${pyx_location}" )
 
     # Determine dependencies.

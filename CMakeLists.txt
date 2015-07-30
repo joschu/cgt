@@ -26,6 +26,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 
 # set(CMAKE_C_STANDARD 99)
 list( APPEND CMAKE_C_FLAGS "-std=c99")
+list( APPEND CMAKE_CXX_FLAGS "-std=c++11")
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
@@ -60,7 +61,7 @@ endif(CGT_DEVEL_MODE)
 set(CGT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
 message("include dir ${CGT_INCLUDE_DIR}")
 
-add_library(cgt SHARED src/cgt_common.c include/cgt_common.h)
+add_library(cgt SHARED src/cgt_common.cpp include/cgt_common.h)
 if (CGT_ENABLE_CUDA)
   find_package(CUDA REQUIRED)
   add_definitions(-DCGT_ENABLE_CUDA)
@@ -70,7 +71,10 @@ target_link_libraries(cgt ${CUDA_CUDART_LIBRARY})
 target_include_directories(cgt PRIVATE ${CUDA_INCLUDE_DIRS} ${CGT_INCLUDE_DIR})
 
 
-cython_add_module(cycgt2 ${CMAKE_SOURCE_DIR}/src/cycgt2.pyx ${CMAKE_SOURCE_DIR}/include/execution.h)
+cython_add_module(cycgt2 ${CMAKE_SOURCE_DIR}/src/cycgt2.pyx 
+  ${CMAKE_SOURCE_DIR}/include/execution.h
+  ${CMAKE_SOURCE_DIR}/src/execution.cpp
+)
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cycgt2.pyx PROPERTIES CYTHON_IS_CXX TRUE)
 target_include_directories(cycgt2 PRIVATE ${NUMPY_INCLUDE_DIR} ${CGT_INCLUDE_DIR})
 target_link_libraries(cycgt2 cgt)

@@ -7,6 +7,43 @@
 #include "cgt_cuda.h"
 #endif
 
+// ================================================================
+// Object alloc/dealloc 
+// ================================================================
+ 
+
+cgt_array* new_cgt_array(int ndim, size_t* shape, cgt_dtype dtype, 
+    cgt_devtype devtype) {
+    size_t* myshape = new size_t[ndim];
+    for (int i=0; i < ndim; ++i) myshape[i] = shape[i];
+    cgt_array* out = new cgt_array();
+    out->typetag = cgt_arraytype;
+    out->ndim = ndim;
+    out->dtype = dtype;
+    out->devtype = devtype;
+    out->shape = myshape;
+    out->data = malloc(cgt_nbytes(out));
+    out->ownsdata = true;
+    return out;
+}
+
+cgt_tuple* new_cgt_tuple(int len) {
+    cgt_object** members = new cgt_object*[len];
+    cgt_tuple* out = new cgt_tuple;
+    out->typetag = cgt_tupletype;
+    out->len =  len;
+    out->members = members;
+    return out;
+}
+
+void delete_cgt_tuple(cgt_tuple* t) {
+    delete[] t->members;
+}
+void delete_cgt_array(cgt_array* a) {
+    delete[] a->shape;
+    if (a->ownsdata && a->data != NULL) free(a->data);
+}
+
 
 // ================================================================
 // Error handling 

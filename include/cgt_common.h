@@ -2,7 +2,6 @@
 
 #include "stddef.h"
 #include "stdbool.h"
-#include "stdio.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,24 +48,31 @@ typedef struct cgt_array {
     cgt_devtype devtype;
     size_t* shape;
     void* data;
-    size_t stride;
     bool ownsdata;
 } cgt_array;
 
-cgt_array* new_cgt_array(int ndim, size_t* shape);
-void destroy_cgt_array(cgt_array*);
+cgt_array* new_cgt_array(int ndim, size_t* shape, cgt_dtype, cgt_devtype);
+void delete_cgt_array(cgt_array*);
 
 typedef struct cgt_tuple {
     cgt_typetag typetag;
     int len;
-    cgt_object* members;
+    cgt_object** members;
 } cgt_tuple;
 
-cgt_array* new_cgt_tuple(int ndim, size_t* shape);
-void destroy_cgt_tuple(cgt_object*);
+cgt_tuple* new_cgt_tuple(int ndim);
+void delete_cgt_tuple(cgt_tuple*);
 
-static inline cgt_typetag cgt_get_tag(cgt_object* o) {
+static inline cgt_typetag cgt_type(cgt_object* o) {
     return ((cgt_typetag*)o)[0];
+}
+
+static inline bool cgt_is_array(cgt_object* o) {
+    return cgt_type(o) == cgt_arraytype;
+}
+
+static inline bool cgt_is_tuple(cgt_object* o) {
+    return cgt_type(o) == cgt_tupletype;
 }
 
 static inline size_t cgt_size(const cgt_array* a) {
@@ -101,7 +107,7 @@ static inline size_t cgt_nbytes(const cgt_array* a) {
     return cgt_size(a) * cgt_itemsize(a->dtype);
 }
 
-typedef void (*cgt_fun)(void*, cgt_array**);
+typedef void (*cgt_fun)(void*, cgt_object**);
 
 // ================================================================
 // Error handling 
