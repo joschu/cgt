@@ -679,7 +679,7 @@ class Constant(Op):
     def c_code(self, inputs):
         return """
 typedef struct constcl {void* ptr} constcl; 
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
+void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
     io[0]->data = ((constcl*)cldata)->ptr;
     io[0]->ownsdata = false;
 }
@@ -857,7 +857,7 @@ class ElwiseUnary(Op):
         info = self.info
         return r"""
 static inline %(cdtype)s scalar_CGT_FUNCNAME(%(cdtype)s x) {return %(cexpr)s;}
-extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
     int s = cgt_size(io[0]);
     %(cdtype)s* in = (%(cdtype)s*)io[0]->data;
     %(cdtype)s* out = (%(cdtype)s*)io[1]->data;
@@ -876,7 +876,7 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype)s* in, %(cdty
     out[i] = CGT_FUNCNAME(in[i]);
   }
 }
-extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
     size_t n = cgt_size(io[0]);
     int num_blocks, num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
@@ -949,7 +949,7 @@ class ElwiseBinary(Op):
         index1 = "0" if self.scalar_mask[1] else "i"
         return r"""
 static inline %(cdtype2)s scalar_CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
-extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
     int s = cgt_size(io[%(ind4shape)s]);
     %(cdtype0)s* in0 = (%(cdtype0)s*)io[0]->data;
     %(cdtype1)s* in1 = (%(cdtype1)s*)io[1]->data;
@@ -975,7 +975,7 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype0)s* x, %(cdty
     z[i] = CGT_FUNCNAME(x[%(index0)s], y[%(index1)s]);
   }
 }
-extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
     size_t n = cgt_size(io[1]);
     int num_blocks,num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
@@ -1019,10 +1019,10 @@ class Size(Op):
         return [("ax",ctypes.c_int,self.axis)]
     def c_code(self, _):
         return r"""
-extern "C" cgt_array* CGT_FUNCNAME(void* cl0, cgt_array** io) {
+extern "C" cgt::Array* CGT_FUNCNAME(void* cl0, cgt::Array** io) {
 CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
-    cgt_array* in = io[0];
-    cgt_array* out = new cgt_array(0, NULL, cgt_i8, cgt_cpu);
+    cgt::Array* in = io[0];
+    cgt::Array* out = new cgt::Array(0, NULL, cgt_i8, cgt_cpu);
     ((long*)out->data)[0] = in->shape[cl->ax];
     return out;
 }"""
@@ -1045,7 +1045,7 @@ class Reshape(Op):
     def get_closure(self, parents):
         return [(ctypes.c_int,len(parents))]
     def c_code(self, _inputs):
-        return "void CGT_FUNCNAME(void* cldata, cgt_array** io) {io[*((int*)cldata)]->data = io[0]->data; io[0]->ownsdata=false;}"
+        return "void CGT_FUNCNAME(void* cldata, cgt::Array** io) {io[*((int*)cldata)]->data = io[0]->data; io[0]->ownsdata=false;}"
 
 class Concatenate(Op):
     def __init__(self, axis):
@@ -1131,8 +1131,8 @@ class Transpose(Op):
         return inputs[0].get_type()
     def c_code(self, inputs):
         return r"""
-        void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-            cgt_array *in = io[0], *out = io[1];
+        void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
+            cgt::Array *in = io[0], *out = io[1];
             %(cdtype)s* indata = in->data, *outdata = out->data;
             for (int i=0; i < in->shape[0]; ++i) {
                 for (int j=0; j < in->shape[1]; ++j) {
@@ -1157,7 +1157,7 @@ class Transport(Op):
         return shape(inputs[0])
     def c_code(self, _inputs):
         return """
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
+void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
     cgt_memcpy(io[1]->devtype, io[0]->devtype, io[1]->data, io[0]->data, cgt_nbytes(io[0]));    
 }
 """
@@ -1236,8 +1236,8 @@ class Sum(Op):
         outidxexpr = " + ".join(["i%(ax)s * outstrides[%(ax)s]"%dict(ax=ax) for ax in outdims])\
             if len(outdims)>0 else "0"
         return r"""
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-    cgt_array *in=io[0], *out=io[1];
+void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
+    cgt::Array *in=io[0], *out=io[1];
     size_t instrides[in->ndim];
     cgt_get_strides(in, instrides);
     size_t outstrides[out->ndim];
@@ -1333,8 +1333,8 @@ class GetSli(Op):
         inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*instrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join(["i%i"%ax + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
         return r"""
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-    cgt_array *in=io[0], *out=io[4];
+void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
+    cgt::Array *in=io[0], *out=io[4];
     long start = ((long*)io[1]->data)[0];
     //long stop = ((long*)io[2]->data)[0];
     long step = ((long*)io[3]->data)[0];
@@ -1378,8 +1378,8 @@ class IncSli(Op):
         incidxexpr =  " + ".join(["i%i"%ax + "*incstrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
         return r"""
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-    cgt_array *in=io[0], *inc = io[4], *out=io[5];
+void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
+    cgt::Array *in=io[0], *inc = io[4], *out=io[5];
     long start = ((long*)io[1]->data)[0];
     //long stop = ((long*)io[2]->data)[0];
     long step = ((long*)io[3]->data)[0];
@@ -1488,9 +1488,9 @@ class Mul22(Op):
 typedef struct gemm_closure {
     bool tA, tB;
 } gemm_closure;        
-void CGT_FUNCNAME(void* cldata, cgt_array** ABC) {
+void CGT_FUNCNAME(void* cldata, cgt::Array** ABC) {
     gemm_closure* cl = (gemm_closure*)cldata;
-    cgt_array *A=ABC[0], *B=ABC[1], *C=ABC[2];
+    cgt::Array *A=ABC[0], *B=ABC[1], *C=ABC[2];
     int lda = A->shape[1], ldb = B->shape[1], ldc = C->shape[1];
     int M = C->shape[0];
     int N = C->shape[1];  

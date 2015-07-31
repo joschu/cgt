@@ -9,22 +9,22 @@ using std::vector;
 
 class InPlaceFun {
 public:
-    cgt_inplacefun fptr;
+    Inplacefun fptr;
     void* data;
-    InPlaceFun(cgt_inplacefun fptr, void* data) : fptr(fptr), data(data) {}
+    InPlaceFun(Inplacefun fptr, void* data) : fptr(fptr), data(data) {}
     InPlaceFun() : fptr(NULL), data(NULL) {}
-    void operator()(cgt_object** args) {
+    void operator()(Object ** args) {
         (*fptr)(data, args);
     }
 };
 
 struct ValRetFun {
 public:
-    cgt_valretfun fptr;
+    Valretfun fptr;
     void* data;
-    ValRetFun(cgt_valretfun fptr, void* data) : fptr(fptr), data(data) {printf("value %zui\n", ((size_t*)data)[0]);}
+    ValRetFun(Valretfun fptr, void* data) : fptr(fptr), data(data) {printf("value %zui\n", ((size_t*)data)[0]);}
     ValRetFun() : fptr(NULL), data(NULL) {}
-    cgt_object* operator()(cgt_object** args) {
+    Object * operator()(Object ** args) {
         return (*fptr)(data, args);
     }
 };
@@ -67,11 +67,11 @@ private:
 class Interpreter {
 public:
     // called by external code
-    virtual cgt_tuple* run(cgt_tuple*)=0;
+    virtual Tuple * run(Tuple *)=0;
     // called by instructions:
-    virtual cgt_object* get(MemLocation)=0;
-    virtual void set(MemLocation, cgt_object*)=0;
-    virtual cgt_object* getarg(int)=0;
+    virtual Object * get(MemLocation)=0;
+    virtual void set(MemLocation, Object *)=0;
+    virtual Object * getarg(int)=0;
 };
 
 Interpreter* create_interpreter(ExecutionGraph*);
@@ -89,11 +89,11 @@ private:
 
 class Alloc : public Instruction {
 public:
-    Alloc(cgt_dtype dtype, vector<MemLocation> readlocs, MemLocation writeloc)
+    Alloc(Dtype dtype, vector<MemLocation> readlocs, MemLocation writeloc)
     : dtype(dtype), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
 private:
-    cgt_dtype dtype;
+    Dtype dtype;
     vector<MemLocation> readlocs;
     MemLocation writeloc;
 };

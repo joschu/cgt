@@ -3,111 +3,129 @@
 #include "stddef.h"
 #include "stdbool.h"
 #include "IRC.h"
+#include <cassert>
 
 // ================================================================
 // Basic structs and enums
 // ================================================================
- 
-typedef enum cgt_dtype {
-    cgt_i1 = 1,
-    cgt_i2 = 3,
-    cgt_i4 = 5,
-    cgt_i8 = 7,
-    cgt_f2 = 23,
-    cgt_f4 = 11,
-    cgt_f8 = 12,
-    cgt_f16 = 13,
-    cgt_c8 = 14,
-    cgt_c16 = 15,
-    cgt_c32 = 16,
-    cgt_O = 17
-} cgt_dtype;
+
+namespace cgt {
+
+typedef enum Dtype {
+  cgt_i1 = 1,
+  cgt_i2 = 3,
+  cgt_i4 = 5,
+  cgt_i8 = 7,
+  cgt_f2 = 23,
+  cgt_f4 = 11,
+  cgt_f8 = 12,
+  cgt_f16 = 13,
+  cgt_c8 = 14,
+  cgt_c16 = 15,
+  cgt_c32 = 16,
+  cgt_O = 17
+} Dtype;
 // print np.dtype('i1').num # etc
 
-typedef enum cgt_devtype {
-    cgt_cpu,
-    cgt_gpu
-} cgt_devtype;
+typedef enum Devtype {
+  DevCPU,
+  DevGPU
+} Devtype;
 
-typedef enum cgt_typetag {
-    cgt_undef,
-    cgt_arraytype,
-    cgt_tupletype
-} cgt_typetag;
-
-class cgt_object : public RefCountedBase<cgt_object> {
+class Object {
 public:
-    cgt_object() : kind(cgt_undef) {}
-    cgt_object(cgt_typetag kind) : kind(kind) {}
-    cgt_typetag kind;
+  enum ObjectKind {
+    Undef=0,
+    Array,
+    Tuple
+  };
+  Object() : ref_cnt(0), kind(Undef) { }
+  Object(ObjectKind kind) : ref_cnt(0), kind(kind) { }
+  void Retain() const { ++ref_cnt; }
+  void Release() const {
+    assert (ref_cnt > 0 && "Reference count is already zero.");
+    if (--ref_cnt == 0) delete static_cast<const Object *>(this);
+  }
+  ObjectKind kind;
+private:
+  mutable unsigned ref_cnt;
 };
 
-class cgt_array : public cgt_object {
+class Array : public Object {
 public:
-    cgt_array(int ndim, size_t* shape, cgt_dtype, cgt_devtype);
-    ~cgt_array();
-    int ndim;
-    cgt_dtype dtype;
-    cgt_devtype devtype;
-    size_t* shape;
-    void* data;
-    bool ownsdata;
+  Array(int ndim, size_t *shape, Dtype, Devtype);
+  ~Array();
+  int ndim;
+  Dtype dtype;
+  Devtype devtype;
+  size_t *shape;
+  void *data;
+  bool ownsdata;
 };
 
+static inline bool cgt_is_array(Object *o) { return o->kind == Object::Array; }
+static inline bool cgt_is_tuple(Object *o) { return o->kind == Object::Tuple; }
 
-#define IRC IntrusiveRefCntPtr
-
-static inline bool cgt_is_array(cgt_object* o) {return o->kind==cgt_arraytype;}
-static inline bool cgt_is_tuple(cgt_object* o) {return o->kind==cgt_tupletype;}
-
-class cgt_tuple : public cgt_object {
+class Tuple : public Object {
 public:
-    cgt_tuple(size_t len);
-    void setitem(int i, cgt_object* o) {
-        members[i] = o;
-    }
-    cgt_object* getitem(int i) {
-        return members[i].get();
-    }
-    ~cgt_tuple();
-    size_t len;
-    IRC<cgt_object>* members;
+  Tuple(size_t len);
+  void setitem(int i, Object *o) {
+    members[i] = o;
+  }
+  Object *getitem(int i) {
+    return members[i].get();
+  }
+  ~Tuple();
+  size_t len;
+  IRC<Object> *members;
 };
 
-static inline size_t cgt_size(const cgt_array* a) {
-    size_t out = 1;
-    for (size_t i=0; i < a->ndim; ++i) out *= a->shape[i];
-    return out;
+static inline size_t cgt_size(const Array *a) {
+  size_t out = 1;
+  for (size_t i = 0; i < a->ndim; ++i) out *= a->shape[i];
+  return out;
 }
 
-static inline void cgt_get_strides(const cgt_array* a, size_t* strides) {
-    if (a->ndim > 0) strides[a->ndim-1] = 1;
-    for (int i=a->ndim-2; i >= 0; --i) strides[i] = strides[i+1]*a->shape[i+1];
+static inline void cgt_get_strides(const Array *a, size_t *strides) {
+  if (a->ndim > 0) strides[a->ndim - 1] = 1;
+  for (int i = a->ndim - 2; i >= 0; --i) strides[i] = strides[i + 1] * a->shape[i + 1];
 }
 
-static inline int cgt_itemsize(cgt_dtype dtype) {
-    switch (dtype) {
-        case cgt_i1: return 1;
-        case cgt_i2: return 2;
-        case cgt_i4: return 4;
-        case cgt_i8: return 8;
-        case cgt_f2: return 2;
-        case cgt_f4: return 4;
-        case cgt_f8: return 8;
-        case cgt_f16: return 16;
-        case cgt_c8: return 8;
-        case cgt_c16: return 16;
-        case cgt_c32: return 32;
-        case cgt_O: return 8;
-    }
+static inline int cgt_itemsize(Dtype dtype) {
+  switch (dtype) {
+    case cgt_i1:
+      return 1;
+    case cgt_i2:
+      return 2;
+    case cgt_i4:
+      return 4;
+    case cgt_i8:
+      return 8;
+    case cgt_f2:
+      return 2;
+    case cgt_f4:
+      return 4;
+    case cgt_f8:
+      return 8;
+    case cgt_f16:
+      return 16;
+    case cgt_c8:
+      return 8;
+    case cgt_c16:
+      return 16;
+    case cgt_c32:
+      return 32;
+    case cgt_O:
+      return 8;
+  }
 }
 
-static inline size_t cgt_nbytes(const cgt_array* a) {
-    return cgt_size(a) * cgt_itemsize(a->dtype);
+static inline size_t cgt_nbytes(const Array *a) {
+  return cgt_size(a) * cgt_itemsize(a->dtype);
 }
 
-typedef void (*cgt_inplacefun)(void*, cgt_object**);
-typedef cgt_object* (*cgt_valretfun)(void*, cgt_object**);
+typedef void (*Inplacefun)(void *, Object **);
+typedef Object *(*Valretfun)(void *, Object **);
 
 // ================================================================
 // Error handling 
@@ -124,22 +142,20 @@ typedef cgt_object* (*cgt_valretfun)(void*, cgt_object**);
     } while (0)
 
 #define CGT_NORETURN __attribute__ ((noreturn))
-CGT_NORETURN void nn_err_abort (void);
 
 CGT_NORETURN void cgt_abort();
 
 typedef enum {
-    cgt_ok = 0,
-    cgt_err
-} cgt_status;
+  StatusOK = 0,
+  StatusErr
+} Status;
 
-extern cgt_status cgt_global_status;
-extern char cgt_global_errmsg[1000];
+extern Status gStatus;
+extern char gErrorMsg[1000];
 
 static inline void cgt_clear_error() {
-    cgt_global_status = cgt_ok;
+  gStatus = StatusOK;
 }
-
 
 // XXX how do we check that message doesn't overflow?
 #define cgt_check(x, msg, ...) \
@@ -150,11 +166,15 @@ static inline void cgt_clear_error() {
         }\
     } while(0)
 
+
 // ================================================================
-// Memory management 
+// Memory management
 // ================================================================
- 
-void* cgt_alloc(char devtype, size_t size);
-void cgt_free(char devtype, void* ptr);
-void cgt_memcpy(char dest_type, char src_type, void* dest_ptr, void* src_ptr, size_t nbytes);
+
+void *cgt_alloc(char devtype, size_t size);
+void cgt_free(char devtype, void *ptr);
+void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, size_t nbytes);
+
+}
+
 

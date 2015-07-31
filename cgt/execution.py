@@ -176,7 +176,7 @@ def get_impl(node, devtype):
         s = StringIO()        
         if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
         print "compiling %(libpath)s for node %(node)s"%locals()
-        ext = "cc" if devtype == "cpu" else "cu"
+        ext = "cpp" if devtype == "cpu" else "cu"
         srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
         # write c code to tmp file
         s = StringIO()

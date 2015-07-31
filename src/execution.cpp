@@ -4,7 +4,7 @@
 namespace cgt {
 
 template <typename T>
-T idx(cgt_array* x, size_t a) {
+T idx(Array * x, size_t a) {
     return ((T*)x->data)[a];
 }
 
@@ -19,17 +19,17 @@ public:
     {
     }
 
-    cgt_object* get(MemLocation m) {
+    Object * get(MemLocation m) {
         return storage[m.index].get();
     }
-    void set(MemLocation m, cgt_object* val) {
+    void set(MemLocation m, Object * val) {
         storage[m.index] = val;
     }
-    cgt_object* getarg(int argind) {
+    Object * getarg(int argind) {
         cgt_assert(argind < args->len);        
         return args->members[argind].get();
     }
-    cgt_tuple* run(cgt_tuple* newargs) {
+    Tuple * run(Tuple * newargs) {
         cgt_assert(newargs != NULL);
         cgt_assert(newargs->len == eg->n_args());
         args = newargs;
@@ -37,7 +37,7 @@ public:
             instr->fire(this);
         }
         args = NULL;
-        cgt_tuple* out = new cgt_tuple(eg->n_outputs());
+        Tuple * out = new Tuple(eg->n_outputs());
         for (int i=0; i < eg->n_outputs(); ++i) {
             int index = eg->get_output_locs()[i].index;
             out->setitem(i, get(eg->get_output_locs()[i]));
@@ -49,8 +49,8 @@ public:
     }
 private:
     ExecutionGraph* eg;
-    vector<IRC<cgt_object>> storage;
-    cgt_tuple* args;
+    vector<IRC<Object>> storage;
+    Tuple * args;
 };
 
 Interpreter* create_interpreter(ExecutionGraph* eg) {
@@ -65,16 +65,16 @@ void Alloc::fire(Interpreter* interp) {
     int ndim = readlocs.size();
     size_t shape[ndim];
     for (int i=0; i < readlocs.size(); ++i) {
-        cgt_array* sizeval = (cgt_array*)interp->get(readlocs[i]);
+        Array * sizeval = (Array *)interp->get(readlocs[i]);
         cgt_assert(sizeval->dtype == cgt_i8);
         shape[i] = idx<size_t>(sizeval, 0); 
     }
-    interp->set(writeloc, new cgt_array(ndim, shape, dtype, cgt_cpu));
+    interp->set(writeloc, new Array(ndim, shape, dtype, DevCPU));
 }
 
 void InPlace::fire(Interpreter* interp) {
     int n_inputs = readlocs.size();
-    cgt_object* args[n_inputs+1];
+    Object * args[n_inputs+1];
     for (int i=0; i < n_inputs; ++i) {
         args[i] = interp->get(readlocs[i]);
     }
@@ -85,7 +85,7 @@ void InPlace::fire(Interpreter* interp) {
 // TODO actually allocate tuple
 void ValReturning::fire(Interpreter* interp) {
     int n_inputs = readlocs.size();
-    vector<cgt_object*> args(n_inputs);
+    vector<Object *> args(n_inputs);
     for (int i = 0; i < n_inputs; ++i) {
         args[i] = interp->get(readlocs[i]);
     }    
