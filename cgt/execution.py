@@ -254,14 +254,6 @@ def assign_devices(outputs, devfn=None):
 
     return [replace[node] for node in outputs], newnode2dev
 
-def tuplify(xs):
-    if isinstance(xs, Node):
-        return xs
-    elif isinstance(xs, tuple):
-        return make_tuple(*map(tuplify, xs))
-    else:
-        raise ValueError("can't tuplify %s"%xs)
-
 def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
     config = load_config()
     backend = backend or config["backend"]
@@ -459,7 +451,7 @@ def make_execution_graph(inputs, outputs):
                 if needs_alloc:
                     write_loc = G.new_loc()
                     if isinstance(node.typ, Tensor):
-                        shape_locs = [node2mem[shpel].loc for shpel in node2shape[node]]
+                        shape_locs = [node2mem[shpel].loc for shpel in node2shape[node]] if node.ndim>0 else []
                         G.add_instr(Alloc(node.dtype, shape_locs, write_loc))
                     else:
                         shpnode = tupnode2shpnode[node]
@@ -520,7 +512,6 @@ class AllocTup(Instr):
         interp.set(self.write_loc, alloc_from_shp(shp, self.typ))
     def to_json(self):
         return {"type" : "AllocTup"} # XXX
-
 
 class InPlace(Instr):
     def __init__(self, node, read_locs, write_loc):

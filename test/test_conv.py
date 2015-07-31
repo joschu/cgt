@@ -3,7 +3,7 @@ import cgt,nn
 import unittest
 
 class ConvTestCase(unittest.TestCase):
-    def test_conv(self):
+    def runTest(self):
         np.random.seed(0)
         x = np.random.randn(2,2,5,17)
         f = np.random.randn(3,2,4,7)
@@ -25,4 +25,4 @@ class ConvTestCase(unittest.TestCase):
         np.testing.assert_allclose(out, out1)
 
 if __name__ == "__main__":
-    unittest.main()
+    ConvTestCase().runTest()

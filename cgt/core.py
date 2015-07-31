@@ -395,7 +395,9 @@ def _as_node(val_or_node):
         return val_or_node
     elif isinstance(val_or_node, (int, float, np.ndarray)):
         return constant(val_or_node)
-    elif isinstance(val_or_node, (list, tuple)): # XXX should we really turn list into tuple?
+    elif val_or_node==[]:
+        return constant(np.array([],dtype='i8'))
+    elif isinstance(val_or_node, (list,tuple)): # XXX should we really turn list into tuple?
         return make_tuple(*val_or_node)
     else:
         raise ValueError("expected numeric data or Node, got object of type %s"%type(val_or_node))
@@ -1901,7 +1903,7 @@ def getitem_nonfancy(arr, slis):
                 else:
                     raise NotImplementedError
                 start = sli.start or 0
-                stop = sli.stop or size(arr, ax)
+                stop = size(arr, ax) if sli.stop is None else sli.stop
                 step = sli.step or 1
                 if isinstance(stop, int) and stop < 0: stop = size(arr, ax) - stop
                 out = Result(GetSli(ax), [out, start, stop, step])
@@ -2221,10 +2223,10 @@ def batched_matmul(x, y):
     return Result(BatchedMul22(False,False), [x,y])
 
 def alloc_from_shp(shp, typ):
-    if all(isinstance(el, int) for el in shp):
-        return np.empty(shp,typ.dtype)
+    if isinstance(shp, tuple):
+        return tuple([alloc_from_shp(shpel,typel) for (shpel,typel) in utils.safezip(shp,typ)])
     else:
-        return tuple(alloc_from_shp(shpel,typel) for (shpel,typel) in utils.safezip(shp,typ))
+        return np.empty(shp,typ.dtype)
 
 def alloc_output(node, vals):
     typ = node.get_type()
@@ -2238,7 +2240,7 @@ def get_numeric_shape_fun(node):
 
     singletuple = not isinstance(outputs, list)
     if singletuple: # XXX
-        outputs = [make_tuple(*outputs)]
+        outputs = [tuplify(outputs)]
     nodes = topsorted(outputs)
     def fn(vals):
         node2val = {node:val for (node,val) in utils.safezip(args, vals)}
@@ -2256,6 +2258,15 @@ def py_numeric_apply(node, vals):
         node.op.py_apply_inplace(vals, out)
     return out
 
+def tuplify(xs):
+    if isinstance(xs, Node):
+        return xs
+    elif isinstance(xs, tuple):
+        return make_tuple(*map(tuplify, xs))
+    elif xs == []:
+        return constant(np.array([],'i8')) # XXX this is weird
+    else:
+        raise ValueError("can't tuplify %s"%xs)
 
 if sys.argv[0] != "gen_py.py":
     from api_autogen import * #pylint: disable=F0401
