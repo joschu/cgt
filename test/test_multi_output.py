@@ -15,7 +15,8 @@ class SinCos(cgt.Op):
 #         """
     call_type = "valret"
     def typ_apply(self, inputs):
-        return cgt.Tuple(cgt.Tensor(cgt.floatX, 0), cgt.Tensor(cgt.floatX, 0))
+        d = inputs[0].ndim
+        return cgt.Tuple(cgt.Tensor(cgt.floatX, d), cgt.Tensor(cgt.floatX, d))
     def py_apply_valret(self, reads):
         x = reads[0]
         return (np.sin(x), np.cos(x))
@@ -37,7 +38,8 @@ class SinCos2(cgt.Op):
 #         """
     call_type = "inplace"
     def typ_apply(self, inputs):
-        return cgt.Tuple(cgt.Tensor(cgt.floatX, 0), cgt.Tensor(cgt.floatX, 0))
+        ndim = inputs[0].ndim
+        return cgt.Tuple(cgt.Tensor(cgt.floatX, ndim), cgt.Tensor(cgt.floatX, ndim))
     def py_apply_inplace(self, reads, write):
         x = reads[0]
         write[0][...] = np.sin(x)
@@ -49,14 +51,15 @@ class SinCos2(cgt.Op):
 
 class MultiOutputTestCase(unittest.TestCase):
     def runTest(self):
-        x = cgt.scalar('x')
-        for cls in (SinCos, SinCos2):
-            y,z = cgt.unpack(cgt.Result(cls(), [x]))
-            xnum = 1.0
-            yznum = cgt.numeric_eval([y,z], {x:xnum})
-            np.testing.assert_allclose(yznum, (np.sin(1),np.cos(1)))
-            f = cgt.make_function([x],[y,z])
-            np.testing.assert_allclose(f(xnum), yznum)
+        for x in (cgt.scalar('x'), cgt.vector('x'), cgt.matrix('x')):
+            for cls in (SinCos, SinCos2):
+                y,z = cgt.unpack(cgt.Result(cls(), [x]))
+                xnum = np.ones((3,)*x.ndim, cgt.floatX)
+                correct = (np.sin(xnum),np.cos(xnum))
+                yznum = cgt.numeric_eval([y,z], {x:xnum})
+                np.testing.assert_allclose(yznum, correct)
+                f = cgt.make_function([x],[y,z])
+                np.testing.assert_allclose(f(xnum), correct)
 
 
 if __name__ == "__main__":

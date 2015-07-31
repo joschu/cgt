@@ -409,7 +409,7 @@ def make_execution_graph(inputs, outputs):
     analysis = analyze(outputs)
     node2shape = analysis["node2shape"]
 
-    tupnode2shpnode = {}
+    tupnode2shpnodes = {}
     # XXX won't work if we have nested tuples. or will it?
 
     augoutputs = []
@@ -418,9 +418,9 @@ def make_execution_graph(inputs, outputs):
         if isinstance(shp, list):
             augoutputs.extend(shp)
         else:
-            newnode = make_tuple(*shp)
-            tupnode2shpnode[node] = newnode
-            augoutputs.append(newnode)
+            assert all(isinstance(el, list) for el in shp), "Nodes should all be either arrays or tuples of arrays. Deeper nesting is not currently supported"
+            tupnode2shpnodes[node] = shp
+            for subshp in shp: augoutputs.extend(subshp)
     augoutputs.extend(outputs)
 
     nodes2 = topsorted(augoutputs)
@@ -454,8 +454,15 @@ def make_execution_graph(inputs, outputs):
                         shape_locs = [node2mem[shpel].loc for shpel in node2shape[node]] if node.ndim>0 else []
                         G.add_instr(Alloc(node.dtype, shape_locs, write_loc))
                     else:
-                        shpnode = tupnode2shpnode[node]
-                        G.add_instr(AllocTup(node.get_type(), node2mem[shpnode].loc, write_loc))
+                        shps = tupnode2shpnodes[node]
+                        assert isinstance(node.get_type(), Tuple)
+                        arr_locs = []
+                        for (shp,typel) in utils.safezip(shps, node.get_type()):
+                            arr_loc = G.new_loc()
+                            shape_locs = [node2mem[shpel].loc for shpel in shp]
+                            G.add_instr(Alloc(typel.dtype, shape_locs, arr_loc))
+                            arr_locs.append(arr_loc)
+                        G.add_instr(AllocTup(node.get_type(), arr_locs, write_loc))
                 G.add_instr(InPlace(node, read_locs, write_loc))
             else:                
                 write_loc = G.new_loc()
@@ -503,13 +510,12 @@ class Alloc(Instr):
 
 
 class AllocTup(Instr):
-    def __init__(self, typ, read_loc, write_loc):
+    def __init__(self, typ, read_locs, write_loc):
         self.typ = typ
-        self.read_loc = read_loc
+        self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
-        shp = interp.get(self.read_loc)
-        interp.set(self.write_loc, alloc_from_shp(shp, self.typ))
+        interp.set(self.write_loc, tuple(interp.get(loc) for loc in self.read_locs))
     def to_json(self):
         return {"type" : "AllocTup"} # XXX
 

@@ -397,7 +397,7 @@ def _as_node(val_or_node):
         return constant(val_or_node)
     elif val_or_node==[]:
         return constant(np.array([],dtype='i8'))
-    elif isinstance(val_or_node, (list,tuple)): # XXX should we really turn list into tuple?
+    elif isinstance(val_or_node, tuple):
         return make_tuple(*val_or_node)
     else:
         raise ValueError("expected numeric data or Node, got object of type %s"%type(val_or_node))
@@ -2233,21 +2233,50 @@ def alloc_output(node, vals):
     shp = get_numeric_shape_fun(node)(vals)
     return alloc_from_shp(shp,typ)
 
+def _flatten_lists(lis):
+    out = []
+    sizes = []
+    for li in lis:
+        out.extend(li)
+        sizes.append(len(li))
+    return out,sizes
+def _unflatten_list(li,sizes):
+    start = 0
+    out = []
+    for sz in sizes:
+        out.append(li[start:start+sz])
+        start += sz
+    return out
+
+
 def get_numeric_shape_fun(node):
     args = [make_argument(p.get_type()) for p in node.parents]
     # outputs = simplify(node.op.shp_apply(args))
-    outputs = node.op.shp_apply(args)
+    syshape = node.op.shp_apply(args)
 
-    singletuple = not isinstance(outputs, list)
+    if isinstance(syshape, list):
+        istuple = False
+    elif isinstance(syshape, tuple):
+        assert all(isinstance(elem,list) for elem in syshape)
+        istuple = True
+        syshape,sizes = _flatten_lists(syshape)
+    else:
+        raise ValueError("shape should be a list or tuple of lists. got %s"%syshape)
+
+    singletuple = not isinstance(syshape, list)
     if singletuple: # XXX
-        outputs = [tuplify(outputs)]
-    nodes = topsorted(outputs)
+        syshape = [make_tuple(*syshape)]
+    nodes = topsorted(syshape)
     def fn(vals):
         node2val = {node:val for (node,val) in utils.safezip(args, vals)}
         for node in nodes:
             if not node.is_argument():
                 node2val[node] = py_numeric_apply(node, [node2val[p] for p in node.parents])
-        return node2val[outputs[0]] if singletuple else [node2val[node] for node in outputs]
+        nushape = [node2val[node] for node in syshape]
+        if istuple:
+            return tuple(_unflatten_list(nushape, sizes))
+        else:
+            return nushape 
     return fn
 
 def py_numeric_apply(node, vals):
