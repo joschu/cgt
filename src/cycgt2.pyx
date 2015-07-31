@@ -33,8 +33,8 @@ cdef extern from "cgt_common.h":
     cppclass IRC[T]:
         pass
 
-    ctypedef void (*cgt_inplacefun)(void*, cgt_object**);
-    ctypedef cgt_object* (*cgt_valretfun)(void*, cgt_object**);
+    ctypedef void (*cgt_inplacefun)(void*, cgt_object**)
+    ctypedef cgt_object* (*cgt_valretfun)(void*, cgt_object**)
 
     enum cgt_devtype:
         cgt_cpu
