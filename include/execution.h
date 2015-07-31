@@ -7,24 +7,24 @@ using std::vector;
 
 // note: no-args initializers are only here because they're required by cython
 
-class InPlaceFun {
+class InPlaceFunCl {
 public:
     Inplacefun fptr;
     void* data;
-    InPlaceFun(Inplacefun fptr, void* data) : fptr(fptr), data(data) {}
-    InPlaceFun() : fptr(NULL), data(NULL) {}
-    void operator()(Object ** args) {
-        (*fptr)(data, args);
+    InPlaceFunCl(Inplacefun fptr, void* data) : fptr(fptr), data(data) {}
+    InPlaceFunCl() : fptr(NULL), data(NULL) {}
+    void operator()(Object** reads, Object* write) {
+        (*fptr)(data, reads, write);
     }
 };
 
-struct ValRetFun {
+struct ValRetFunCl {
 public:
     Valretfun fptr;
     void* data;
-    ValRetFun(Valretfun fptr, void* data) : fptr(fptr), data(data) {printf("value %zui\n", ((size_t*)data)[0]);}
-    ValRetFun() : fptr(NULL), data(NULL) {}
-    Object * operator()(Object ** args) {
+    ValRetFunCl(Valretfun fptr, void* data) : fptr(fptr), data(data) {}
+    ValRetFunCl() : fptr(NULL), data(NULL) {}
+    Object * operator()(Object** args) {
         return (*fptr)(data, args);
     }
 };
@@ -72,6 +72,7 @@ public:
     virtual Object * get(MemLocation)=0;
     virtual void set(MemLocation, Object *)=0;
     virtual Object * getarg(int)=0;
+    virtual ~Interpreter() {}
 };
 
 Interpreter* create_interpreter(ExecutionGraph*);
@@ -98,26 +99,36 @@ private:
     MemLocation writeloc;
 };
 
+class BuildTup : public Instruction {
+public:
+    BuildTup(vector<MemLocation> readlocs, MemLocation writeloc)
+    : readlocs(readlocs), writeloc(writeloc) {}
+    void fire(Interpreter*);
+private:
+    vector<MemLocation> readlocs;
+    MemLocation writeloc;
+};
+
 class InPlace : public Instruction  {
 public:
-    InPlace(vector<MemLocation> readlocs, MemLocation writeloc, InPlaceFun closure)
+    InPlace(vector<MemLocation> readlocs, MemLocation writeloc, InPlaceFunCl closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    InPlaceFun closure;
+    InPlaceFunCl closure;
 };
 
 class ValReturning : public Instruction  {
 public:
-    ValReturning(vector<MemLocation> readlocs, MemLocation writeloc, ValRetFun closure)
+    ValReturning(vector<MemLocation> readlocs, MemLocation writeloc, ValRetFunCl closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    ValRetFun closure;
+    ValRetFunCl closure;
 };
 
 

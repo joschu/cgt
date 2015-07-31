@@ -649,7 +649,7 @@ def grad(cost, wrt):
 # ----------------------------------------------------------------
 
 class Constant(Op):
-    call_type = "valret"
+    call_type = "inplace"
     def __init__(self, value):
         if isinstance(value, tuple):
             self.value = value # XXX need to make valid recursively?
@@ -662,6 +662,12 @@ class Constant(Op):
         return "const{%s}"%str(self.value)
     def py_apply_valret(self, reads):
         return self.value
+    def py_apply_inplace(self, reads, write):
+        if isinstance(write, tuple):
+            for (arrfrom,arrto) in utils.safezip(self.value,write):
+                np.copyto(arrto, arrfrom)
+        else:
+            np.copyto(write,self.value)
     def pullback(self, _inps, _out, _gout):
         return []
     def shp_apply(self, _inputs):
@@ -675,15 +681,31 @@ class Constant(Op):
     def get_hash(self):
         return str(id(self))
     def get_closure(self, _):
-        raise NotImplementedError # TODO
+        shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
+        shit.append(self.value)
+        return [
+        ("ndim", ctypes.c_int,self.value.ndim),
+        ("shape",ctypes.c_void_p,shapeptr),
+        ("dtype",ctypes.c_byte,self.value.dtype.num),
+        ("data",ctypes.c_void_p,self.value.ctypes.data)]
     def c_code(self, inputs):
-        return """
-typedef struct constcl {void* ptr} constcl; 
-void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    io[0]->data = ((constcl*)cldata)->ptr;
-    io[0]->ownsdata = false;
+        if isinstance(self.value, tuple):
+            raise MethodNotDefined
+        return r"""
+using namespace cgt;
+extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgt::Array** reads, cgt::Array* write) {
+    cgt_memcpy(DevCPU, DevCPU, write->data, cldata->data, cgt_nbytes(write));
 }
 """
+shit = [] # XXX just so this stuff doesn't get dereferenced.
+# this is a memory leak, will fix later
+
+    # XXX why doesn't it work with valret ?!?!?!
+    # for (int i=0; i < cldata->ndim; ++i) printf("%i %i\n", i, ((size_t*)cldata->shape)[i]);
+    # cgt::Array* out = new cgt::Array(cldata->ndim, (size_t*)cldata->shape, 
+    #     (cgt::Dtype)cldata->dtype, cgt::DevCPU, cldata->data, true);
+    # return out;
+
 
 class Fill(Op):
     """
@@ -707,7 +729,6 @@ class Fill(Op):
     def typ_apply(self, inputs):
         assert all(x.get_dtype() == 'i8' for x in inputs)
         return Tensor(self.dtype, len(inputs))
-
 
 def _is_int(node):
     return _dtype_kind(node.dtype)=='i'
@@ -857,12 +878,13 @@ class ElwiseUnary(Op):
         info = self.info
         return r"""
 static inline %(cdtype)s scalar_CGT_FUNCNAME(%(cdtype)s x) {return %(cexpr)s;}
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    int s = cgt_size(io[0]);
-    %(cdtype)s* in = (%(cdtype)s*)io[0]->data;
-    %(cdtype)s* out = (%(cdtype)s*)io[1]->data;
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    cgt::Array* read = reads[0];
+    int s = cgt_size(read);
+    %(cdtype)s* readdata = (%(cdtype)s*)read->data;
+    %(cdtype)s* writedata = (%(cdtype)s*)write->data;
     for (int i=0; i < s; ++i) {
-        out[i] = scalar_CGT_FUNCNAME(in[i]);
+        writedata[i] = scalar_CGT_FUNCNAME(readdata[i]);
     }
 }
 """%dict(cdtype=np2c[inputs[0].dtype],cexpr=info.cexpr)
@@ -876,11 +898,12 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype)s* in, %(cdty
     out[i] = CGT_FUNCNAME(in[i]);
   }
 }
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    size_t n = cgt_size(io[0]);
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    cgt::Array* read = reads[0];
+    size_t n = cgt_size(read);
     int num_blocks, num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
-    CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype)s*)io[0]->data, (%(cdtype)s*)io[1]->data);
+    CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype)s*)read->data, (%(cdtype)s*)write->data);
 }
 """%dict(cdtype=np2c[npdtype],cexpr=info.cexpr)
     def cuda_includes(self):
@@ -949,12 +972,12 @@ class ElwiseBinary(Op):
         index1 = "0" if self.scalar_mask[1] else "i"
         return r"""
 static inline %(cdtype2)s scalar_CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    int s = cgt_size(io[%(ind4shape)s]);
-    %(cdtype0)s* in0 = (%(cdtype0)s*)io[0]->data;
-    %(cdtype1)s* in1 = (%(cdtype1)s*)io[1]->data;
-    %(cdtype2)s* out = (%(cdtype2)s*)io[2]->data;
-    cgt_check(cgt_size(io[2]) == s, "Shape error in elementwise binary operation. You might be missing a call to cgt.broadcast(...)");
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    int s = cgt_size(reads[%(ind4shape)s]);
+    %(cdtype0)s* in0 = (%(cdtype0)s*)reads[0]->data;
+    %(cdtype1)s* in1 = (%(cdtype1)s*)reads[1]->data;
+    %(cdtype2)s* out = (%(cdtype2)s*)write->data;
+    cgt_check(cgt_size(write) == s, "Shape error in elementwise binary operation. You might be missing a call to cgt.broadcast(...)");
     for (int i=0; i < s; ++i) {
         out[i] = scalar_CGT_FUNCNAME(in0[%(index0)s], in1[%(index1)s]);
     }
@@ -975,12 +998,12 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype0)s* x, %(cdty
     z[i] = CGT_FUNCNAME(x[%(index0)s], y[%(index1)s]);
   }
 }
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    size_t n = cgt_size(io[1]);
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    size_t n = cgt_size(reads[1]);
     int num_blocks,num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
     TODO
-    CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)io[0]->data, (%(cdtype1)s*)io[1]->data, (%(cdtype2)s*)io[2]->data);
+    CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data, (%(cdtype1)s*)reads[1]->data, (%(cdtype2)s*)write->data);
 }
 """%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],cexpr=self.info.cexpr,funcname=funcname, index="0" if self.kind==ElwiseBinary.ST else "i")  
     def cuda_includes(self):
@@ -1019,17 +1042,16 @@ class Size(Op):
         return [("ax",ctypes.c_int,self.axis)]
     def c_code(self, _):
         return r"""
-extern "C" cgt::Array* CGT_FUNCNAME(void* cl0, cgt::Array** io) {
+extern "C" cgt::Array* CGT_FUNCNAME(void* cl0, cgt::Array** reads) {
 CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
-    cgt::Array* in = io[0];
-    cgt::Array* out = new cgt::Array(0, NULL, cgt_i8, cgt_cpu);
+    using namespace cgt;
+    cgt::Array* in = reads[0];
+    cgt::Array* out = new cgt::Array(0, NULL, cgt_i8, cgt::DevCPU);
     ((long*)out->data)[0] = in->shape[cl->ax];
     return out;
 }"""
-# XXX use safer indexing method
 
 class Reshape(Op):
-    # XXX restore after we're sure the right thing happens with python impls
     gpu_uses_c = True
     call_type = "valret"
     def get_diff(self, num_inputs):
@@ -1043,9 +1065,18 @@ class Reshape(Op):
     def typ_apply(self, inputs):
         return Tensor(inputs[0].get_dtype(), len(inputs)-1)
     def get_closure(self, parents):
-        return [(ctypes.c_int,len(parents))]
+        return [("ndim", ctypes.c_int,len(parents)-1)]
     def c_code(self, _inputs):
-        return "void CGT_FUNCNAME(void* cldata, cgt::Array** io) {io[*((int*)cldata)]->data = io[0]->data; io[0]->ownsdata=false;}"
+        return r"""
+extern "C" cgt::Array* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgt::Array** reads) {
+    cgt::Array* in = reads[0];
+    size_t* newshape = new size_t[cldata->ndim];    
+    for (int i=0; i < cldata->ndim; ++i) newshape[i] = static_cast<size_t*>(reads[i+1]->data)[0];
+    cgt::Array* out = new cgt::Array(cldata->ndim, newshape, in->dtype, in->devtype, in->data, false);
+    return out;
+}
+"""
+
 
 class Concatenate(Op):
     def __init__(self, axis):
@@ -1131,14 +1162,14 @@ class Transpose(Op):
         return inputs[0].get_type()
     def c_code(self, inputs):
         return r"""
-        void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-            cgt::Array *in = io[0], *out = io[1];
-            %(cdtype)s* indata = in->data, *outdata = out->data;
-            for (int i=0; i < in->shape[0]; ++i) {
-                for (int j=0; j < in->shape[1]; ++j) {
-                    outdata[j*in->shape[0] + i] = indata[i*in->shape[1] + j];
-                }
-            }
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    cgt::Array *read = reads[0];
+    %(cdtype)s* indata = (%(cdtype)s*)read->data, *outdata = (%(cdtype)s*)write->data;
+    for (int i=0; i < read->shape[0]; ++i) {
+        for (int j=0; j < read->shape[1]; ++j) {
+            outdata[j*read->shape[0] + i] = indata[i*read->shape[1] + j];
+        }
+    }
         }"""%dict(cdtype=np2c[inputs[0].dtype])
 
 class Transport(Op):
@@ -1157,8 +1188,8 @@ class Transport(Op):
         return shape(inputs[0])
     def c_code(self, _inputs):
         return """
-void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    cgt_memcpy(io[1]->devtype, io[0]->devtype, io[1]->data, io[0]->data, cgt_nbytes(io[0]));    
+void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    cgt_memcpy(write->devtype, reads[0]->devtype, write->data, reads[0]->data, cgt_nbytes(reads[0]));    
 }
 """
 
@@ -1229,22 +1260,22 @@ class Sum(Op):
         return inputs[0].get_type()
     def c_code(self, inputs):
         x = inputs[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < in->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         outdims = [i for i in xrange(x.ndim) if i not in self.axes]
         inidxexpr = " + ".join(["i%(ax)s * instrides[%(ax)s]"%dict(ax=ax) for ax in xrange(x.ndim)])
         outidxexpr = " + ".join(["i%(ax)s * outstrides[%(ax)s]"%dict(ax=ax) for ax in outdims])\
             if len(outdims)>0 else "0"
         return r"""
-void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    cgt::Array *in=io[0], *out=io[1];
-    size_t instrides[in->ndim];
-    cgt_get_strides(in, instrides);
-    size_t outstrides[out->ndim];
-    cgt_get_strides(out, outstrides);
-    memset(out->data, 0, cgt_nbytes(out));
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    cgt::Array *read=reads[0];
+    size_t instrides[read->ndim];
+    cgt_get_strides(read, instrides);
+    size_t outstrides[write->ndim];
+    cgt_get_strides(write, outstrides);
+    memset(write->data, 0, cgt_nbytes(write));
     %(openloops)s
-        ((%(cdtype)s*)out->data)[%(outidxexpr)s] += ((%(cdtype)s*)in->data)[%(inidxexpr)s];
+        ((%(cdtype)s*)write->data)[%(outidxexpr)s] += ((%(cdtype)s*)read->data)[%(inidxexpr)s];
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
@@ -1327,23 +1358,24 @@ class GetSli(Op):
         assert inputs[1].dtype == inputs[2].dtype == inputs[3].dtype == 'i8'
         return inputs[0].get_type()
     def c_code(self, inputs):
+        raise MethodNotDefined        
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < out->shape[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*instrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join(["i%i"%ax + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
         return r"""
-void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    cgt::Array *in=io[0], *out=io[4];
-    long start = ((long*)io[1]->data)[0];
-    //long stop = ((long*)io[2]->data)[0];
-    long step = ((long*)io[3]->data)[0];
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    cgt::Array *in=read[0];
+    long start = ((long*)read[1]->data)[0];
+    //long stop = ((long*)read[2]->data)[0];
+    long step = ((long*)read[3]->data)[0];
     size_t instrides[in->ndim];
     cgt_get_strides(in, instrides);
-    size_t outstrides[out->ndim];
-    cgt_get_strides(out, outstrides);
+    size_t outstrides[write->ndim];
+    cgt_get_strides(write, outstrides);
     %(openloops)s
-        ((%(cdtype)s*)out->data)[%(outidxexpr)s] = ((%(cdtype)s*)in->data)[%(inidxexpr)s];
+        ((%(cdtype)s*)write->data)[%(outidxexpr)s] = ((%(cdtype)s*)in->data)[%(inidxexpr)s];
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
@@ -1371,6 +1403,7 @@ class IncSli(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def c_code(self, inputs):
+        raise MethodNotDefined
         x = inputs[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
@@ -1378,17 +1411,17 @@ class IncSli(Op):
         incidxexpr =  " + ".join(["i%i"%ax + "*incstrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
         return r"""
-void CGT_FUNCNAME(void* cldata, cgt::Array** io) {
-    cgt::Array *in=io[0], *inc = io[4], *out=io[5];
-    long start = ((long*)io[1]->data)[0];
-    //long stop = ((long*)io[2]->data)[0];
-    long step = ((long*)io[3]->data)[0];
+extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+    cgt::Array *in=reads[0], *inc = reads[4], *out=write;
+    long start = ((long*)reads[1]->data)[0];
+    //long stop = ((long*)reads[2]->data)[0];
+    long step = ((long*)reads[3]->data)[0];
     cgt_assert(cgt_size(in)==cgt_size(out));
     size_t outstrides[in->ndim];
     cgt_get_strides(out, outstrides);
     size_t incstrides[inc->ndim];
     cgt_get_strides(inc, incstrides);
-    if (out->data != in->data) cgt_memcpy(cgt_cpu, cgt_cpu, out, in, cgt_nbytes(out));
+    if (out->data != in->data) cgt_memcpy(cgt::DevCPU, cgt::DevCPU, out, in, cgt_nbytes(out));
     %(openloops)s
         ((%(cdtype)s*)out->data)[%(outidxexpr)s] += ((%(cdtype)s*)inc->data)[%(incidxexpr)s];
     %(closeloops)s
@@ -1424,6 +1457,7 @@ class IncFlatIndices(Op):
         _x, inds, _y = inputs 
         gx = goutput
         gy = Result(GetFlatIndices(), [goutput, inds])
+        raise NotSureThisIsRightException
         return [gx, None, gy]
     def shp_apply(self, inputs):
         return shape(inputs[0])
@@ -1474,7 +1508,7 @@ class Mul22(Op):
         assert inputs[0].get_dtype()==floatX and inputs[1].get_dtype()==floatX
         return inputs[0].get_type()
     def get_closure(self, inputs):
-        return [(ctypes.c_bool, self.tA), (ctypes.c_bool, self.tB)]
+        return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB)]
     def c_name(self, npdtype):
         return "mul22_%s"%(npdtype)
     # best gemm docs: https://software.intel.com/en-us/node/520775
@@ -1485,18 +1519,14 @@ class Mul22(Op):
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         return """
-typedef struct gemm_closure {
-    bool tA, tB;
-} gemm_closure;        
-void CGT_FUNCNAME(void* cldata, cgt::Array** ABC) {
-    gemm_closure* cl = (gemm_closure*)cldata;
-    cgt::Array *A=ABC[0], *B=ABC[1], *C=ABC[2];
+extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgt::Array** AB, cgt::Array* C) {
+    cgt::Array *A=AB[0], *B=AB[1];
     int lda = A->shape[1], ldb = B->shape[1], ldc = C->shape[1];
     int M = C->shape[0];
     int N = C->shape[1];  
     int K = A->shape[cl->tA ? 0 : 1];
     const %(cdtype)s alpha=1, beta=0;
-  cblas_%(letter)sgemm(CblasRowMajor, cl->tA + 111, cl->tB + 111, M, N, K, alpha, (%(cdtype)s*)A->data, lda, (%(cdtype)s*)B->data,
+  cblas_%(letter)sgemm(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), (CBLAS_TRANSPOSE)(cl->tB + 111), M, N, K, alpha, (%(cdtype)s*)A->data, lda, (%(cdtype)s*)B->data,
       ldb, beta, (%(cdtype)s*)C->data, ldc);
 }
 """%dict(letter=letter, cdtype = np2c[npdtype])

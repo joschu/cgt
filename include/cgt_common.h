@@ -54,6 +54,7 @@ private:
 class Array : public Object {
 public:
   Array(int ndim, size_t *shape, Dtype, Devtype);
+  Array(int ndim, size_t *shape, Dtype, Devtype, void* fromdata, bool copy);
   ~Array();
   int ndim;
   Dtype dtype;
@@ -75,6 +76,7 @@ public:
   Object *getitem(int i) {
     return members[i].get();
   }
+  size_t size() {return len;}
   ~Tuple();
   size_t len;
   IRC<Object> *members;
@@ -124,8 +126,8 @@ static inline size_t cgt_nbytes(const Array *a) {
   return cgt_size(a) * cgt_itemsize(a->dtype);
 }
 
-typedef void (*Inplacefun)(void *, Object **);
-typedef Object *(*Valretfun)(void *, Object **);
+typedef void (*Inplacefun)(void * /* closure data */, Object ** /* read */, Object* /* write */);
+typedef Object *(*Valretfun)(void * /* closure data */, Object ** /* read */);
 
 // ================================================================
 // Error handling 
@@ -137,7 +139,7 @@ typedef Object *(*Valretfun)(void *, Object **);
             fprintf (stderr, "Assertion failed: %s (%s:%d)\n", #x, \
                 __FILE__, __LINE__);\
             fflush (stderr);\
-            cgt_abort();\
+            cgt::cgt_abort();\
         }\
     } while (0)
 
@@ -161,8 +163,8 @@ static inline void cgt_clear_error() {
 #define cgt_check(x, msg, ...) \
     do {\
         if ((!(x))) {\
-            sprintf(cgt_global_errmsg, msg, ##__VA_ARGS__);\
-            cgt_global_status = cgt_err;\
+            sprintf(cgt::gErrorMsg, msg, ##__VA_ARGS__);\
+            cgt::gStatus = cgt::StatusErr;\
         }\
     } while(0)
 

@@ -1,4 +1,5 @@
 from libcpp.vector cimport vector
+from cpython.ref cimport PyObject
 cimport numpy as cnp
 import numpy as np
 import ctypes
@@ -14,6 +15,8 @@ cnp.import_array()
 ### CGT common datatypes 
 ################################################################
  
+
+
 cdef extern from "cgt_common.h" namespace "cgt":
 
     cdef enum Dtype:
@@ -36,7 +39,7 @@ cdef extern from "cgt_common.h" namespace "cgt":
     cppclass Object:
         pass
 
-    ctypedef void (*Inplacefun)(void*, Object**);
+    ctypedef void (*Inplacefun)(void*, Object**, Object*);
     ctypedef Object* (*Valretfun)(void*, Object**);
 
     enum Devtype:
@@ -57,7 +60,8 @@ cdef extern from "cgt_common.h" namespace "cgt":
         Tuple(size_t)
         void setitem(int, Object*)
         Object* getitem(int)
-        int len
+        size_t size();
+        size_t len
         Object** members        
 
     size_t cgt_size(const Array* a)
@@ -90,25 +94,32 @@ cdef object cgt2py_array(Array* a):
 
 cdef object cgt2py_tuple(Tuple* t):
     cdef int i
-    out = cpython.PyTuple_New(t.len)
-    for i in xrange(t.len):
-        cpython.PyTuple_SetItem(out, i, cgt2py_object(t.getitem(i)))
+    return tuple(cgt2py_object(t.getitem(i)) for i in xrange(t.len))
+    # why doesn't the following work:
+    # out = cpython.PyTuple_New(t.len)
+    # for i in xrange(t.len):
+    #     cpython.PyTuple_SetItem(out, i, cgt2py_object(t.getitem(i)))
+    # return out
+
+cdef cnp.ndarray _to_valid_array(object arr):
+    cdef cnp.ndarray out = np.asarray(arr, order='C')
+    if not out.flags.c_contiguous: 
+        out = out.copy()
     return out
 
-cdef Object* py2cgt_object(object o):
-    if isinstance(o, np.ndarray):
-        return py2Array(o)
-    elif isinstance(o, tuple):
-        return py2Tuple(o)
+cdef Object* py2cgt_object(object o) except *:
+    if isinstance(o, tuple):
+        return py2cgt_tuple(o)
     else:
-        raise RuntimeError("only can convert ndarray and tuple to cgt datatype")
+        o = _to_valid_array(o)
+        return py2cgt_Array(o)
 
-cdef Array* py2Array(cnp.ndarray arr):
+cdef Array* py2cgt_Array(cnp.ndarray arr):
     cdef Array* out = new Array(arr.ndim, <size_t*>arr.shape, dtype_fromstr(arr.dtype), DevCPU)
     cgt_memcpy(out.devtype, DevCPU, out.data, cnp.PyArray_DATA(arr), cgt_nbytes(out))
     return out
 
-cdef Tuple* py2Tuple(object o):
+cdef Tuple* py2cgt_tuple(object o):
     cdef Tuple* out = new Tuple(len(o))
     cdef int i
     for i in xrange(len(o)):
@@ -213,10 +224,8 @@ cdef void* get_or_load_lib(libname) except *:
     cdef void* handle
     initialize_lib_dirs()
     if libname in LIB_HANDLES:
-        # print "already loaded",libname
         return <void*><size_t>LIB_HANDLES[libname]
     else:
-        # print "loading",libname
         for ld in LIB_DIRS:
             libpath = osp.join(ld,libname)
             if osp.exists(libpath):
@@ -235,12 +244,12 @@ cdef void* get_or_load_lib(libname) except *:
 ################################################################
  
 cdef extern from "execution.h" namespace "cgt":
-    cppclass InPlaceFun:
-        InPlaceFun(Inplacefun, void*)
-        InPlaceFun()
-    cppclass ValRetFun:
-        ValRetFun(Valretfun, void*)
-        ValRetFun()
+    cppclass InPlaceFunCl:
+        InPlaceFunCl(Inplacefun, void*)
+        InPlaceFunCl()
+    cppclass ValRetFunCl:
+        ValRetFunCl(Valretfun, void*)
+        ValRetFunCl()
     cppclass MemLocation:
         MemLocation(size_t)
         MemLocation()
@@ -254,10 +263,12 @@ cdef extern from "execution.h" namespace "cgt":
         LoadArgument(int, MemLocation)
     cppclass Alloc(Instruction):
         Alloc(Dtype, vector[MemLocation], MemLocation)
+    cppclass BuildTup(Instruction):
+        BuildTup(vector[MemLocation], MemLocation)
     cppclass InPlace(Instruction):
-        InPlace(vector[MemLocation], MemLocation, InPlaceFun)
+        InPlace(vector[MemLocation], MemLocation, InPlaceFunCl)
     cppclass ValReturning(Instruction):
-        ValReturning(vector[MemLocation], MemLocation, ValRetFun)
+        ValReturning(vector[MemLocation], MemLocation, ValRetFunCl)
 
     cppclass Interpreter:
         Tuple* run(Tuple*)
@@ -288,7 +299,33 @@ cdef void* _ctypesstructptr(object o) except *:
     if o is None: return NULL
     else: return <void*><size_t>ctypes.cast(ctypes.pointer(o), ctypes.c_voidp).value    
 
-asdf = []
+cdef void _pyfunc_inplace(void* cldata, Object** reads, Object* write):
+    (pyfun, nin, nout) = <object>cldata
+    pyread = [cgt2py_object(reads[i]) for i in xrange(nin)]
+    pywrite = cgt2py_object(write)
+    pyfun(pyread, pywrite)
+    cdef Tuple* tup
+    cdef Array* a
+    if cgt_is_array(write):
+        npout = <cnp.ndarray>pywrite
+        cgt_memcpy(DevCPU, DevCPU, (<Array*>write).data, npout.data, cgt_nbytes(<Array*>write))
+    else:
+        tup = <Tuple*> write
+        for i in xrange(tup.size()):
+            npout = <cnp.ndarray>pywrite[i]
+            a = <Array*>tup.getitem(i)
+            assert cgt_is_array(a)
+            cgt_memcpy(DevCPU, DevCPU, a.data, npout.data, cgt_nbytes(a))
+
+
+cdef Object* _pyfunc_valret(void* cldata, Object** args):
+    (pyfun, nin, nout) = <object>cldata
+    pyread = [cgt2py_object(args[i]) for i in xrange(nin)]
+    pyout = pyfun(pyread)
+    return py2cgt_object(pyout)
+
+
+shit2 = [] # XXX this is a memory leak, will fix later
 
 cdef void* _getfun(libname, funcname) except *:
     cdef void* lib_handle = get_or_load_lib(libname)
@@ -298,17 +335,29 @@ cdef void* _getfun(libname, funcname) except *:
     return out
 
 
-cdef InPlaceFun _node2inplaceclosure(node) except *:
-    libname, funcname, cldata = cgt.get_impl(node, "cpu") # TODO
-    cfun = _getfun(libname, funcname)
-    asdf.append(cldata)  # XXX
-    return InPlaceFun(<Inplacefun>cfun, _ctypesstructptr(cldata))
+cdef InPlaceFunCl _node2inplaceclosure(node) except *:
+    try:
+        libname, funcname, cldata = cgt.get_impl(node, "cpu") # TODO
+        cfun = _getfun(libname, funcname)
+        shit2.append(cldata)  # XXX
+        return InPlaceFunCl(<Inplacefun>cfun, _ctypesstructptr(cldata))
+    except cgt.MethodNotDefined:
+        pyfun = node.op.py_apply_inplace        
+        cldata = (pyfun, len(node.parents), 1)
+        shit2.append(cldata)
+        return InPlaceFunCl(&_pyfunc_inplace, <PyObject*>cldata)
 
-cdef ValRetFun _node2valretclosure(node) except *:
-    libname, funcname, cldata = cgt.get_impl(node, "cpu") # TODO
-    cfun = _getfun(libname, funcname)
-    asdf.append(cldata)  # XXX
-    return ValRetFun(<Valretfun>cfun, _ctypesstructptr(cldata))
+cdef ValRetFunCl _node2valretclosure(node) except *:
+    try:
+        libname, funcname, cldata = cgt.get_impl(node, "cpu") # TODO
+        cfun = _getfun(libname, funcname)
+        shit2.append(cldata)  # XXX
+        return ValRetFunCl(<Valretfun>cfun, _ctypesstructptr(cldata))
+    except cgt.MethodNotDefined:
+        pyfun = node.op.py_apply_valret        
+        cldata = (pyfun, len(node.parents), 1)
+        shit2.append(cldata)
+        return ValRetFunCl(&_pyfunc_valret, <PyObject*>cldata)
 
 cdef MemLocation _tocppmem(object pymem):
     return MemLocation(<size_t>pymem.index)
@@ -326,6 +375,8 @@ cdef Instruction* _tocppinstr(object pyinstr) except *:
         out = new LoadArgument(pyinstr.ind, _tocppmem(pyinstr.write_loc))
     elif t == cgt.Alloc:
         out = new Alloc(dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
+    elif t == cgt.BuildTup:
+        out = new BuildTup(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
     elif t == cgt.InPlace:
         out = new InPlace(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(pyinstr.node))
     elif t == cgt.ValReturning:
@@ -356,11 +407,10 @@ cdef class cInterpreter:
         if self.eg != NULL: del self.eg
     def __call__(self, pyargs):
         cdef Tuple* cargs = new Tuple(len(pyargs))
-        cdef vector[size_t] shp
         for (i,pyarg) in enumerate(pyargs):
             cargs.setitem(i, py2cgt_object(pyarg))
         cdef Tuple* ret = self.interp.run(cargs)
         del cargs
-        return cgt2py_object(ret.getitem(0)) # XXX
+        return cgt2py_object(ret)
 
 

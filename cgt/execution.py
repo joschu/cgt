@@ -92,23 +92,23 @@ def compile_file(fname, libpath, extra_link_flags = ""):
         d.update(cudalibs = info["CUDA_LIBRARIES"], cudaroot = info["CUDA_ROOT"], cudalibdir = info["CUDA_LIBRARY_DIR"])
 
     if sys.platform == "darwin":
-        if fname.endswith(".cc"):
+        if fname.endswith(".cpp"):
             cap(r'''
 cd %(cacheroot)s && \
-c++ -fPIC -O3 -DNDEBUG %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
+c++ -fPIC -O0 -g %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ -fPIC -O0 -g %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
             '''%d)
         # TODO set up way to switch to -O0 -g
         elif fname.endswith(".cu"):
             cap(r'''
 cd %(cacheroot)s && \
 nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -fPIC -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
+c++ -fPIC -O0 -g -fPIC -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
             '''%d)
                 # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
 
     else:
-        if fname.endswith(".cc"):
+        if fname.endswith(".cpp"):
             cap('''
 c++ -fPIC -O3 -DNDEBUG %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
 c++ -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
@@ -122,6 +122,9 @@ c++  -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s
             )
 
 ctypes2str = {
+    ctypes.c_byte : "uint8_t",
+    ctypes.c_bool : "bool",
+    ctypes.c_char : "char",
     ctypes.c_int : "int",
     ctypes.c_long : "long",
     ctypes.c_void_p : "void*",
@@ -284,11 +287,14 @@ def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
             return out
         return fn
     elif backend == "cython":
-        raise OopsThisCodeIsBrokenException
-        if fixed_sizes: fn = FixedSizeFunc(inputs, outputs)
-        else: fn = VarSizeFunc(inputs, outputs)
-        if single: return lambda *invals : fn(*invals)[0]
-        else: return fn        
+        outputs = simplify(outputs)
+        eg = make_execution_graph(inputs, outputs)
+        import cycgt2
+        vm = cycgt2.cInterpreter(eg)
+        def fn(*invals):
+            out = vm(invals)
+            if single: return out[0]            
+            else: return list(out)
     else:
         raise NotImplementedError("invalid backend %s"%backend)
     return fn
@@ -462,7 +468,7 @@ def make_execution_graph(inputs, outputs):
                             shape_locs = [node2mem[shpel].loc for shpel in shp]
                             G.add_instr(Alloc(typel.dtype, shape_locs, arr_loc))
                             arr_locs.append(arr_loc)
-                        G.add_instr(AllocTup(node.get_type(), arr_locs, write_loc))
+                        G.add_instr(BuildTup(node.get_type(), arr_locs, write_loc))
                 G.add_instr(InPlace(node, read_locs, write_loc))
             else:                
                 write_loc = G.new_loc()
@@ -509,7 +515,7 @@ class Alloc(Instr):
         return {"type" : "Alloc", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json()}
 
 
-class AllocTup(Instr):
+class BuildTup(Instr):
     def __init__(self, typ, read_locs, write_loc):
         self.typ = typ
         self.read_locs = read_locs
@@ -517,7 +523,7 @@ class AllocTup(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, tuple(interp.get(loc) for loc in self.read_locs))
     def to_json(self):
-        return {"type" : "AllocTup"} # XXX
+        return {"type" : "BuildTup"} # XXX
 
 class InPlace(Instr):
     def __init__(self, node, read_locs, write_loc):

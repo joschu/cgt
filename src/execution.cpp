@@ -72,14 +72,22 @@ void Alloc::fire(Interpreter* interp) {
     interp->set(writeloc, new Array(ndim, shape, dtype, DevCPU));
 }
 
+void BuildTup::fire(Interpreter* interp) {
+    Tuple* out = new Tuple(readlocs.size());
+    for (int i=0; i < readlocs.size(); ++i) {
+        out->setitem(i, interp->get(readlocs[i]));
+    }
+    interp->set(writeloc, out);
+}
+
 void InPlace::fire(Interpreter* interp) {
     int n_inputs = readlocs.size();
-    Object * args[n_inputs+1];
+    Object * reads[n_inputs];
     for (int i=0; i < n_inputs; ++i) {
-        args[i] = interp->get(readlocs[i]);
+        reads[i] = interp->get(readlocs[i]);
     }
-    args[n_inputs] = interp->get(writeloc);
-    closure(args);
+    Object* write = interp->get(writeloc);
+    closure(reads, write);
 }
 
 // TODO actually allocate tuple
