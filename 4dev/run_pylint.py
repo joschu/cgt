@@ -5,10 +5,13 @@ parser.add_argument("--files",nargs="+")
 parser.add_argument("--patfile", type=argparse.FileType("r"))
 args = parser.parse_args()
 
-import subprocess,os, os.path as osp
+
+import subprocess, os, os.path as osp, cgt
 from glob import glob
 
-if args.files is None and args.patfile is None: args.patfile=open("lintfiles.txt","r")
+os.chdir(osp.dirname(osp.dirname(osp.realpath(cgt.__file__))))
+
+if args.files is None and args.patfile is None: args.patfile=open("4dev/lintfiles.txt","r")
 
 def cap(cmd):
     "call and print"
@@ -40,7 +43,7 @@ elif args.patfile is not None:
 else:
     raise Exception("unreachable")
 
-rcfile = "pylintrc"
+rcfile = "4dev/pylintrc"
 lint = "pylint"
 if filelist is not None:
     for fname in filelist:

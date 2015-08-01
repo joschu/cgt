@@ -1,6 +1,6 @@
 import cgt
+from cgt import core, size
 import numpy as np
-from cgt import size
 
 class Affine(object):
     """
@@ -18,13 +18,13 @@ class Affine(object):
 
 class Module(object):
     def __init__(self, inputs, outputs):
-        self.c = cgt.Composition(inputs, outputs)
+        self.c = core.Composition(inputs, outputs)
     def __call__(self, inputs):
-        assert all(isinstance(x,cgt.Node) for x in inputs)
-        tup_out = cgt.Result(self.c, inputs)
-        return [cgt.Result(cgt.TupleIndex(i),[tup_out]) for i in xrange(self.c.n_out)]
+        assert all(isinstance(x,core.Node) for x in inputs)
+        tup_out = core.Result(self.c, inputs)
+        return [core.Result(core.TupleIndex(i),[tup_out]) for i in xrange(self.c.n_out)]
     def get_parameters(self):
-        return list(node for node in self.c.get_nodes() if isinstance(node,cgt.Data))
+        return list(node for node in self.c.get_nodes() if isinstance(node,core.Data))
 
     def expand(self, inputs):
         return self.c.expand(inputs)
@@ -47,11 +47,19 @@ def setup_contiguous_storage(shareds, dtype = None):
         start += size
     return flatvec
 
-def relu(x):
-    return cgt.Result(cgt.ElwiseUnary("relu",
-        info=cgt.UnaryInfo("relu",lambda x: (x>=0)*x, True, "s", "cgt.sign(x)", "x*(x>0)")),[x])
+def _nu_rectify(x, out=None):
+    if out is None:
+        return x * (x > 0)
+    else:
+        np.copyto(out, x)
+        out *= (x > 0)
+
+def rectify(x):
+    return core.Result(core.ElwiseUnary("rectify",
+        info=core.UnaryInfo("rectify",_nu_rectify, True, "s", lambda x,y,gy:gy*cgt.sign(x), "x*(x>0)")),[x])
 
 def softmax(x,axis=1):
+    x = cgt.broadcast("-", x, x.max(axis=1,keepdims=True),"xx,x1")
     out = cgt.exp(x)
     out = cgt.broadcast("/", out, out.sum(axis=axis,keepdims=True), "xx,x1")
     return out
@@ -60,15 +68,19 @@ def logsoftmax(x, axis=1):
     return cgt.log(softmax(x, axis=axis))
 
 def zero_one_loss(x, y):
-    assert x.ndim == 2 and y.ndim in (1,2) and cgt._dtype_kind(y.dtype)=='i'
+    assert x.ndim == 2 and y.ndim in (1,2) and core.dtype_kind(y.dtype)=='i'
     return cgt.equal(x.argmax(axis=1,keepdims=False),y.flatten())
 
-def dropout(x):
-    return x*cgt.rand_bernoulli(cgt.shape(x))
-
-def categorical_negloglik(logprobs, labels):
-    return -logprobs[cgt.arange(cgt.size(logprobs,0)), cgt.flatten(labels)]
-
+def dropout(x, p=0):
+    cgt.utils.warn("not doing dropout")
+    return x
+    if p==0: 
+        return x
+    else:
+        mask = cgt.greater(cgt.rand(*cgt.shape(x)), p)
+        x = x * mask
+        x = x/(1.0-p)
+        return x
 
 
 def conv2d(x_BKRC, f_LKrc, border_mode="full",subsample=(1,1),pad=(0,0)):

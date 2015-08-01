@@ -1,13 +1,14 @@
 from libcpp.vector cimport vector
 from cpython.ref cimport PyObject
 cimport numpy as cnp
+cimport cpython
+
 import numpy as np
 import ctypes
 import os.path as osp
-import cgt
-cimport cpython
-import cgt
 
+import cgt
+from cgt import exceptions, core, execution, impls
 
 cnp.import_array()
 
@@ -258,6 +259,7 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass ExecutionGraph:
         void add_instr(Instruction*)
         Object* get(MemLocation)
+        int n_args()
         ExecutionGraph(int, int, vector[MemLocation])        
     cppclass LoadArgument(Instruction):
         LoadArgument(int, MemLocation)
@@ -303,7 +305,11 @@ cdef void _pyfunc_inplace(void* cldata, Object** reads, Object* write):
     (pyfun, nin, nout) = <object>cldata
     pyread = [cgt2py_object(reads[i]) for i in xrange(nin)]
     pywrite = cgt2py_object(write)
-    pyfun(pyread, pywrite)
+    try:
+        pyfun(pyread, pywrite)
+    except Exception as e:
+        print e,pyfun
+        raise e
     cdef Tuple* tup
     cdef Array* a
     if cgt_is_array(write):
@@ -337,11 +343,11 @@ cdef void* _getfun(libname, funcname) except *:
 
 cdef InPlaceFunCl _node2inplaceclosure(node) except *:
     try:
-        libname, funcname, cldata = cgt.get_impl(node, "cpu") # TODO
+        libname, funcname, cldata = impls.get_impl(node, "cpu") # TODO
         cfun = _getfun(libname, funcname)
         shit2.append(cldata)  # XXX
         return InPlaceFunCl(<Inplacefun>cfun, _ctypesstructptr(cldata))
-    except cgt.MethodNotDefined:
+    except core.MethodNotDefined:
         pyfun = node.op.py_apply_inplace        
         cldata = (pyfun, len(node.parents), 1)
         shit2.append(cldata)
@@ -349,11 +355,11 @@ cdef InPlaceFunCl _node2inplaceclosure(node) except *:
 
 cdef ValRetFunCl _node2valretclosure(node) except *:
     try:
-        libname, funcname, cldata = cgt.get_impl(node, "cpu") # TODO
+        libname, funcname, cldata = impls.get_impl(node, "cpu") # TODO
         cfun = _getfun(libname, funcname)
         shit2.append(cldata)  # XXX
         return ValRetFunCl(<Valretfun>cfun, _ctypesstructptr(cldata))
-    except cgt.MethodNotDefined:
+    except core.MethodNotDefined:
         pyfun = node.op.py_apply_valret        
         cldata = (pyfun, len(node.parents), 1)
         shit2.append(cldata)
@@ -371,15 +377,15 @@ cdef vector[MemLocation] _tocppmemvec(object pymemlist) except *:
 cdef Instruction* _tocppinstr(object pyinstr) except *:
     t = type(pyinstr)
     cdef Instruction* out
-    if t == cgt.LoadArgument:
+    if t == execution.LoadArgument:
         out = new LoadArgument(pyinstr.ind, _tocppmem(pyinstr.write_loc))
-    elif t == cgt.Alloc:
+    elif t == execution.Alloc:
         out = new Alloc(dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
-    elif t == cgt.BuildTup:
+    elif t == execution.BuildTup:
         out = new BuildTup(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
-    elif t == cgt.InPlace:
+    elif t == execution.InPlace:
         out = new InPlace(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(pyinstr.node))
-    elif t == cgt.ValReturning:
+    elif t == execution.ValReturning:
         out = new ValReturning(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(pyinstr.node))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
@@ -391,7 +397,7 @@ cdef Instruction* _tocppinstr(object pyinstr) except *:
 
 cdef ExecutionGraph* create_execution_graph(pyeg) except *:
     "create an execution graph object"
-    cdef ExecutionGraph* eg = new ExecutionGraph(pyeg.n_args, pyeg.n_locs(), _tocppmemvec(pyeg.output_locs))
+    cdef ExecutionGraph* eg = new ExecutionGraph(pyeg.n_args, pyeg.n_locs, _tocppmemvec(pyeg.output_locs))
     for instr in pyeg.instrs:
         eg.add_instr(_tocppinstr(instr))
     return eg
@@ -405,12 +411,14 @@ cdef class cInterpreter:
     def __dealloc__(self):
         if self.interp != NULL: del self.interp
         if self.eg != NULL: del self.eg
-    def __call__(self, pyargs):
+    def __call__(self, *pyargs):
+        assert len(pyargs) == self.eg.n_args()
+        # TODO: much better type checking on inputs
         cdef Tuple* cargs = new Tuple(len(pyargs))
         for (i,pyarg) in enumerate(pyargs):
             cargs.setitem(i, py2cgt_object(pyarg))
         cdef Tuple* ret = self.interp.run(cargs)
         del cargs
-        return cgt2py_object(ret)
+        return list(cgt2py_object(ret))
 
 

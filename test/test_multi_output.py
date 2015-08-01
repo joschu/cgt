@@ -1,8 +1,9 @@
 import cgt, numpy as np
 import unittest
+from cgt import core
 
 
-class SinCos(cgt.Op):
+class SinCos(core.Op):
 #     def c_code(self, inputs):
 #         return """
 # void CGT_FUNCNAME(void* cldata, cgt_array** io) {
@@ -15,8 +16,9 @@ class SinCos(cgt.Op):
 #         """
     call_type = "valret"
     def typ_apply(self, inputs):
+        assert inputs[0].dtype == 'f4'
         d = inputs[0].ndim
-        return cgt.Tuple(cgt.Tensor(cgt.floatX, d), cgt.Tensor(cgt.floatX, d))
+        return core.Tuple(core.Tensor(cgt.floatX, d), core.Tensor(cgt.floatX, d))
     def py_apply_valret(self, reads):
         x = reads[0]
         return (np.sin(x), np.cos(x))
@@ -25,7 +27,7 @@ class SinCos(cgt.Op):
     c_extra_link_flags = "-lm"
     c_extra_includes = ["math.h"]
 
-class SinCos2(cgt.Op):
+class SinCos2(core.Op):
     def c_code(self, inputs):
         # raise cgt.MethodNotDefined
         return """
@@ -43,7 +45,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, Array** reads, Tuple* write) {
     call_type = "inplace"
     def typ_apply(self, inputs):
         ndim = inputs[0].ndim
-        return cgt.Tuple(cgt.Tensor(cgt.floatX, ndim), cgt.Tensor(cgt.floatX, ndim))
+        return core.Tuple(core.Tensor(cgt.floatX, ndim), core.Tensor(cgt.floatX, ndim))
     def py_apply_inplace(self, reads, write):
         x = reads[0]
         write[0][...] = np.sin(x)
@@ -54,17 +56,20 @@ extern "C" void CGT_FUNCNAME(void* cldata, Array** reads, Tuple* write) {
     c_extra_includes = ["math.h"]
 
 class MultiOutputTestCase(unittest.TestCase):
+    def setUp(self):
+        cgt.set_precision("single")    
     def runTest(self):
         for x in (cgt.scalar('x'), cgt.vector('x'), cgt.matrix('x')):
             for cls in (SinCos, SinCos2):
-                y,z = cgt.unpack(cgt.Result(cls(), [x]))
+                y,z = core.unpack(core.Result(cls(), [x]))
                 xnum = np.ones((3,)*x.ndim, cgt.floatX)
                 correct = (np.sin(xnum),np.cos(xnum))
                 yznum = cgt.numeric_eval([y,z], {x:xnum})
                 np.testing.assert_allclose(yznum, correct)
-                f = cgt.make_function([x],[y,z])
+                f = cgt.function([x],[y,z])
                 np.testing.assert_allclose(f(xnum), correct)
 
 
 if __name__ == "__main__":
+    import cgt
     MultiOutputTestCase().runTest()

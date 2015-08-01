@@ -136,7 +136,7 @@ typedef Object *(*Valretfun)(void * /* closure data */, Object ** /* read */);
 #define cgt_assert(x)  \
     do {\
         if (!(x)) {\
-            fprintf (stderr, "Assertion failed: %s (%s:%d)\n", #x, \
+            fprintf (stderr, "Oy, vey! Assertion failed: %s (%s:%d)\n", #x, \
                 __FILE__, __LINE__);\
             fflush (stderr);\
             cgt::cgt_abort();\
@@ -159,7 +159,7 @@ static inline void cgt_clear_error() {
   gStatus = StatusOK;
 }
 
-// XXX how do we check that message doesn't overflow?
+// TODO can do it more safely now that we're in c++
 #define cgt_check(x, msg, ...) \
     do {\
         if ((!(x))) {\

@@ -1,10 +1,6 @@
-import sys, numpy as np, hashlib, copy, cPickle, re, operator, ctypes, warnings, subprocess
+import sys, numpy as np, hashlib, copy, cPickle, ctypes, warnings, os
 from collections import defaultdict,namedtuple
-import traceback
 import __builtin__
-
-import exceptions
-import utils
 
 # ================================================================
 # Datatypes
@@ -23,7 +19,7 @@ class Dtype: #pylint: disable=W0232
         """
         dt = np.dtype(dt)
         if dt.char in 'fdg':
-            return floatX
+            return cgt.floatX
         elif dt.char in 'iulBb':
             return 'i'+str(dt.itemsize)
         elif dt.char in 'FDG':
@@ -31,7 +27,7 @@ class Dtype: #pylint: disable=W0232
         else:
             raise ValueError("Invalid dtype %s"%dt)
 
-def _as_valid_array(x):
+def as_valid_array(x):
     x = np.asarray(x)
     x = x.astype(Dtype.canon(x.dtype))
     return x
@@ -59,10 +55,11 @@ class Tensor(Type):
 
 class Tuple(Type):
     """
-    Currently unused, will represent a compound type
+    A compount type
+    For now, we will only allow tuples of tensors, though we may allow tuple elements in the future
     """
     def __init__(self, *eltypes):
-        assert all(isinstance(eltype, Type) for eltype in eltypes)
+        assert all(isinstance(eltype, Tensor) for eltype in eltypes)
         self.eltypes = eltypes
         self.dtype = 'O'
     def __len__(self):
@@ -73,13 +70,6 @@ class Tuple(Type):
         return iter(self.eltypes)
     def __repr__(self):
         return "Tup(" + ",".join(map(str,self.eltypes))+")"
-
-class Vector(Type):
-    """
-    Currently unused, will represent a variable length vector of a given type
-    """
-    def __init__(self, eltype):
-        self.eltype = eltype
 
 class Device(object):
     """
@@ -107,9 +97,9 @@ def _promote(typ1, typ2):
     d2 = typ2[0]
     s2 = typ2[1:]
     if d1 == 'c' or d2 == 'c':
-        return complexX
+        return cgt.complexX
     elif d1 == 'f' or d2 == 'f': 
-        return floatX
+        return cgt.floatX
     elif d1 == 'i' and d2 == 'i':
         assert d1 == d2
         return d1 + __builtin__.max(s1,s2)
@@ -119,7 +109,7 @@ def _promote(typ1, typ2):
 def _promote_multi(xtypes):
     return reduce(_promote, xtypes)
 
-def _dtype_kind(dtype):
+def dtype_kind(dtype):
     """
     one of f,c,i
     """
@@ -135,35 +125,11 @@ def _type_to_int(typ1):
     """
     integer type of result of operation such as floor that converts to integer
     """
-    d1 = _dtype_kind(typ1)
+    d1 = dtype_kind(typ1)
     if d1 == 'f' or d1 == 'c':
         return 'i8'
     else:
         return typ1
-
-floatX = "f4"
-complexX = "c8"
-
-def set_precision(prec):
-    """
-    prec in {"single", "double"}
-    globally set floating point precision for float and complex types
-    """    
-    assert prec in ("half","single", "double","quad")
-    global floatX, complexX
-    if prec == "half":
-        floatX = 'f2'
-        complexX = None
-        warn("half precision not yet supported")
-    elif prec == "single":
-        floatX = 'f4'
-        complexX = 'c8'
-    elif prec == "double":
-        floatX = 'f8'
-        complexX = 'c16'
-    elif prec == "quad":
-        floatX = 'f16'
-        complexX = 'c32'
 
 # ================================================================
 # Computation Graph Nodes
@@ -208,21 +174,36 @@ class Node(object):
     def __truediv__(self, other):
         return self.__div__(other)
     def __pow__(self, other):
-        return elwise_binary("^", self, other)
+        return elwise_binary("**", self, other)
     def __floordiv__(self, other):
         return floor_divide(self, other)
+    def __gt__(self, other):
+        return greater(self, other)
+    def __ge__(self, other):
+        return greater_equal(self, other)
+    def __lt__(self, other):
+        return less(self, other)
+    def __le__(self, other):
+        return less_equal(self, other)
+    # def __eq__(self, other):
+    #     return equal(self, other)
+    # def __ne__(self, other):
+    #     return not_equal(self, other) ## XXX why is this necessary?
+
+    # TODO make these all match
     def __radd__(self, other):
         return self.__add__(other)
+    def __rsub__(self, other):
+        return constant(other).__sub__(self)
     def __rmul__(self, other):
         return self.__mul__(other)
     def __rdiv__(self, other):
         return constant(other).__div__(self)
     def __rtruediv__(self, other):
         return constant(other).__rtruediv__(self)
-    def __rsub__(self, other):
-        return constant(other).__sub__(self)
     def __rfloordiv__(self, other):
         return constant(other).__floordiv__(self)
+
     @property
     def shape(self):
         return shape(self)
@@ -236,7 +217,8 @@ class Node(object):
     def T(self):
         return transpose(self)
     
-        
+    __array_priority__ = 1000 # precedence over numpy operators
+
     def __getitem__(self, slis):
         return getitem(self, slis)
     def __iter__(self):
@@ -288,9 +270,6 @@ def _put_on_device(value, device):
 def num_components(node):
     return len(node.get_type()) if isinstance(node.get_type(), Tuple) else 1
 
-class MethodNotDefined(Exception):
-    pass
-
 class Op(object):
     """
     Describes an operation that will be performed on some data.
@@ -300,6 +279,7 @@ class Op(object):
     dynamic_data = False # op contains to data that might be changed externally
     gpu_uses_c = False # even if output on GPU, use C implementation, not CUDA
     call_type = 'inplace' # or valret
+    inplace_alias_ok = True
     writes_to_input = -1
     c_extra_includes = []
     c_extra_link_flags = ""
@@ -387,7 +367,7 @@ class Op(object):
     def __repr__(self):
         return self.get_name()
 
-def _as_node(val_or_node):
+def as_node(val_or_node):
     """
     If numeric data received, convert to a constant node
     """
@@ -396,7 +376,7 @@ def _as_node(val_or_node):
     elif isinstance(val_or_node, (int, float, np.ndarray)):
         return constant(val_or_node)
     elif val_or_node==[]:
-        return constant(np.array([],dtype='i8'))
+        return constant(np.array([],dtype='i8')) # XXX maybe get rid of this
     elif isinstance(val_or_node, tuple):
         return make_tuple(*val_or_node)
     else:
@@ -409,7 +389,7 @@ class Result(Node):
     some exogenous input too? What about random variables?)
     """
     def __init__(self, op, parents, typ = None):
-        parents = map(_as_node, parents)
+        parents = map(as_node, parents)
         typ = op.typ_apply(parents) if typ is None else typ
         assert op is not None
         # self.stackinfo = traceback.extract_stack()
@@ -449,10 +429,11 @@ class Argument(Input):
     """
     Input to the graph that is an argument to a function call
     """
-    def __init__(self, typ, name=None, fixed_shape=None):        
+    def __init__(self, typ, name=None, fixed_shape=None):    
+        assert isinstance(typ, Type)
         Input.__init__(self, typ, name)
         if fixed_shape is not None:
-            assert len(fixed_shape) == self.ndim
+            assert isinstance(fixed_shape, tuple) and len(fixed_shape) == self.ndim
             self.fixed_shape = fixed_shape
         else:
             self.fixed_shape = (None,)*self.ndim
@@ -480,10 +461,10 @@ class Data(Input):
     Data is similar to global variables in standard programming languages.
     """
     def __init__(self, value,name=None,device=None, fixed_shape_mask=None):
-        value = _as_valid_array(value)
+        value = as_valid_array(value)
         if device is None:
             self.value = value
-            self.device = _get_value_device(value)
+            self.device = None#_get_value_device(value)
         else:
             self.value = _put_on_device(value, device)
             self.device = device
@@ -503,26 +484,9 @@ class Data(Input):
         return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
         return self.value
+    def __repr__(self):
+        return self.get_name() or "unnamed_data{ndim=%s,dtype=%s}"%(self.ndim, self.dtype)
     # TODO: remove external accesses to .value
-
-
-# ================================================================
-# Variable Constructors
-# ================================================================
-
-def scalar(name=None, dtype=None):
-    return Argument(Tensor(floatX if dtype is None else dtype, 0), name)
-def vector(name=None, dtype=None):
-    return Argument(Tensor(floatX if dtype is None else dtype, 1), name)
-def matrix(name=None, dtype=None):
-    return Argument(Tensor(floatX if dtype is None else dtype, 2), name)
-def tensor3(name=None, dtype=None):
-    return Argument(Tensor(floatX if dtype is None else dtype, 3), name)
-def tensor4(name=None, dtype=None):
-    return Argument(Tensor(floatX if dtype is None else dtype, 4), name)
-
-def tensor(dtype, ndim, name=None):
-    return Argument(Tensor(floatX if dtype is None else dtype, ndim), name)
 
 def _singleton_ones(dtype, ndim):
     return constant(np.ones((1,)*ndim, dtype))
@@ -534,8 +498,8 @@ def make_argument(typ):
         return Argument(Tensor(typ.dtype, typ.ndim))
     else:
         raise ValueError("expected Tuple or Tensor. Got %s"%typ)
-# ================================================================
 
+# ================================================================
 # Differentiation
 # ================================================================
 
@@ -591,11 +555,11 @@ def pullback(outputs, goutputs, wrt):
     # Some checks
     badwrtset = set(wrt).difference(dio)
     if badwrtset:
-        raise exceptions.NonDifferentiable("Outputs not differentiable wrt %s"%badwrtset)
+        raise NonDifferentiable("Outputs not differentiable wrt %s"%badwrtset)
 
     badoutset = set(outputs).difference(dibw)
     if badoutset:
-        raise exceptions.NonDifferentiable("Outputs %s not differentiable wrt any of %s"%(badoutset, badwrtset))
+        raise NonDifferentiable("Outputs %s not differentiable wrt any of %s"%(badoutset, badwrtset))
 
     var2gs = defaultdict(list)
     for (node, gnode) in utils.safezip(outputs, goutputs):
@@ -654,12 +618,13 @@ class Constant(Op):
         if isinstance(value, tuple):
             self.value = value # XXX need to make valid recursively?
         else:
-            self.value = _as_valid_array(value)
+            self.value = as_valid_array(value)
             assert self.value.dtype != object
     def get_expr(self, parent_exprs):
         return self.get_name()
     def get_name(self):
-        return "const{%s}"%str(self.value)
+        ndim = self.value.ndim
+        return "const{%g}"%self.value if ndim==0 else "const{%s%g...%s}"%("["*ndim, self.value.flat[0], "]"*ndim)
     def py_apply_valret(self, reads):
         return self.value
     def py_apply_inplace(self, reads, write):
@@ -674,7 +639,7 @@ class Constant(Op):
         if isinstance(self.value, np.ndarray):
             return [constant(x) for x in self.value.shape] 
         else:
-            return shape(_as_node(self.value))
+            return shape(as_node(self.value))
     def typ_apply(self, inputs):
         assert len(inputs)==0
         return _get_value_type(self.value)
@@ -712,7 +677,7 @@ class Fill(Op):
     (value, shape...) -> array filled with `value`, with shape `shape`
     """
     def __init__(self, value):
-        self.value = _as_valid_array(value)
+        self.value = as_valid_array(value)
         assert self.value.ndim ==0
         self.dtype = self.value.dtype
         assert self.value.ndim==0
@@ -723,7 +688,7 @@ class Fill(Op):
     def py_apply_inplace(self, reads, write):
         write[...] = self.value
     def pullback(self, inputs, output, goutput):
-        raise exceptions.NonDifferentiable
+        raise NonDifferentiable
     def shp_apply(self, inputs):
         return inputs
     def typ_apply(self, inputs):
@@ -731,30 +696,29 @@ class Fill(Op):
         return Tensor(self.dtype, len(inputs))
 
 def _is_int(node):
-    return _dtype_kind(node.dtype)=='i'
+    return dtype_kind(node.dtype)=='i'
 
-def _list_is_valid_shape(inputs):
+def _list_is_valid_sli(inputs):
     return len(inputs)==3 and all(x.ndim==0 and _is_int(x) for x in inputs)
 
 class Arange(Op):
     """
     (start,stop,step) -> 1D array, just like numpy
     """
+    call_type='valret'
     def __init__(self, dtype='i8'):
         self.dtype = dtype
     def get_diff(self, num_inputs):
         return [False]*num_inputs
-    def get_numeric_py(self):
-        def fn(start,stop,step):
-            return np.arange(start,stop,step, self.dtype)
-        return fn
+    def py_apply_valret(self, (start,stop,step)):
+        return np.arange(start,stop,step, self.dtype)
     def pullback(self, inputs, output, goutput):
-        raise exceptions.NonDifferentiable
+        raise NonDifferentiable
     def shp_apply(self, inputs):
         start,stop,step = inputs
         return [(stop - start)//step]
     def typ_apply(self, inputs):
-        assert _list_is_valid_shape(inputs)
+        assert _list_is_valid_sli(inputs)
         return Tensor(self.dtype, 1)
 
 class ScalarRng(Op):
@@ -769,22 +733,22 @@ class ScalarRng(Op):
         return [False]*num_inputs
     def get_name(self):
         return "rng{%s}"%self.kind
-    def get_numeric_py(self):
-        if self.kind == "uniform": return lambda *shp: np.random.rand(*shp).astype(floatX)
-        elif self.kind == "gaussian": return lambda *shp: np.random.randn(*shp).astype(floatX)
+    def py_apply_inplace(self, reads, write):
+        if self.kind == "uniform": write[...] = np.random.rand(*reads).astype(cgt.floatX)
+        elif self.kind == "gaussian": write[...] = np.random.randn(*reads).astype(cgt.floatX)
+        else: raise RuntimeError
     def pullback(self, inputs, output, goutput):
-        raise exceptions.NonDifferentiable
+        raise NonDifferentiable
     def shp_apply(self, inputs):
         return inputs
     def typ_apply(self, inputs):
-        assert _list_is_valid_shape(inputs)
-        return Tensor(floatX, len(inputs))
+        return Tensor(cgt.floatX, len(inputs))
 
 # Elementwise
 # ----------------------------------------------------------------
 
 def _no_grad():
-    raise exceptions.NonDifferentiable()
+    raise NonDifferentiable()
 
 def _nu_sigmoid(x, out=None):
     return np.reciprocal(1+np.exp(-x), out=out)
@@ -795,25 +759,27 @@ def _nu_iceil(x,out=None):
 def _nu_ifloor(x,out=None):
     return np.floor(x,out=out)
 
+def _nu_divide(x, y, out=None):
+    return np.divide(x.astype(cgt.floatX), y, out=out)
 
 UnaryInfo = namedtuple("UnaryInfo", ("short","pyfunc","diff","typeinfo", "gradexpr", "cexpr"))
 
 UNARY_INFO = {
-    "abs" : UnaryInfo(   "abs", np.abs,  True,   's', lambda x, y, gy: gy*sign(x), "fabs(x)"),
+    "abs" : UnaryInfo(   "abs", np.abs,  True,   's', lambda x, y, gy: gy*cgt.sign(x), "fabs(x)"),
     "ceil" : UnaryInfo(  "ceil", np.ceil, False,  'i',  lambda x, y, gy: _no_grad(), "ceil(x)"),
-    "cos" : UnaryInfo(   "cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*sin(x), "cos(x)"),
-    "exp" : UnaryInfo(   "exp", np.exp,  True,   'f',   lambda x, y, gy: gy*exp(x), "exp(x)"),
+    "cos" : UnaryInfo(   "cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*cgt.sin(x), "cos(x)"),
+    "exp" : UnaryInfo(   "exp", np.exp,  True,   'f',   lambda x, y, gy: gy*cgt.exp(x), "exp(x)"),
     "iceil" : UnaryInfo( "iceil", _nu_iceil, False, 'i',   lambda x, y, gy: _no_grad(), "(int)ceil(x)"),
     "ifloor" : UnaryInfo( "ifloor", _nu_ifloor, False, 'i',   lambda x, y, gy: _no_grad(), "(int)floor(x)"),
     "log" : UnaryInfo(   "log", np.log,  True,   'f', lambda x, y, gy: gy/x, "log(x)"),
     "neg" : UnaryInfo(   "negative", np.negative, True, 's', lambda x, y, gy: -gy, "(-x)"),
     "sign" : UnaryInfo(   "sign", np.sign, False,   's',  lambda x, y, gy: _no_grad(), "2*(x>0)-1"),
-    "sin" : UnaryInfo(    "sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cos(x), "sin(x)"),
+    "sin" : UnaryInfo(    "sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cgt.cos(x), "sin(x)"),
     "square" : UnaryInfo( "square", np.square, True, 's',  lambda x, y, gy: 2.0*gy*x, "x*x"),
     "sqrt" : UnaryInfo( "sqrt", np.sqrt, True, 'f', lambda x, y, gy: gy/(2.0*y), "sqrt(x)"),
-    "tanh" : UnaryInfo(   "tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-square(y)), "tanh(x)"),
+    "tanh" : UnaryInfo(   "tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-cgt.square(y)), "tanh(x)"),
     "sigmoid" : UnaryInfo( "sigmoid", _nu_sigmoid, True, 'f', lambda x, y, gy: gy*y*(1-y), "1.0/(1.0+exp(-x))"),
-    "conj" : UnaryInfo( "conj", np.conj, True, 'c', lambda x, y, gy: conj(gy), "conj(x)")
+    "conj" : UnaryInfo( "conj", np.conj, True, 'c', lambda x, y, gy: cgt.conj(gy), "conj(x)")
 }
 
 BinaryInfo = namedtuple("BinaryInfo", ("short","pyfunc","commutes","diff","typeinfo","gradexpr", "cexpr"))
@@ -824,10 +790,14 @@ BINARY_INFO = {
     "*"   : BinaryInfo("multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
     "+"   : BinaryInfo("add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
     "-"   : BinaryInfo("subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
-    "/"   : BinaryInfo("divide",  np.divide,  False,    (True,True),    'p',       lambda x, y, z, gz: [gz/y,-gz*z/y], "x/y"),
+    "/"   : BinaryInfo("divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(float)x/y"),
     "<"   : BinaryInfo("less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
-    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,z*log(x)],"pow(x,y)"),
+    ">"   : BinaryInfo("greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
+    "<="   : BinaryInfo("less_equal",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
+    ">="   : BinaryInfo("greater_equal",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
+    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,z*cgt.log(x)],"pow(x,y)"),
     "=="  : BinaryInfo("equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
+    "!="  : BinaryInfo("not_equal", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
 }
 
 
@@ -867,11 +837,11 @@ class ElwiseUnary(Op):
         elif typeinfo == 'i':
             out_type = _type_to_int(intype)
         elif typeinfo == 'f':
-            out_type = floatX
+            out_type = cgt.floatX
         elif typeinfo == 'c':
-            out_type = complexX
+            out_type = cgt.complexX
         else:
-            assert typeinfo in (floatX, complexX, 'i1','i2','i4','i8')
+            assert typeinfo in (cgt.floatX, cgt.complexX, 'i1','i2','i4','i8')
             out_type = typeinfo
         return Tensor(out_type, inputs[0].get_ndim())
     def c_code(self, inputs):
@@ -957,11 +927,13 @@ class ElwiseBinary(Op):
         assert ((inputs[0].ndim==0) == self.scalar_mask[0]) and ((inputs[1].ndim==0) == self.scalar_mask[1])
         typeinfo = BINARY_INFO[self.opname].typeinfo
         if typeinfo == 'p':
-            out_type = _promote(inputs[0].get_dtype(), inputs[1].get_dtype())
+            out_dtype = _promote(inputs[0].get_dtype(), inputs[1].get_dtype())
+        elif typeinfo == 'f':
+            out_dtype = cgt.floatX
         else:
-            out_type = typeinfo
+            out_dtype = typeinfo
         ind4shape = 1 if self.scalar_mask[0] else 0
-        return Tensor(out_type, inputs[ind4shape].ndim)
+        return Tensor(out_dtype, inputs[ind4shape].ndim)
     def c_code(self, inputs):
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
@@ -1027,7 +999,7 @@ class Size(Op):
     def py_apply_valret(self, reads):
         return np.array(reads[0].shape[self.axis])
     def pullback(self, inputs, output, goutput):
-        raise exceptions.NonDifferentiable
+        raise NonDifferentiable
     def shp_apply(self, _inputs):
         return []
     def typ_apply(self, _inputs):
@@ -1211,8 +1183,8 @@ class RFFT(Op):
             out[ax]=sz
         return out
     def typ_apply(self, inputs):
-        assert inputs[0].dtype==floatX
-        return Tensor(complexX,inputs[0].ndim)
+        assert inputs[0].dtype==cgt.floatX
+        return Tensor(cgt.complexX,inputs[0].ndim)
 
 class IRFFT(Op):
     def __init__(self, axes):
@@ -1230,13 +1202,7 @@ class IRFFT(Op):
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, inputs):
-        return Tensor(floatX,inputs[0].ndim)
-
-def rfft(x, periods, axes):
-    return Result(RFFT(axes),[x]+list(periods))
-
-def irfft(x, axes):
-    return Result(IRFFT(axes),[x])
+        return Tensor(cgt.floatX,inputs[0].ndim)
 
 # Reductions
 # ----------------------------------------------------------------
@@ -1312,8 +1278,8 @@ class Argmax(Op):
         return [False]
     def get_name(self):
         return "argmax{%s}"%self.axis
-    def get_numeric_py(self):
-        return lambda x : x.argmax(axis=self.axis,keepdims=True)
+    def py_apply_inplace(self, reads, write):
+        write.flat[:] = reads[0].argmax(axis=self.axis)
     def shp_apply(self, inputs):
         x = inputs[0]
         s = shape(x)
@@ -1441,7 +1407,7 @@ class GetFlatIndices(Op):
     def shp_apply(self, inputs):
         return shape(inputs[1])
     def typ_apply(self, inputs):
-        assert inputs[1].ndim == 1 and _dtype_kind(inputs[1].dtype) == 'i'
+        assert inputs[1].ndim == 1 and dtype_kind(inputs[1].dtype) == 'i'
         return Tensor(inputs[0].dtype,1)
 
 
@@ -1457,8 +1423,8 @@ class IncFlatIndices(Op):
         _x, inds, _y = inputs 
         gx = goutput
         gy = Result(GetFlatIndices(), [goutput, inds])
-        raise NotSureThisIsRightException
-        return [gx, None, gy]
+        raise exceptions.Todo("not sure it's right")
+        # return [gx, None, gy]
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, inputs):
@@ -1487,6 +1453,8 @@ class Mul21(Op):
         return [size(inputs[0], 1 if self.tA else 0)]
     def typ_apply(self, inputs):
         return Tensor(inputs[0].get_dtype(), 1)
+    def get_expr(self, (xexpr,yexpr)):        
+        return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
 class Mul22(Op):
     c_extra_includes = ["cblas.h"]
@@ -1505,7 +1473,7 @@ class Mul22(Op):
     def shp_apply(self, inputs):
         return [size(inputs[0], 1 if self.tA else 0),size(inputs[1],0 if self.tB else 1)]
     def typ_apply(self, inputs):
-        assert inputs[0].get_dtype()==floatX and inputs[1].get_dtype()==floatX
+        assert inputs[0].get_dtype()==cgt.floatX and inputs[1].get_dtype()==cgt.floatX
         return inputs[0].get_type()
     def get_closure(self, inputs):
         return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB)]
@@ -1544,7 +1512,7 @@ class BatchedMul22(Op):
     def shp_apply(self, inputs):
         return [size(inputs[0],0), size(inputs[0], 2 if self.tA else 1),size(inputs[1],1 if self.tB else 2)]
     def typ_apply(self, inputs):
-        # assert inputs[0].get_dtype()==floatX and inputs[1].get_dtype()==floatX
+        # assert inputs[0].get_dtype()==cgt.floatX and inputs[1].get_dtype()==cgt.floatX
         return inputs[0].get_type()
 
 class Outer(Op):
@@ -1555,7 +1523,7 @@ class Outer(Op):
     def shp_apply(self, inputs):
         return [size(inputs[0],0), size(inputs[1],0)]
     def typ_apply(self, _inputs):
-        return Tensor(floatX, 2)
+        return Tensor(cgt.floatX, 2)
 
 
 
@@ -1572,7 +1540,7 @@ class Dot(Op):
     def shp_apply(self, _inputs):
         return []
     def typ_apply(self, _inputs):
-        return Tensor(floatX, 0)
+        return Tensor(cgt.floatX, 0)
 
 # Composition
 # ----------------------------------------------------------------
@@ -1607,7 +1575,8 @@ class Composition(Op):
     def get_diff(self, _):
         return self._diff
     def get_numeric_py(self):
-        f = make_function(self._inputs, self._outputs)
+        from . import execution # XXX
+        f = execution.function(self._inputs, self._outputs)
         return lambda num_inputs: tuple(f(num_inputs))
     def pullback(self, inputs, output, goutput):
         # repl = {}
@@ -1664,7 +1633,7 @@ class Assertion(Op):
     Assertion gets evaluated when the graph is executed, and it prints out a stack trace on failure
     """
     def __init__(self, msg):
-        self.stack = traceback.extract_stack()[:-2]
+        # self.stack = traceback.extract_stack()[:-2]
         self.msg = msg
     def typ_apply(self, inputs):
         x, = inputs
@@ -1723,329 +1692,12 @@ class debug_context(object):
 # Funcs wrapping ops (numpy-like)
 # ================================================================
 
-def zeros(shape, dtype=None): #pylint: disable=W0621
-    if dtype is None: dtype=floatX
-    return Result(Fill(np.array(0,dtype)), shape)
-
-def arange(start, stop=None, step=1, dtype=None):
-    if stop is None:
-        start, stop = 0, start
-    if dtype is None: dtype = 'i8'
-    return Result(Arange(dtype), [start,stop,step])
-
-def elwise_binary(opname, x,y):
-    x,y = map(_as_node, (x,y))
-    scalar_mask = (x.ndim==0, y.ndim==0)
-    op = ElwiseBinary(opname, scalar_mask)
-    if scalar_mask == (False, False): assert x.ndim==y.ndim
-    return Result(op, [x,y])
-
-def zeros_like(x):
-    return zeros(shape(x), x.get_dtype())
-
-def shape(x):
-    typ = x.get_type()
-    if isinstance(typ, Tensor):
-        return [size(x, i) for i in xrange(x.ndim)]
-    else:
-        return tuple(map(shape, x.parents))
-        # return tuple(shape(tuple_index(x, i)) for i in xrange(len(typ)))
-    
-
-def size(x, axis):
-    return Result(Size(axis), [x])
-
-def _red_axes(axis, ndim):
-    if axis is None: return range(ndim)
-    elif isinstance(axis, int): return [axis]
-    elif isinstance(axis, (list, tuple)): return list(axis)
-    else: raise ValueError("invalid argument 'axis'=%s"%axis)
-
-
-def sum(x, axis=None, keepdims=False): #pylint: disable=W0622    
-    axes = _red_axes(axis, x.ndim)
-    if len(axes)==0: return x
-    out = Result(Sum(axes), [x])
-    if not keepdims: out = _dropdims(out, axes)
-    return out
-
-# copy pasted from sum
-def max(x, axis=None, keepdims=False): #pylint: disable=W0622
-    axes = _red_axes(axis, x.ndim)
-    out = Result(Max(axes), [x])
-    if not keepdims: out = _dropdims(out, axes)
-    return out
-
-def argmax(x, axis=None, keepdims=False):
-    if axis is None:
-        out = flatten(x).argmax(axis=0)
-    else:
-        assert isinstance(axis, int)
-        out = Result(Argmax(axis), [x])
-        if not keepdims: out = _dropdims(out, [axis])
-    return out
-
-def mean(x, axis=None, keepdims=False):
-    axes = _red_axes(axis, x.ndim)
-    return sum(x, axis=axes, keepdims=keepdims) / mul_multi([size(x, ax) for ax in axes])
-    
-def _dropdims(x, axes):
-    # todo: add asserts
-    return reshape(x, [size(x, i) for i in xrange(x.get_ndim()) if i not in axes])
-
-def stack(scalars):
-    assert len(scalars)>0
-    # todo: add assert
-    return Result(Stack(), scalars)
-
-def constant(val):
-    return Result(Constant(val), [])
-
-def shared(val,name="",device=None,fixed_shape_mask=None):
-    return Data(val,name=name,device=device,fixed_shape_mask=fixed_shape_mask)
-
-def reshape(x, shape): #pylint: disable=W0621
-    return Result(Reshape(), [x] + list(shape))
-
-def dot(x, y):
-    xdim = x.get_ndim()
-    ydim = y.get_ndim()
-    if xdim == 1:
-        if ydim == 1:
-            return Result(Dot(), [x, y])
-        elif ydim == 2:
-            return Result(Mul21(True), [y, x])
-        else:
-            raise NotImplementedError
-    elif xdim == 2:
-        if ydim == 1:
-            return Result(Mul21(False), [x, y])
-        elif ydim == 2:
-            return Result(Mul22(False, False), [x, y])
-        else:
-            raise NotImplementedError
-    else:
-        raise NotImplementedError
-
-def outer(x, y):
-    assert x.get_ndim() == y.get_ndim() == 1
-    return Result(Outer(), [x, y])
-
-def broadcast(opname, x, y, bcpat):
-    xpat, ypat = bcpat.split(",")
-    xbcaxes,ybcaxes = [[i for (i,letter) in enumerate(pat) if letter=='1'] for pat in (xpat, ypat)]
-    assert x.get_ndim() == y.get_ndim()
-    if xbcaxes: x = Result(Repeat(xbcaxes), [x] + [size(y,ax) for ax in xbcaxes])
-    if ybcaxes: y = Result(Repeat(ybcaxes), [y] + [size(x,ax) for ax in ybcaxes])
-    return elwise_binary(opname, x, y)
-
-def repeat(x, repeats, axis):
-    return Result(Repeat([axis]), [x, constant(repeats)])
-
-def concatenate(xs, axis=0):
-    return Result(Concatenate(axis), xs)
-
-def norm(x, axes=None, p=2):
-    return pow(pow(x, p).sum(axes=axes),(1.0/p))
-
-
-def floor_divide(x,y):
-    return ifloor(x/y)
-
-def ceil_divide(x,y):
-    return iceil(x/y)
-
-def add_multi(xs):
-    return reduce(operator.add, xs)
-
-def mul_multi(xs):
-    return reduce(operator.mul, xs) if len(xs)>0 else constant(np.array(1,dtype='i8'))
-
-
-def _is_sequence(x):
-    return hasattr(x, "__iter__") and not isinstance(x, Node)
-
-def _to_list(x):
-    if _is_sequence(x): return list(x)
-    else: return [x]
-
-def tuple_index(x, i):
-    return Result(TupleIndex(i), [x])    
-
-def make_tuple(*xs):
-    return Result(MakeTuple(), list(xs))
-
-
-def getitem(arr, slis):
-    arr = _as_node(arr)
-    if isinstance(arr.get_type(), Tuple):
-        assert isinstance(slis, int)
-        return tuple_index(arr, slis)
-    
-    if not _is_sequence(slis):
-        slis = [slis]
-    
-    if all(isinstance(sli, (int,slice)) or isinstance(sli,slice) and sli==COLON for sli in slis):
-        return getitem_nonfancy(arr,slis)
-    elif all(isinstance(sli, (np.ndarray, Node)) for sli in slis):
-        return getitem_fancy(arr,slis)
-    else:
-        raise ValueError("Tried to index with slices %s. Either all should be in {slice,int,colon} or all must be a ndarray of intsMust either all be of type {slice,int} or of type {np.ndarray, Node}"%str(slis))
-
-def sub2ind(subs, shp):
-    ndim = len(shp)
-    assert ndim >= 1
-    strides = [None]*(ndim-1) + [1]
-    for i in xrange(ndim-2, -1, -1):
-        strides[i] = shp[i+1] * strides[i+1]
-    return add_multi([stride*sub for (stride,sub) in utils.safezip(strides, subs)])
-
-def getitem_fancy(arr, indarrs):
-    assert all(indarr.ndim==1 for indarr in indarrs)
-    indarrs = map(_as_node, indarrs)
-    flatinds = sub2ind(indarrs, shape(arr))
-    return Result(GetFlatIndices(), [arr, flatinds])
-
-COLON = slice(None,None,None)
-
-
-def getitem_nonfancy(arr, slis):
-    out = arr
-    ax = 0
-    shapedesc = []
-    if not _is_sequence(slis):
-        slis = [slis]
-    for sli in slis:
-        if sli == COLON:
-            shapedesc.append(ax)
-        else:
-            if sli is None:
-                shapedesc.append('+')
-                ax -= 1
-            elif isinstance(sli, bool):
-                raise ValueError("tried to index with a bool")
-            else:
-                if isinstance(sli,slice):
-                    shapedesc.append('k')
-                elif isinstance(sli, int):
-                    sli = slice(sli,sli+1,1)
-                    shapedesc.append('-')
-                else:
-                    raise NotImplementedError
-                start = sli.start or 0
-                stop = size(arr, ax) if sli.stop is None else sli.stop
-                step = sli.step or 1
-                if isinstance(stop, int) and stop < 0: stop = size(arr, ax) - stop
-                out = Result(GetSli(ax), [out, start, stop, step])
-        ax += 1
-
-    if all(x=='k' for x in shapedesc):
-        return out
-    else:
-        axidx = 0
-        newshape = []
-        for d in shapedesc:
-            if d == '+':
-                newshape.append(d)                    
-            elif d == '-':
-                axidx += 1
-            else: # 'x'
-                newshape.append(size(out, axidx))
-                axidx += 1
-        for axidx in xrange(axidx, out.ndim):
-            newshape.append(size(out, axidx))
-        out = reshape(out, newshape)
-    return out
-
-
-def _is_unique(col):
-    return len(set(col))==len(col)
-
-def _is_subset_of(maybesub, bigset):
-    return len(set(bigset).difference(set(maybesub)))==0
-
-
-def einsum(desc, x, y):
-    pat = r'(\w+),(\w+)->(\w+)'
-    match = re.match(pat, desc)
-    if match is None:
-        raise ValueError("einsum error: desc should match regexp %s"%pat)
-    xdesc,ydesc,zdesc = match.groups()
-    if not _is_unique(xdesc) and _is_unique(ydesc) and _is_unique(zdesc):
-        raise ValueError("Invalid tensor description %s passed into einsum. Tensor indices should be unique"%desc)
-    if not _is_subset_of(xdesc+ydesc,zdesc):
-        raise ValueError("Invalid tensor description %s passed into einsum. Unrecognized index in output."%desc)
-    loop = []
-    justx = []
-    contr = []
-    justy = []
-    for c in xdesc:
-        if c in ydesc:
-            if c in zdesc:
-                loop.append(c)
-            else:
-                contr.append(c)
-        else:
-            justx.append(c)
-    for c in ydesc:
-        if not c in xdesc:
-            justy.append(c)
-    ixloop, ijustx, ixcontr = [[xdesc.index(c) for c in chars] for chars in [loop,justx,contr]]
-    iyloop, ijusty, iycontr = [[ydesc.index(c) for c in chars] for chars in [loop,justy,contr]]
-    xshp = shape(x)
-    yshp = shape(y)
-    xt = transpose(x, ixloop + ijustx + ixcontr).reshape([mul_multi([xshp[i] for i in icol]) for icol in [ixloop, ijustx, ixcontr]])
-    yt = transpose(y, iyloop + iycontr + ijusty).reshape([mul_multi([yshp[i] for i in icol]) for icol in [iyloop, iycontr, ijusty]])
-    zt = batched_matmul(xt, yt)
-
-    return transpose(
-           zt.reshape( [size(x, xdesc.index(c)) for c in loop]
-                     + [size(x, xdesc.index(c)) for c in justx]
-                     + [size(y, ydesc.index(c)) for c in justy]),
-           utils.invert_perm([zdesc.index(c) for c in loop + justx + justy]))
-
-def flatten(x):
-    return reshape(x, [mul_multi(shape(x))])
-
-def flatcat(xs):
-    return concatenate([flatten(x) for x in xs])
-
-def transport(x, src, targ):
-    return Result(Transport(src,targ),[x])
-
-def cast(x, dtype):
-    dtype = Dtype.canon(dtype)
-    if x.dtype == dtype: 
-        return x
-    else:
-        diff = _dtype_kind(dtype) in "cf"
-        opname = "castto%s"%dtype
-        ui = UnaryInfo(opname, lambda x: x.astype(dtype),diff, dtype, "cast(gy,%s)"%x.dtype if diff else "_no_grad()", "((%s)x)"%np2c[dtype])
-        return Result(ElwiseUnary(opname, ui), [x])
-
-def real(x):
-    assert _dtype_kind(x.dtype) == 'c'
-    return cast(x, floatX)
-
-def rand(shp):
-    shp = map(_as_node, _to_list(shp))
-    return Result(ScalarRng("uniform"), shp)
-
-def randn(shp):
-    shp = map(_as_node, _to_list(shp))
-    return Result(ScalarRng("gaussian"), shp)
-
-def rand_bernoulli(x):
-    return rand(x)
-
-
 # ================================================================
 # Graph Optimization
 # ================================================================
 
 def _init_analysis():
     return {"node2hash":{},"hash2node":{},"node2shape":{},"node2sv":{},"repl":{}}
-
 
 def analyze(outputs):
     analysis = _init_analysis()
@@ -2055,7 +1707,7 @@ def analyze(outputs):
 
 
 def simplify_and_analyze(outputs):
-    assert _is_sequence(outputs)
+    assert isinstance(outputs, list)
     analysis = _init_analysis()
     repl = {}
     for output in outputs: _s_and_a(output, analysis, repl)
@@ -2165,6 +1817,12 @@ def topsorted(outputs):
     marks = {}
     out = []
     stack = [] #pylint: disable=W0621
+    # i: node
+    # jidx = number of children visited so far from that node
+    # marks: state of each node, which is one of
+    #   0: haven't visited
+    #   1: have visited, but not done visiting children
+    #   2: done visiting children
     for x in outputs:
         stack.append((x,0))
         while stack:
@@ -2187,42 +1845,12 @@ def topsorted(outputs):
                 stack.append((j,0))
     return out
 
-
-def topsorted1(outputs):
-    visited = set()
-    for output in outputs:
-        for node in _topsorted(output, visited):
-            yield node
-
-def _topsorted(node, visited):
-    if node in visited:
-        return
-    else:
-        for par in node.parents:
-            for pred in _topsorted(par, visited):
-                yield pred
-        visited.add(node)
-        yield node
-
-def topsorted_active(outputs, wrt):
-    # node is active iff there's a chain of differentiable edges from wrt
-    # XXX change so it has same style as node2dev
-    n2a = {n:True for n in wrt} # node to bool indicating if it's active
-    for node in topsorted(outputs):
-        if node not in n2a:
-            if node.is_input():
-                n2a[node] = False        
-            else:
-                parents = node.parents
-                n2a[node] = any(n2a[par] and d for (par,d) in utils.safezip(parents, node.op.get_diff(len(parents))))
-        if n2a[node]: yield node
-
 def count_nodes(outputs):
     if isinstance(outputs, Node): outputs = [outputs]
     return len(list(topsorted(outputs)))
 
 def clone(nodes, replace=None):
-    assert _is_sequence(nodes)
+    assert utils.is_sequence(nodes)
     if isinstance(nodes, tuple):
         return tuple(clone(x,replace) for x in nodes)
     if replace is None: replace = {}
@@ -2236,21 +1864,6 @@ def clone(nodes, replace=None):
         else:
             replace[node] = Result(node.op, [replace[p] for p in node.parents], typ=node.get_type())
     return [replace[node] for node in nodes]
-
-def transpose(arr, axes=None):
-    if axes is None: 
-        assert arr.ndim == 2
-        axes = [1,0]
-    else:
-        assert _is_sequence(axes) and len(axes) == arr.get_ndim()
-        axes = list(axes)
-    if axes == range(arr.get_ndim()):
-        return arr
-    else:
-        return Result(Transpose(axes), [arr])
-
-def batched_matmul(x, y):
-    return Result(BatchedMul22(False,False), [x,y])
 
 def alloc_from_shp(shp, typ):
     if isinstance(shp, tuple):
@@ -2270,6 +1883,7 @@ def _flatten_lists(lis):
         out.extend(li)
         sizes.append(len(li))
     return out,sizes
+
 def _unflatten_list(li,sizes):
     start = 0
     out = []
@@ -2317,15 +1931,56 @@ def py_numeric_apply(node, vals):
         node.op.py_apply_inplace(vals, out)
     return out
 
-def tuplify(xs):
-    if isinstance(xs, Node):
-        return xs
-    elif isinstance(xs, tuple):
-        return make_tuple(*map(tuplify, xs))
-    elif xs == []:
-        return constant(np.array([],'i8')) # XXX this is weird
-    else:
-        raise ValueError("can't tuplify %s"%xs)
+class NonDifferentiable(Exception):
+    pass
 
-if sys.argv[0] != "gen_py.py":
-    from api_autogen import * #pylint: disable=F0401
+class Disconnected(Exception):
+    pass
+
+class Todo(Exception):
+    pass
+
+class ShapeError(Exception):
+    pass
+
+class AllocationError(Exception):
+    pass
+
+class MethodNotDefined(Exception):
+    pass
+
+
+def _get_cgt_src_root():
+    osp = os.path
+    return osp.dirname(osp.dirname(osp.realpath(__file__)))
+
+_CONFIG = None
+def load_config():
+    osp = os.path
+    global _CONFIG
+    if _CONFIG is None:
+        from thirdparty.configobj import ConfigObj
+        from thirdparty.validate import Validator
+        rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
+        specfilename = osp.join(_get_cgt_src_root(), "cgtrc_spec.ini")
+        _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)
+        val = Validator()
+        test = _CONFIG.validate(val,preserve_errors=True)
+        if test is not True:
+            for (k,v) in test.items():
+                if v is not True:
+                    utils.error("%s: %s in %s"%(k,v.message,rcfileloc))
+            raise ValueError
+        envflags = os.getenv("CGT_FLAGS")
+        if envflags:
+            pairs = envflags.split(",")
+            for pair in pairs:
+                lhs,rhs = pair.split("=")
+                assert lhs in _CONFIG
+                _CONFIG[lhs] = rhs
+    return _CONFIG
+
+from .api import *
+from .api_autogen import *
+from . import exceptions, utils
+import cgt

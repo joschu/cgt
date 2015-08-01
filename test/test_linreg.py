@@ -24,7 +24,7 @@ class LinearRegressionTestCase(unittest.TestCase):
         err = cgt.sum(cgt.square(ypred - y_n))
         g = cgt.grad(err, [w_k, b])
 
-        g_simple,an = cgt.simplify_and_analyze(g)
+        g_simple,an = cgt.core.simplify_and_analyze(g)
 
 
         print "Loss function:"
@@ -39,9 +39,9 @@ class LinearRegressionTestCase(unittest.TestCase):
 
         d = {X_nk : Xval, w_k : wval, b : bval, y_n : yval}
 
-        np.testing.assert_allclose(cgt.numeric_eval(err,d), np.linalg.norm(Xval.dot(wval) + bval - yval)**2)
-        np.testing.assert_allclose(cgt.numeric_eval(g[0],d), 2 * Xval.T.dot(Xval.dot(wval) + bval - yval))
-        np.testing.assert_allclose(cgt.numeric_eval(g[1],d), 2 *  np.sum(Xval.dot(wval) + bval - yval, 0))
+        np.testing.assert_allclose(cgt.numeric_eval1(err,d), np.linalg.norm(Xval.dot(wval) + bval - yval)**2)
+        np.testing.assert_allclose(cgt.numeric_eval1(g[0],d), 2 * Xval.T.dot(Xval.dot(wval) + bval - yval))
+        np.testing.assert_allclose(cgt.numeric_eval1(g[1],d), 2 *  np.sum(Xval.dot(wval) + bval - yval, 0))
         # add_log_entry("linreg", collect(values(d)), collect(keys(d)), [err], [g])
 
 

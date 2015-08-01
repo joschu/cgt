@@ -1,5 +1,6 @@
-import numpy as np, scipy.ndimage as ndi, scipy.signal
-import cgt,nn
+import numpy as np
+import cgt
+from cgt import nn
 import unittest
 
 class ConvTestCase(unittest.TestCase):
@@ -14,6 +15,12 @@ class ConvTestCase(unittest.TestCase):
         batchsize = x.shape[0]
         outchans = f.shape[0]
 
+        try: 
+            import scipy.signal
+        except ImportError:
+            print "skipping because we don't have ndimage"
+            return
+
         out = np.zeros((batchsize,outchans,x.shape[2]+filtrows-1,x.shape[3]+filtcols-1))
         for b in xrange(x.shape[0]):
             for inchan in xrange(x.shape[1]):
@@ -21,7 +28,7 @@ class ConvTestCase(unittest.TestCase):
                     out[b,outchan] += scipy.signal.convolve2d(x[b,inchan],f[outchan,inchan],mode='full')
 
         cgt.set_precision('double')
-        out1 = cgt.numeric_eval(nn.conv2d(cgt.constant(x), cgt.constant(f)), {})
+        out1 = cgt.numeric_eval1(nn.conv2d(cgt.constant(x), cgt.constant(f)), {})
         np.testing.assert_allclose(out, out1)
 
 if __name__ == "__main__":

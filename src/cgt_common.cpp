@@ -15,7 +15,7 @@ namespace cgt {
 
 Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype)
     : Object(ObjectKind::Array), ndim(ndim), dtype(dtype), 
-      devtype(devtype), ownsdata() {
+      devtype(devtype), ownsdata(true) {
   shape = new size_t[ndim];
   for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
   size_t nbytes = cgt_nbytes(this);
@@ -79,7 +79,7 @@ void *cgt_alloc(char devtype, size_t size) {
         void* out;
         CUDA_CHECK(cudaMalloc(&out, size));
         return out;
-        #else
+#else
     cgt_assert(0 && "CUDA disabled");
 #endif
   }
@@ -92,7 +92,7 @@ void cgt_free(char devtype, void *ptr) {
   else {
 #ifdef CGT_ENABLE_CUDA
         CUDA_CHECK(cudaFree(ptr));
-        #else
+#else
     cgt_assert(0 && "CUDA disabled");
 #endif
   }

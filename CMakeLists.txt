@@ -28,9 +28,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 list( APPEND CMAKE_C_FLAGS "-std=c99")
 list( APPEND CMAKE_CXX_FLAGS "-std=c++11")
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/4build/cmake)
 
-include(${CMAKE_SOURCE_DIR}/cmake/UseCython.cmake)
+include(${CMAKE_SOURCE_DIR}/4build/cmake/UseCython.cmake)
 
 find_package(PythonLibs REQUIRED)
 find_package(Numpy REQUIRED)
@@ -91,7 +91,7 @@ target_link_libraries(cycgt2 cgt)
 set(OPENBLAS_LIBRARY ${CMAKE_BINARY_DIR}/OpenBLAS/libopenblas.a)
 
 add_custom_command(
-  COMMAND ./download_and_build_openblas.py ${CMAKE_BINARY_DIR}/OpenBLAS
+  COMMAND 4build/download_and_build_openblas.py ${CMAKE_BINARY_DIR}/OpenBLAS
   OUTPUT ${OPENBLAS_LIBRARY}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
@@ -111,12 +111,6 @@ add_custom_target(openblas ALL DEPENDS ${OPENBLAS_LIBRARY})
 #   target_link_libraries(cgtcorefunscuda ${CUDA_LIBRARIES})
 #   set_target_properties(cgtcorefunscuda PROPERTIES SUFFIX .so)
 # endif()
-
-add_custom_command(
-  COMMAND ./download_and_build_openblas.py ${CMAKE_BINARY_DIR}/OpenBLAS
-  OUTPUT ${OPENBLAS_LIBRARY}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-)
 
 # cuda_add_library(cudadummy SHARED dummy.cu)
 
