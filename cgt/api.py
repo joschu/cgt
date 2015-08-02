@@ -5,24 +5,23 @@ import sys
 
 # Every non-underscored function in this file should have a docstring, and it should enforce that the input data is valid
 
-
 # ================================================================
 # Variable Constructors
 # ================================================================
 
-def scalar(name=None, dtype=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 0), name)
-def vector(name=None, dtype=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 1), name)
-def matrix(name=None, dtype=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 2), name)
-def tensor3(name=None, dtype=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 3), name)
-def tensor4(name=None, dtype=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 4), name)
+def scalar(name=None, dtype=None, fixed_shape=None):
+    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 0), name, fixed_shape=fixed_shape)
+def vector(name=None, dtype=None, fixed_shape=None):
+    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 1), name, fixed_shape=fixed_shape)
+def matrix(name=None, dtype=None, fixed_shape=None):
+    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 2), name, fixed_shape=fixed_shape)
+def tensor3(name=None, dtype=None, fixed_shape=None):
+    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 3), name, fixed_shape=fixed_shape)
+def tensor4(name=None, dtype=None, fixed_shape=None):
+    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 4), name, fixed_shape=fixed_shape)
 
-def tensor(dtype, ndim, name=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, ndim), name)
+def tensor(dtype, ndim, name=None, fixed_shape=None):
+    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, ndim), name, fixed_shape=fixed_shape)
 
 # ================================================================
 # Symbolic functions
@@ -260,7 +259,6 @@ def outer(x, y):
 def _validate_shape(shp,funcname):
     if len(shp)==1 and isinstance(shp[0],tuple):
         raise ValueError("you called %s(x) where x is a tuple. You should call %s(*x) instead."%(funcname,funcname))
-
 
 def rand(*shp):
     _validate_shape(shp,"rand")

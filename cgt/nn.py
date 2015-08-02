@@ -1,3 +1,7 @@
+__doc__ = """
+Neural network library, drawing inspiration from Torch's nn and nngraph
+"""
+
 import cgt
 from cgt import core, size
 import numpy as np
@@ -51,8 +55,7 @@ def _nu_rectify(x, out=None):
     if out is None:
         return x * (x > 0)
     else:
-        np.copyto(out, x)
-        out *= (x > 0)
+        np.multiply(x, (x>0), out=out)
 
 def rectify(x):
     return core.Result(core.ElwiseUnary("rectify",
@@ -72,14 +75,12 @@ def zero_one_loss(x, y):
     return cgt.equal(x.argmax(axis=1,keepdims=False),y.flatten())
 
 def dropout(x, p=0):
-    cgt.utils.warn("not doing dropout")
-    return x
     if p==0: 
         return x
     else:
         mask = cgt.greater(cgt.rand(*cgt.shape(x)), p)
         x = x * mask
-        x = x/(1.0-p)
+        x = x /(1.0-p)
         return x
 
 

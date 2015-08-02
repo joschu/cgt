@@ -107,6 +107,8 @@ def make_interpreter(eg):
 
 def topsorted_shapes_first(outputs, node2shape):
     # Almost identical to topsorted(...) function
+    # But we also need to visit the shape elements of an in-place node
+    # before visiting that node
     marks = {}
     out = []
     stack = [] 
@@ -123,10 +125,13 @@ def topsorted_shapes_first(outputs, node2shape):
                 else:
                     continue
             ps = i.parents
-            if i.ndim > 0 and not i.is_input(): ps = ps + node2shape[i] # <-- only line changed from topsorted
+            ###### Changed part ######
+            if i.ndim > 0 and not i.is_input() and i.op.call_type=="inplace": 
+                ps = ps + node2shape[i]
             elif is_tuple(i):
                 for arrshp in node2shape[i]:
                     ps = ps + arrshp
+            ##########################
             if jidx == len(ps):
                 marks[i] = 2
                 out.append(i)
@@ -154,6 +159,8 @@ def determine_memowner(nodes_sorted, updates, node2loc):
     # For updates, memlocation(RHS) = memlocation(LHS)
     after2before = {after:before for (before,after) in updates}
 
+    enable_inplace_opt = load_config()["enable_inplace_opt"]
+
     for node in nodes_sorted:
 
         base = node # by default, 
@@ -163,7 +170,8 @@ def determine_memowner(nodes_sorted, updates, node2loc):
             base = node2memowner[node.parents[node.op.writes_to_input]]
         elif node in after2before:
             base = after2before[node]
-        elif node.op.call_type == "inplace" and node.op.inplace_alias_ok:
+        elif enable_inplace_opt and node.op.call_type == "inplace" \
+            and node.op.inplace_alias_ok:
             nodeshape = node.op.shp_apply(node.parents)
             for parent in node.parents:
                 if (len(node2child[parent])==1
@@ -245,8 +253,10 @@ def the_whole_schmear(inputs, outputs, updates):
     # ------------------------------------------------------
     # Add add update targets to outputs
     outputs_updatetargs = outputs + [after for (_before, after) in updates]
-    # Do simplification + analysis pass on dataflow graph
-    outputs_updatetargs_simple, analysis = simplify_and_analyze(outputs_updatetargs)
+    # Do simplification + analysis pass on expression graph
+    outputs_updatetargs_simple, analysis = \
+        simplify_and_analyze(outputs_updatetargs) if load_config()["enable_simplification"] \
+        else (outputs_updatetargs, analyze(outputs_updatetargs))
     # Determine location and device of nodes
     node2loc = determine_locdev(outputs_updatetargs_simple)
 
@@ -400,30 +410,48 @@ def _print_stats(key2stats, t_total):
     rows = []
     for (key, (count,time)) in key2stats.iteritems():
         rows.append([str(key), count, time, time/t_total])
-        rows = sorted(rows, key=lambda row: row[2], reverse=True)
-        cumsum = 0
-        for row in rows:
-            cumsum += row[3]
-            row.append(cumsum)
+    rows = sorted(rows, key=lambda row: row[2], reverse=True)
+    cumsum = 0
+    for row in rows:
+        cumsum += row[3]
+        row.append(cumsum)
     from thirdparty.tabulate import tabulate
     print tabulate(rows, headers=["Instruction","Count","Time","Frac","Frac cumsum"])
 
+def _copy(x):
+    if isinstance(x, np.ndarray): return x.copy()
+    elif isinstance(x, tuple): return tuple(el.copy() for el in x)
+    elif np.isscalar(x): return x # xxx is this case ok?
+    else: raise NotImplementedError
 
+
+def typecheck_args(numargs, types):
+    assert len(numargs)==len(types), "wrong number of arguments. got %i, expected %i"%(len(numargs),len(types))
+    for (numarg,typ) in zip(numargs,types):
+        if isinstance(typ, Tensor):
+            assert numarg.dtype==typ.dtype and numarg.ndim==typ.ndim
+    
 class SequentialInterpreter(Interpreter):
     """
-    Executes an execution graph
+    Runs an execution graph
     """
-    def __init__(self, eg):
+    def __init__(self, eg, copy_outputs=True):
         self.eg = eg
         self.storage = [None for _ in xrange(self.eg.n_locs)]
         self.args = None
+        self.copy_outputs = copy_outputs
     def __call__(self, *args):
         self.args = tuple(as_valid_arg(arg) for arg in args)
+        typecheck_args(self.args, self.eg.input_types)
         for instr in self.eg.instrs:
             if profiler.on: tstart = time()
             instr.fire(self)
             if profiler.on: profiler.update(instr, time()-tstart)
-        return [self.get(loc) for loc in self.eg.output_locs]
+        outputs = [self.get(loc) for loc in self.eg.output_locs]
+        if self.copy_outputs: outputs = map(_copy, outputs)
+        return outputs
+        # need to copy because otherwise we might mess up the data when we call func again
+        # todo: add option that prevents this behavior
     def get(self, mem):
         return self.storage[mem.index]
     def set(self, mem, val):
@@ -467,9 +495,7 @@ class Alloc(Instr):
     def fire(self, interp):
         shp = tuple(interp.get(mem) for mem in self.read_locs)
         prevarr = interp.get(self.write_loc)
-        # if prevarr is None or prevarr.shape != shp: 
-        if True:
-            # XXX why doesn't above work?
+        if prevarr is None or prevarr.shape != shp: 
             interp.set(self.write_loc, np.ones(shp, self.dtype))
     def __repr__(self):
         return "Alloc:%s"%self.dtype

@@ -1,6 +1,7 @@
 import sys, numpy as np, hashlib, copy, cPickle, ctypes, warnings, os
 from collections import defaultdict,namedtuple
 import __builtin__
+import traceback
 
 # ================================================================
 # Datatypes
@@ -312,7 +313,7 @@ class Op(object):
         Return a string that uniquely identifies the value of this Op.
         Should ideally be fixed across program runs
         """
-        return cPickle.dumps(self.__dict__, -1)
+        return cPickle.dumps(self.__dict__, -1)+self.__class__.__name__
     def get_name(self):
         """
         Get a human-readable description of the Op, including its attributes
@@ -613,7 +614,7 @@ def grad(cost, wrt):
 # ----------------------------------------------------------------
 
 class Constant(Op):
-    call_type = "inplace"
+    call_type = "valret"
     def __init__(self, value):
         if isinstance(value, tuple):
             self.value = value # XXX need to make valid recursively?
@@ -760,7 +761,8 @@ def _nu_ifloor(x,out=None):
     return np.floor(x,out=out)
 
 def _nu_divide(x, y, out=None):
-    return np.divide(x.astype(cgt.floatX), y, out=out)
+    if x.dtype.kind != 'f': x = x.astype(cgt.floatX)
+    return np.divide(x, y, out=out)
 
 UnaryInfo = namedtuple("UnaryInfo", ("short","pyfunc","diff","typeinfo", "gradexpr", "cexpr"))
 
@@ -898,7 +900,8 @@ class ElwiseBinary(Op):
     def py_apply_inplace(self, reads, write):
         x,y = reads
         if self.scalar_mask==(False,False):
-            assert x.shape==y.shape, "Implicit broadcasting isn't allowed. Use the broadcast(...) function"
+            if x.shape != y.shape:
+                raise RuntimeError("mismatched shapes %s %s. Note that implicit broadcasting isn't allowed. Use the broadcast(...) function"%(x.shape, y.shape))
         self.info.pyfunc(x,y, out=write)
     def get_replacement(self, parents, analysis):
         node2sv = analysis["node2sv"]
@@ -925,6 +928,9 @@ class ElwiseBinary(Op):
         return shape(inputs[ind4shape])
     def typ_apply(self, inputs):
         assert ((inputs[0].ndim==0) == self.scalar_mask[0]) and ((inputs[1].ndim==0) == self.scalar_mask[1])
+        if self.scalar_mask==(False,False):
+            assert inputs[0].ndim == inputs[1].ndim
+            assertequaln(shape(inputs[0]),shape(inputs[1]),"shape mismatch at elementwise binary operation")
         typeinfo = BINARY_INFO[self.opname].typeinfo
         if typeinfo == 'p':
             out_dtype = _promote(inputs[0].get_dtype(), inputs[1].get_dtype())
@@ -977,7 +983,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write
     TODO
     CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data, (%(cdtype1)s*)reads[1]->data, (%(cdtype2)s*)write->data);
 }
-"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],cexpr=self.info.cexpr,funcname=funcname, index="0" if self.kind==ElwiseBinary.ST else "i")  
+"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2])  
     def cuda_includes(self):
         return ["cgt_cuda.h","cgt_common.h"]
 
@@ -1369,7 +1375,6 @@ class IncSli(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def c_code(self, inputs):
-        raise MethodNotDefined
         x = inputs[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
@@ -1423,7 +1428,7 @@ class IncFlatIndices(Op):
         _x, inds, _y = inputs 
         gx = goutput
         gy = Result(GetFlatIndices(), [goutput, inds])
-        raise exceptions.Todo("not sure it's right")
+        raise Todo("not sure it's right")
         # return [gx, None, gy]
     def shp_apply(self, inputs):
         return shape(inputs[0])
@@ -1437,7 +1442,6 @@ class IncFlatIndices(Op):
 
 class Mul21(Op):
     c_extra_includes = ["cblas.h"]
-
     def __init__(self, tA):
         self.tA = tA
     def py_apply_inplace(self, reads, write):
@@ -1450,6 +1454,8 @@ class Mul21(Op):
     def pullback(self, inputs, _output, goutput):
         return [outer(goutput,inputs[1]), Result(Mul21(not self.tA), [inputs[0],goutput])]
     def shp_apply(self, inputs):
+        assertequal1(size(inputs[0],0 if self.tA else 1),size(inputs[1],0),
+            "shape mismatch at matrix-vector multiplication")         
         return [size(inputs[0], 1 if self.tA else 0)]
     def typ_apply(self, inputs):
         return Tensor(inputs[0].get_dtype(), 1)
@@ -1473,6 +1479,8 @@ class Mul22(Op):
     def shp_apply(self, inputs):
         return [size(inputs[0], 1 if self.tA else 0),size(inputs[1],0 if self.tB else 1)]
     def typ_apply(self, inputs):
+        assertequal1(size(inputs[0],0 if self.tA else 1),size(inputs[1],1 if self.tB else 0), 
+            "shape mismatch at matrix-matrix multiplication")         
         assert inputs[0].get_dtype()==cgt.floatX and inputs[1].get_dtype()==cgt.floatX
         return inputs[0].get_type()
     def get_closure(self, inputs):
@@ -1633,7 +1641,7 @@ class Assertion(Op):
     Assertion gets evaluated when the graph is executed, and it prints out a stack trace on failure
     """
     def __init__(self, msg):
-        # self.stack = traceback.extract_stack()[:-2]
+        self.stack = traceback.extract_stack()[:-2]
         self.msg = msg
     def typ_apply(self, inputs):
         x, = inputs
@@ -1667,7 +1675,9 @@ class DebugFunc(Op):
             self.yourfunc(*reads)
 
 def assert_(x,msg=None):
-    add_debug_node(Result(Assertion(msg or "(empty)"), [x]))
+    dbgnode = Result(Assertion(msg or "(empty)"), [x])
+    print "assertion", CACHER.simplify1(dbgnode)
+    # add_debug_node(dbgnode)
 
 def dbg_call(yourfunc, *args):
     add_debug_node(Result(DebugFunc(yourfunc), list(args)))
@@ -1696,24 +1706,37 @@ class debug_context(object):
 # Graph Optimization
 # ================================================================
 
-def _init_analysis():
-    return {"node2hash":{},"hash2node":{},"node2shape":{},"node2sv":{},"repl":{}}
-
 def analyze(outputs):
-    analysis = _init_analysis()
-    for node in topsorted(outputs):
-        do_analysis(node, analysis)
-    return analysis
+    with disable_cacher():
+        analysis = init_analysis()
+        for node in topsorted(outputs):
+            do_analysis(node, analysis)
+        return analysis
 
 
 def simplify_and_analyze(outputs):
     assert isinstance(outputs, list)
-    analysis = _init_analysis()
+    analysis = init_analysis()
     repl = {}
-    for output in outputs: _s_and_a(output, analysis, repl)
+    for output in outputs: update_simplify_map(output, analysis, repl)
     return [repl[node] for node in outputs], analysis
 
-def _stackupdate(stack, analysis, repl): #pylint: disable=W0621
+def process_top_stack_item_and_maybe_get_replacement(stack, analysis, repl): #pylint: disable=W0621
+    """
+    Helper function for update_simplify_map, which performs an update to the 
+    stack, which stores the state of the simplification computation.
+    
+    Suppose the top element of the stack is `(orig, node)`, where `orig` is
+    the original node and `node` is simpler than `orig` but not fully simplified.
+    We can only guarantee that `node` is fully simplified after all of its parents are in the
+    map `repl`.
+
+    This function iterates over the parents of `node` and looks for one that is not in `repl`
+    If we find one, called `par`, put `(orig, node)` back on the stack and `(par, par)` on top of it, and return.
+
+    If all of the parents are already in `repl`, then we can try to compute a newly simplified version of `orig`.
+
+    """
     (orig,node) = stack.pop()
     if node.is_input():
         return (orig,node)
@@ -1725,27 +1748,53 @@ def _stackupdate(stack, analysis, repl): #pylint: disable=W0621
                 return
         newparents = [repl[p] for p in node.parents]
         newnode = Result(node.op, newparents, typ=node.get_type())
-        newnewnode = _try_repl(newnode, analysis, repl)
+        newnewnode = maybe_replace(newnode, analysis, repl)
         if newnewnode is None:
             return (orig,newnode)
         else:
+            assert newnewnode.get_type() == orig.get_type()
             if newnewnode in repl:
                 return (orig, newnewnode)
             else:
                 stack.append((orig, newnewnode))
 
-def _s_and_a(node, analysis, repl):
+def update_simplify_map(node, analysis, repl):
+    """
+    Non-recursive version of simplification algorithm.
+    Compute a fully simplified version of `node` and its ancestors
+    When this function finishes, `repl[node]` is the simplified version of `node`,
+    and repl[anc] is the simplified version of each node `anc` which is an ancestor of `node`.
+    MOreover, analysis contains 
+
+    This algorithm is most simply described recursively, and the implementation below is
+    a conversion of the recursive algorithm into a stack-based algorithm (to avoid
+    stack overflows). 
+    (TODO: bring back recursive version for reference)
+
+    The stack contains pairs `(orig, replacement_candidate)`, where `orig` is a node in the original
+    graph (i.e., an ancestor of `node`) and `replacement_candidate` is a simplified version of it, but
+    not necessarily fully simplified. We do a depth-first search on the graph, computing for each node
+    the simplified version of all its parents, then we try to simplify that node.
+    One tricky aspect is that once we've simplified the parents, we might apply some identity at that node.
+    If that happens, we obtain a new node with non-simplified parents, so we put that on the stack.
+
+    """
     stack = [(node,node)] #pylint: disable=W0621
     while stack:
-        maybe_pair = _stackupdate(stack, analysis, repl)
+        # Given (orig, node) on top of the stack, we visit one un-simplified parent of node,
+        # putting it on the stack if necessary. If all parents are already simplified, then we can
+        # check if any replacements can be applied. If we can, we return this pair and add it to our
+        # dict `repl` which stores the current replacements.
+        maybe_pair = process_top_stack_item_and_maybe_get_replacement(stack, analysis, repl)
         if maybe_pair:
-            (orig,node) = maybe_pair #pylint: disable=W0633
+            (orig,node) = maybe_pair                                    #pylint: disable=W0633
             # if not node.is_input():
             #     for shpcmp in node.op.shp_apply(node.parents): 
-            #         _s_and_a(shpcmp, analysis, repl, True)
+            #         update_simplify_map(shpcmp, analysis, repl, True)
             do_analysis(node, analysis)
             repl[orig] = node
             repl[node] = node
+            assert orig.ndim==node.ndim
 
 def do_analysis(node, analysis):
 
@@ -1779,35 +1828,108 @@ def do_analysis(node, analysis):
         elif isinstance(op, (ElwiseUnary, ElwiseBinary)) and all(p in node2sv for p in newparents):
             node2sv[node] = node.op.info.pyfunc(*(node2sv[p] for p in newparents))
 
+VERBOSE_OPTIMIZATION = False
 
-def _try_repl(node, analysis, repl):
+def maybe_replace(node, analysis, repl):
     if node.is_input(): return
     if isinstance(node.op, Constant): return
     # -- CSE --
     node2hash = analysis["node2hash"]
     h = node.get_hash(node2hash)
     if h in analysis["hash2node"]:
-        assert analysis["hash2node"][h] in repl
-        return analysis["hash2node"][h]
+        if VERBOSE_OPTIMIZATION: print "Did CSE"
+        newnode = analysis["hash2node"][h]
+        assert newnode in repl and newnode.op.__class__ == node.op.__class__
+        return newnode
     parents = node.parents
     # -- CONSTANT PROP --
     if all(isinstance(par.op, Constant) for par in parents) and not node.op.dynamic_data:
+        if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
         return constant(py_numeric_apply(node, [p.op.value for p in parents]))
     # -- SIZE --
     if isinstance(node.op, Size):
         s = analysis["node2shape"][parents[0]][node.op.axis]
-        if not (isinstance(s.op, Size) and s.parents[0] == node.parents[0]): return s
+        if not (isinstance(s.op, Size) and s.parents[0] == node.parents[0]): 
+            if VERBOSE_OPTIMIZATION: print "Did size prop"
+            return s
     # -- OP IDENTITY --
     maybe_repl = node.op.get_replacement(parents, analysis)
-    if maybe_repl is not None: return maybe_repl
+    if maybe_repl is not None: 
+        if VERBOSE_OPTIMIZATION: print "Applied op-specific identity for %s"%node.op
+        return maybe_repl
 
     return None
 
-def simplify(outputs):
-    single = isinstance(outputs, Node)
-    if single: outputs = [outputs]
-    result = simplify_and_analyze(outputs)[0]
-    return result[0] if single else result
+def simplify(xs):
+    assert isinstance(xs, list)
+    return simplify_and_analyze(xs)[0]
+
+def simplify1(x):
+    return simplify([x])[0]
+
+def init_analysis():
+    return {"node2hash":{},"hash2node":{},"node2shape":{},"node2sv":{},"repl":{}}
+
+class AnalysisCacher(object):
+    def __init__(self):
+        self.analysis = init_analysis()
+        self.repl = {}
+    def simplify(self, xs):
+        for x in xs: self.simplify1(x)
+        return [self.repl[x] for x in xs]
+    def simplify1(self, x):
+        assert isinstance(x, Node)
+        update_simplify_map(x, self.analysis, self.repl)
+        return self.repl[x]
+
+CACHER = AnalysisCacher()
+CACHER_ENABLED = False
+
+class disable_cacher(object):
+    def __enter__(self):
+        global CACHER_ENABLED
+        self.prevstate = CACHER_ENABLED
+        CACHER_ENABLED = False
+    def __exit__(self, *args):
+        global CACHER_ENABLED
+        CACHER_ENABLED = self.prevstate
+
+def assert1(x, msg=""):
+    if not CACHER_ENABLED: return
+    b = CACHER.simplify1(x)
+    if isinstance(b.op, Constant):
+        if not b.op.value:
+            raise AssertionError(msg)
+
+def assertn(xs,msg=""):
+    if not CACHER_ENABLED: return
+    bs = CACHER.simplify(xs)
+    if isinstance(bs.op, Constant):
+        if not np.all(bs.op.val):
+            raise AssertionError(msg)
+
+def _noderepr(x):
+    if isinstance(x.op, Constant):
+        return x.op.value.item()
+    else:
+        return "?"
+
+def assertequal1(x,y,msg):
+    if not CACHER_ENABLED: return
+    simpx = CACHER.simplify1(x)
+    simpy = CACHER.simplify1(y)
+    if isinstance(simpx.op,Constant) and isinstance(simpy.op,Constant) and simpx.op.value != simpy.op.value:
+        raise AssertionError(msg + "\nlhs: %s. rhs: %s"%(_noderepr(simpx), _noderepr(simpy)))
+
+def assertequaln(xs,ys,msg):
+    if not CACHER_ENABLED: return
+    simpxs = CACHER.simplify(xs)
+    simpys = CACHER.simplify(ys)
+    for (x,y) in utils.safezip(simpxs,simpys):
+        if isinstance(x.op,Constant) and isinstance(y.op,Constant) and x.op.value != y.op.value:
+            raise AssertionError(msg + "\nlhs: %s. rhs: %s"%(tuple(map(_noderepr,simpxs)), tuple(map(_noderepr,simpys))))
+
+
 
 # ================================================================
 # Graph Traversal
@@ -1850,7 +1972,7 @@ def count_nodes(outputs):
     return len(list(topsorted(outputs)))
 
 def clone(nodes, replace=None):
-    assert utils.is_sequence(nodes)
+    assert isinstance(nodes, list)
     if isinstance(nodes, tuple):
         return tuple(clone(x,replace) for x in nodes)
     if replace is None: replace = {}
@@ -1950,7 +2072,7 @@ class MethodNotDefined(Exception):
     pass
 
 
-def _get_cgt_src_root():
+def get_cgt_src_root():
     osp = os.path
     return osp.dirname(osp.dirname(osp.realpath(__file__)))
 
@@ -1962,7 +2084,7 @@ def load_config():
         from thirdparty.configobj import ConfigObj
         from thirdparty.validate import Validator
         rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
-        specfilename = osp.join(_get_cgt_src_root(), "cgtrc_spec.ini")
+        specfilename = osp.join(get_cgt_src_root(), "cgtrc_spec.ini")
         _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)
         val = Validator()
         test = _CONFIG.validate(val,preserve_errors=True)

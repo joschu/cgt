@@ -1,5 +1,5 @@
 import cgt, numpy as np, scipy.signal as ss, numpy.random as nr
-
+from cgt import floatX, core, nn
 #    Subscript indicate dimensions of array, and what each dimension indexes over
 #    b := batch size
 #    h := number of heads
@@ -15,14 +15,14 @@ class Controller(object):
         raise NotImplementedError
 
 
-def make_ff_controller(h,m,p,k):
+def make_ff_controller(b,h,m,p,k):
 
     H = 2*h
     in_size = k + h*m
     out_size = H*m + H + H + H*3 + H + h*m + h*m + p
 
-    r_bhm = cgt.tensor3("r")
-    X_bk = cgt.tensor3("x")
+    r_bhm = cgt.tensor3("r", fixed_shape = (b,h,m))
+    X_bk = cgt.tensor3("x", fixed_shape = (b,k))
     r_b_hm = r_bhm.reshape([r_bhm.shape[0], r_bhm.shape[1]*r_bhm.shape[2]])
     inp_bq = cgt.concatenate([r_b_hm, X_bk], axis=0)
 
@@ -48,7 +48,7 @@ def make_ff_controller(h,m,p,k):
     a_bhm = last_out[idx:idx+h*m];      idx += h*m
     y_bp = last_out[idx:idx+p];         idx += p
 
-    return cgt.Composition([r_bhm, X_bk], [beta_bH, g_bH, s_bH3, gamma_bH, e_bhm, a_bhm, y_bp])
+    return nn.Module([r_bhm, X_bk], [beta_bH, g_bH, s_bH3, gamma_bH, e_bhm, a_bhm, y_bp])
 
 def make_ntm_initial_states(n,h,m,b):
     M_1nm = np.zeros((1,n,m))
@@ -100,38 +100,44 @@ def sum_normalize(x, axis):
 def cosine_similarity(x, y, axis):
     return (x*y) / (cgt.norm(x, axes=[axis]) * cgt.norm(y, axes=[axis]))
 
-
-
-class Correlate1d(EzPyOp):
-    def __init__(self, axis):
+class Correlate1d(cgt.EasyCustomOp):
+    def __init__(self, axis, ndim):
         self.axis = axis
-    def forward_py(self, x, y):
-        assert y.shape[self.axis] % 2 == 1
-        return ss.correlate(x, y, mode='same')
-    def backprop_py(self, x,y, _z, gz):
+        cgt.EasyCustomOp.__init__(self,
+            input_types = [core.Tensor(floatX, ndim), core.Tensor(floatX, ndim)],
+            output_type = core.Tensor(floatX, ndim),
+            forward_impl = self.correlate_forward,
+            pullback_impl = self.correlate_pullback)
+    def correlate_forward(self, x, s):
+        # assert s.shape[self.axis] == 1
+        return ss.correlate(x, s, mode='same')
+    def correlate_pullback(self, x, y, _z, gz):
         padshp = list(y.shape)
         padshp[self.axis] = y.shape[self.axis]//2
         padzeros = np.zeros(tuple(padshp),dtype=x.dtype)
         gzpad = np.concatenate([padzeros, gz, padzeros], axis=self.axis)
-        print "ASDF",gzpad.shape, x.shape, y.shape
         return (ss.correlate(gzpad, y, mode='valid')[::-1], 
                 ss.correlate(gzpad, x, mode='valid')[::-1])
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, inputs):
-        return cgt.Tensor(inputs[0].dtype, inputs[0].ndim)
+        return inputs[0].typ
 
 def correlate1d(x, s, axis):
-    return cgt.Result(Correlate1d(axis), [x,s])
+    assert x.ndim == s.ndim
+    return core.Result(Correlate1d(axis, x.ndim), [x,s])
 
 def main():
+    cgt.set_precision('double')
     x = cgt.vector('x')
     y = cgt.vector('y')
     xval = nr.randn(100)
     yval = nr.randn(3)
-    assert np.allclose( cgt.numeric_eval(correlate1d(x,y, 0), {x:xval,y:yval}),
+    assert np.allclose( cgt.numeric_eval1(correlate1d(x,y, 0), {x:xval,y:yval}),
         ss.correlate(xval, yval, mode='same'))
-    from test_affine import check_affine
+    import sys
+    sys.path.append("../test")
+    from test_affine import check_affine #pylint: disable=F0401
     def asdf(x,y):
         if isinstance(x, np.ndarray):
             return np.sum(ss.correlate(x,y,mode='same'))
