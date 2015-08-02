@@ -75,7 +75,7 @@ def cast(x, dtype):
         return x
     else:
         diff = (core.dtype_kind(dtype) in 'cf')
-        opname = 'castto%s' % dtype
+        opname = 'cast_to_%s' % dtype
         ui = core.UnaryInfo(opname, _get_nu_cast(dtype), diff, dtype, 'cast(gy,%s)' % x.dtype if diff else '_no_grad()', '((%s)x)' % core.np2c[dtype])
         return core.Result(core.ElwiseUnary(opname, ui), [x])
 
@@ -152,6 +152,14 @@ def elwise_binary(opname, x, y):
     if (scalar_mask == (False, False)):
         assert (x.ndim == y.ndim)
     return core.Result(op, [x, y])
+
+def fill(val, shape):
+    assert isinstance(shape, list)
+    if isinstance(val, core.Node) and isinstance(val.op, core.Constant):
+        return core.Result(core.Fill(), [val.op.value]+shape)
+    else:
+        singleton = reshape(val, [1]*len(shape))
+        return core.Result(core.Repeat(range(len(shape))), [singleton] + shape)
 
 def flatcat(xs):
     return concatenate([flatten(x) for x in xs])

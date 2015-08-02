@@ -71,6 +71,9 @@ class Tuple(Type):
         return iter(self.eltypes)
     def __repr__(self):
         return "Tup(" + ",".join(map(str,self.eltypes))+")"
+    def __eq__(self, other):
+        return len(self.eltypes) == len(other.eltypes)\
+            and all(typ0 == typ1 for (typ0, typ1) in zip(self.eltypes, other.eltypes))
 
 class Device(object):
     """
@@ -904,22 +907,42 @@ class ElwiseBinary(Op):
                 raise RuntimeError("mismatched shapes %s %s. Note that implicit broadcasting isn't allowed. Use the broadcast(...) function"%(x.shape, y.shape))
         self.info.pyfunc(x,y, out=write)
     def get_replacement(self, parents, analysis):
-        node2sv = analysis["node2sv"]
-        ind4shape = 1 if self.scalar_mask[0] else 0
         l,r = parents
-        node = Result(self, parents)
-        if l in node2sv and r in node2sv:
-            return Result(Fill(self.info.pyfunc(node2sv[l], node2sv[r])), analysis["node2shape"][parents[ind4shape]])
-        elif l in node2sv and isinstance(r.op, Constant) and r.ndim > 0:
-            return Result( Constant(py_numeric_apply(self, [node2sv[l], r.op.val])), [l,r])
-        elif r in node2sv and isinstance(l.op, Constant) and l.ndim > 0:
-            return Result(Constant(py_numeric_apply(self, [l.op.val, node2sv[r]])), [l,r])
+        node = Result(self, parents) # XXX TODO use staticmethod?
+        node2sv = analysis["node2sv"]
+        out = None
+        # The following replacements are allowed to return a scalar constant value
+        # Before returning, we'll broadcast it back to the right shape
 
-        if self.opname == "*":
-            if r in node2sv and not l in node2sv: l,r = r,l
-            if l in node2sv:
-                if node2sv[l] == 1: return r
-                elif node2sv[l] == -1: return -r
+        # if both have single value, apply this operation numerically and fill the result with it
+        if l in node2sv and r in node2sv:
+            out =self.info.pyfunc(node2sv[l], node2sv[r])
+        # if l has has a single value, apply the operation to l and return a Constant
+        elif l in node2sv and isinstance(r.op, Constant):
+            out = py_numeric_apply(self, [node2sv[l], r.op.val])
+        # same as previous but swapped
+        elif r in node2sv and isinstance(l.op, Constant):
+            out = py_numeric_apply(self, [l.op.val, node2sv[r]])
+        elif self.opname == "*":
+            if l in node2sv and node2sv[l] == 1: out = r
+            if l in node2sv and node2sv[l] == -1: out = -r
+            if r in node2sv and node2sv[r] == 1: out = l
+            if r in node2sv and node2sv[r] == -1: out = -l
+        elif self.opname == "+":
+            if l in node2sv and node2sv[l] == 0: out = r
+            if r in node2sv and node2sv[r] == 0: out = l
+
+        if out is not None:
+            
+            out = cast(out, node.dtype)
+            
+            if out.ndim==0 and node.ndim>0:
+                ind4shape = 1 if self.scalar_mask[0] else 0
+                outshape = analysis["node2shape"][parents[ind4shape]]
+                out = fill(out, outshape)
+
+        return out
+
     def pullback(self, (x, y), z, gz): #pylint: disable=W0613
         gin = BINARY_INFO[self.opname].gradexpr(x, y, z, gz)
         return [sum(gv) if (v.ndim==0 and gv.ndim > 0) else gv for (v,gv) in utils.safezip([x,y],gin)]

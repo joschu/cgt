@@ -3,6 +3,7 @@ import unittest
 
 class TupleTestCase(unittest.TestCase):
     def runTest(self):
+        cgt.set_precision("double")
         f1 = cgt.function1([], ())
         assert f1() == ()
 
