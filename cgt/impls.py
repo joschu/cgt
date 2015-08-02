@@ -100,6 +100,8 @@ ctypes2str = {
 
 def get_impl(node, devtype):
 
+    if core.load_config()["force_python_impl"]: raise core.MethodNotDefined # XXX hack
+
     # TODO: includes should be in cache, as well as info about definitions like
     # CGT_ENABLE_CUDA
 

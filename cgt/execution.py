@@ -27,6 +27,10 @@ def function1(inputs, output, dbg=None, updates=None):
 # Execution
 # ================================================================
 
+def determine_devices(nodes):
+    return {} # TODO
+
+
 def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
 
     op = node.op
@@ -94,14 +98,18 @@ def is_tensor(x):
 def is_tuple(x):
     return isinstance(x.typ, Tuple)
 
-def make_interpreter(eg):
+def make_interpreter(inputs, outputs, eg, node2memloc):
     assert isinstance(eg, ExecutionGraph)
+    input_types = [input.get_type() for input in inputs]
+    output_types = [output.get_type() for output in outputs]
+    output_locs = [node2memloc[node] for node in outputs]
+
     backend = load_config()["backend"]
     if backend == "python":
-        return SequentialInterpreter(eg)
+        return SequentialInterpreter(eg, output_locs, input_types)
     elif backend == "cython":
         import cycgt2
-        return cycgt2.cInterpreter(eg) #pylint: disable=E1101
+        return cycgt2.CppInterpreterWrapper(eg, input_types, output_locs)
     else:
         raise NotImplementedError("invalid backend %s"%backend)
 
@@ -141,10 +149,7 @@ def topsorted_shapes_first(outputs, node2shape):
                 stack.append((j,0))
     return out
 
-def determine_locdev(outputs):
-    return {} # XXX
-
-def determine_memowner(nodes_sorted, updates, node2loc):
+def determine_memowner(nodes_sorted, updates, node2dev):
     # TODO use node2loc
 
     # First determine how many "child" nodes each node has
@@ -198,7 +203,7 @@ class MemCounter(object):
         return out
 
 
-def make_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memowner, node2loc):
+def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memowner, node2dev):
     instrs = []
     counter = MemCounter()
     node2memloc = {}
@@ -239,10 +244,7 @@ def make_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memowne
                 write_loc = counter.new_memloc()
                 instrs.append(ValReturning(node, read_locs, write_loc))
         node2memloc[node] = write_loc
-    input_types = [input.get_type() for input in inputs]
-    output_types = [output.get_type() for output in outputs]
-    output_locs = [node2memloc[output] for output in outputs]
-    return ExecutionGraph(input_types, output_types, output_locs, instrs, counter.count)
+    return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
 
 
 def the_whole_schmear(inputs, outputs, updates):
@@ -258,7 +260,7 @@ def the_whole_schmear(inputs, outputs, updates):
         simplify_and_analyze(outputs_updatetargs) if load_config()["enable_simplification"] \
         else (outputs_updatetargs, analyze(outputs_updatetargs))
     # Determine location and device of nodes
-    node2loc = determine_locdev(outputs_updatetargs_simple)
+    node2dev = determine_devices(outputs_updatetargs_simple)
 
     # Phase 2: build execution graph
     # ------------------------------------------------------
@@ -268,19 +270,15 @@ def the_whole_schmear(inputs, outputs, updates):
     # (memowner : "memory owner")
     updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
     updatesrcs = [before for (before, _) in updates]
-    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple), node2loc)
+    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple), node2dev)
     # Find the outputs we want to return
     outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
     # Generate execution graph
-    eg = make_execution_graph(inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2loc)
-
-    # TODO: maybe execution graph doesn't even need to know about inputs and outputs?
-    # Then we build an object wrapping it that does know.
-    # That way we could do incremental updates to computation
+    eg, node2memloc = create_execution_graph(inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev)
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------
-    interp = make_interpreter(eg)
+    interp = make_interpreter(inputs, outputs_simple, eg, node2memloc)
 
     # Done!
     return interp
@@ -326,21 +324,14 @@ MEM_OVERWRITE = 'overwrite'
 MEM_INCREMENT = 'increment'
 
 class ExecutionGraph(object):
-    def __init__(self, input_types, output_types, output_locs, instrs, n_locs):
-        self.input_types = input_types
-        self.output_types = output_types
-        self.output_locs = output_locs
+    def __init__(self, instrs, n_args, n_locs):
         self.instrs = instrs
+        self.n_args = n_args
         self.n_locs = n_locs
     def to_json(self):
         return {
             "instrs" : _list_to_json(self.instrs),
-            "output_locs" : _list_to_json(self.output_locs),
-            "n_mem" : self.n_locs
         }
-    @property
-    def n_args(self):
-        return len(self.input_types)
 
 class MemLocation(object):
     def __init__(self, idx):
@@ -435,19 +426,21 @@ class SequentialInterpreter(Interpreter):
     """
     Runs an execution graph
     """
-    def __init__(self, eg, copy_outputs=True):
+    def __init__(self, eg, output_locs, input_types, copy_outputs=True):
         self.eg = eg
+        self.input_types = input_types
+        self.output_locs = output_locs
         self.storage = [None for _ in xrange(self.eg.n_locs)]
         self.args = None
         self.copy_outputs = copy_outputs
     def __call__(self, *args):
         self.args = tuple(as_valid_arg(arg) for arg in args)
-        typecheck_args(self.args, self.eg.input_types)
+        typecheck_args(self.args, self.input_types)
         for instr in self.eg.instrs:
             if profiler.on: tstart = time()
             instr.fire(self)
             if profiler.on: profiler.update(instr, time()-tstart)
-        outputs = [self.get(loc) for loc in self.eg.output_locs]
+        outputs = [self.get(loc) for loc in self.output_locs]
         if self.copy_outputs: outputs = map(_copy, outputs)
         return outputs
         # need to copy because otherwise we might mess up the data when we call func again

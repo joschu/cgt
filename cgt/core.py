@@ -650,6 +650,7 @@ class Constant(Op):
     def get_hash(self):
         return str(id(self))
     def get_closure(self, _):
+        if isinstance(self.value, tuple): raise MethodNotDefined
         shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
         shit.append(self.value)
         return [
@@ -657,7 +658,11 @@ class Constant(Op):
         ("shape",ctypes.c_void_p,shapeptr),
         ("dtype",ctypes.c_byte,self.value.dtype.num),
         ("data",ctypes.c_void_p,self.value.ctypes.data)]
-    def c_code(self, inputs):
+    def c_code(self, *args):
+        if self.call_type == "valret": return self.c_code_valret(*args)
+        elif self.call_type == "inplace": return self.c_code_inplace(*args)
+        else: raise ValueError
+    def c_code_inplace(self, inputs):
         if isinstance(self.value, tuple):
             raise MethodNotDefined
         return r"""
@@ -666,6 +671,18 @@ extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgt::Array** reads, c
     cgt_memcpy(DevCPU, DevCPU, write->data, cldata->data, cgt_nbytes(write));
 }
 """
+
+    def c_code_valret(self, inputs):
+        return r"""
+using namespace cgt;
+extern "C" Array* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgt::Array** reads) {
+        auto out = new cgt::Array(cldata->ndim, (size_t*)cldata->shape, 
+            (cgt::Dtype)cldata->dtype, cgt::DevCPU, (void*)cldata->data, false);
+        return out;
+}"""
+        return out;
+
+
 shit = [] # XXX just so this stuff doesn't get dereferenced.
 # this is a memory leak, will fix later
 
@@ -795,7 +812,7 @@ BINARY_INFO = {
     "*"   : BinaryInfo("multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
     "+"   : BinaryInfo("add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
     "-"   : BinaryInfo("subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
-    "/"   : BinaryInfo("divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(float)x/y"),
+    "/"   : BinaryInfo("divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(x+0.0)/y"),
     "<"   : BinaryInfo("less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
     ">"   : BinaryInfo("greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
     "<="   : BinaryInfo("less_equal",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
@@ -851,18 +868,19 @@ class ElwiseUnary(Op):
         return Tensor(out_type, inputs[0].get_ndim())
     def c_code(self, inputs):
         info = self.info
+        output = Result(self, inputs) # XXX should store this type info in op?
         return r"""
-static inline %(cdtype)s scalar_CGT_FUNCNAME(%(cdtype)s x) {return %(cexpr)s;}
+static inline %(cdtype1)s scalar_CGT_FUNCNAME(%(cdtype0)s x) {return %(cexpr)s;}
 extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
     cgt::Array* read = reads[0];
     int s = cgt_size(read);
-    %(cdtype)s* readdata = (%(cdtype)s*)read->data;
-    %(cdtype)s* writedata = (%(cdtype)s*)write->data;
+    %(cdtype0)s* readdata = (%(cdtype0)s*)read->data;
+    %(cdtype1)s* writedata = (%(cdtype1)s*)write->data;
     for (int i=0; i < s; ++i) {
         writedata[i] = scalar_CGT_FUNCNAME(readdata[i]);
     }
 }
-"""%dict(cdtype=np2c[inputs[0].dtype],cexpr=info.cexpr)
+"""%dict(cdtype0=np2c[inputs[0].dtype], cdtype1=np2c[output.dtype], cexpr=info.cexpr)
     def cuda_code(self, inputs):
         info = self.info
         npdtype = inputs[0].dtype

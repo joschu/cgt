@@ -9,7 +9,6 @@ class ScalarTestCase(unittest.TestCase):
     def runTest(self):
         np.random.seed(0)
         cgt.set_precision('double')
-
         x = cgt.scalar('x')
         y = cgt.scalar('y')
         z = cgt.scalar('z')

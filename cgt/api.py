@@ -76,7 +76,8 @@ def cast(x, dtype):
     else:
         diff = (core.dtype_kind(dtype) in 'cf')
         opname = 'cast_to_%s' % dtype
-        ui = core.UnaryInfo(opname, _get_nu_cast(dtype), diff, dtype, 'cast(gy,%s)' % x.dtype if diff else '_no_grad()', '((%s)x)' % core.np2c[dtype])
+        ui = core.UnaryInfo(opname, _get_nu_cast(dtype), diff, dtype,  
+            lambda x,y,gy : (cast(gy, x.dtype) if diff else core._nondiff()), 'x')
         return core.Result(core.ElwiseUnary(opname, ui), [x])
 
 def ceil_divide(x, y):

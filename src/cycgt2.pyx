@@ -257,10 +257,8 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass Instruction:
         pass
     cppclass ExecutionGraph:
-        void add_instr(Instruction*)
-        Object* get(MemLocation)
+        ExecutionGraph(vector[Instruction*], int, int)        
         int n_args()
-        ExecutionGraph(int, int, vector[MemLocation])        
     cppclass LoadArgument(Instruction):
         LoadArgument(int, MemLocation)
     cppclass Alloc(Instruction):
@@ -275,7 +273,7 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass Interpreter:
         Tuple* run(Tuple*)
 
-    Interpreter* create_interpreter(ExecutionGraph*)
+    Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation])
 
 # Conversion funcs
 # ----------------------------------------------------------------
@@ -395,19 +393,25 @@ cdef Instruction* _tocppinstr(object pyinstr) except *:
 ### Wrapper classes
 ################################################################
 
-cdef ExecutionGraph* create_execution_graph(pyeg) except *:
-    "create an execution graph object"
-    cdef ExecutionGraph* eg = new ExecutionGraph(pyeg.n_args, pyeg.n_locs, _tocppmemvec(pyeg.output_locs))
+cdef ExecutionGraph* make_cpp_execution_graph(pyeg) except *:
+    "make an execution graph object"
+    cdef vector[Instruction*] instrs
     for instr in pyeg.instrs:
-        eg.add_instr(_tocppinstr(instr))
-    return eg
+        instrs.push_back(_tocppinstr(instr))
+    return new ExecutionGraph(instrs,pyeg.n_args, pyeg.n_locs)
 
-cdef class cInterpreter:
-    cdef ExecutionGraph* eg
-    cdef Interpreter* interp
-    def __init__(self, pyeg):
-        self.eg = create_execution_graph(pyeg)
-        self.interp = create_interpreter(self.eg)
+cdef class CppInterpreterWrapper:
+    """
+    Convert python inputs to C++
+    Run interpreter on execution graph
+    Then grab the outputs
+    """
+    cdef ExecutionGraph* eg # owned
+    cdef Interpreter* interp # owned
+    def __init__(self, pyeg, input_types, output_locs):
+        self.eg = make_cpp_execution_graph(pyeg)
+        cdef vector[MemLocation] cpp_output_locs = _tocppmemvec(output_locs)
+        self.interp = create_interpreter(self.eg, cpp_output_locs)
     def __dealloc__(self):
         if self.interp != NULL: del self.interp
         if self.eg != NULL: del self.eg

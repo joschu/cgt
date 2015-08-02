@@ -42,26 +42,21 @@ class Interpreter;
 class Instruction {
 public:
     virtual void fire(Interpreter*)=0;
+    virtual ~Instruction() {};
 };
 
 class ExecutionGraph {
 public:
-    ExecutionGraph(int n_args, int n_locs, vector<MemLocation> output_locs)
-    : n_args_(n_args), locs(n_locs), output_locs(output_locs) {
-        for (int i=0; i < n_locs; ++i) locs[i].index = i;
-    }
-    int n_outputs() {return output_locs.size();}    
-    int n_args() {return n_args_;}
-    int n_mem_locs() {return locs.size();}
-    void add_instr(Instruction* instr) {instrs.push_back(instr);}    
-    const vector<Instruction*>& get_instrs() {return instrs;}
-    const vector<MemLocation>& get_output_locs() {return output_locs;}
+    ExecutionGraph(const vector<Instruction*>& instrs, size_t n_args, size_t n_locs)
+    : instrs_(instrs), n_args_(n_args), n_locs_(n_locs) {}
     ~ExecutionGraph();
+    const vector<Instruction*>& instrs() const {return instrs_;}
+    size_t n_args() const {return n_args_;}
+    size_t n_locs() const {return n_locs_;}
 private:
-    int n_args_;
-    vector<MemLocation> locs;
-    vector<MemLocation> output_locs;
-    vector<Instruction*> instrs;
+    vector<Instruction*> instrs_; // owns, will delete
+    size_t n_args_;
+    size_t n_locs_;
 };
 
 class Interpreter {
@@ -75,8 +70,8 @@ public:
     virtual ~Interpreter() {}
 };
 
-Interpreter* create_interpreter(ExecutionGraph*);
-
+// pass by value because of cython
+Interpreter* create_interpreter(ExecutionGraph*, vector<MemLocation> output_locs);
 
 class LoadArgument : public Instruction  {
 public:

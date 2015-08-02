@@ -8,39 +8,38 @@ T idx(Array * x, size_t a) {
     return ((T*)x->data)[a];
 }
 
-ExecutionGraph::~ExecutionGraph() {}
+ExecutionGraph::~ExecutionGraph() {
+    for (auto instr : instrs_) delete instr;
+}
 
 class SequentialInterpreter : public Interpreter {
 public:
-    SequentialInterpreter(ExecutionGraph* eg) : 
-        eg(eg),
-        storage(eg->n_mem_locs()),
-        args(NULL)
-    {
-    }
+    SequentialInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs) 
+    : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL) {}
 
     Object * get(MemLocation m) {
-        return storage[m.index].get();
+        return storage_[m.index].get();
     }
     void set(MemLocation m, Object * val) {
-        storage[m.index] = val;
+        storage_[m.index] = val;
     }
     Object * getarg(int argind) {
-        cgt_assert(argind < args->len);        
-        return args->members[argind].get();
+        cgt_assert(argind < args_->len);        
+        return args_->members[argind].get();
     }
     Tuple * run(Tuple * newargs) {
+        args_ = newargs;
         cgt_assert(newargs != NULL);
-        cgt_assert(newargs->len == eg->n_args());
-        args = newargs;
-        for (Instruction* instr : eg->get_instrs()) {
+        cgt_assert(newargs->len == eg_->n_args());
+        for (Instruction* instr : eg_->instrs()) {
             instr->fire(this);
         }
-        args = NULL;
-        Tuple * out = new Tuple(eg->n_outputs());
-        for (int i=0; i < eg->n_outputs(); ++i) {
-            int index = eg->get_output_locs()[i].index;
-            out->setitem(i, get(eg->get_output_locs()[i]));
+        args_ = NULL;
+        size_t n_outputs = output_locs_.size();
+        Tuple * out = new Tuple(n_outputs);
+        for (int i=0; i < n_outputs; ++i) {
+            int index = output_locs_[i].index;
+            out->setitem(i, get(output_locs_[i]));
         }
         return out;
         // todo actually do something with outputs
@@ -48,13 +47,14 @@ public:
     ~SequentialInterpreter() {
     }
 private:
-    ExecutionGraph* eg;
-    vector<IRC<Object>> storage;
-    Tuple * args;
+    ExecutionGraph* eg_;
+    vector<MemLocation> output_locs_;
+    vector<IRC<Object>> storage_;
+    Tuple * args_;
 };
 
-Interpreter* create_interpreter(ExecutionGraph* eg) {
-    return new SequentialInterpreter(eg);
+Interpreter* create_interpreter(ExecutionGraph* eg, vector<MemLocation> output_locs) {
+    return new SequentialInterpreter(eg, output_locs);
 }
 
 void LoadArgument::fire(Interpreter* interp) {
