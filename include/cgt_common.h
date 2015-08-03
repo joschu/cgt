@@ -32,20 +32,20 @@ typedef enum Devtype {
   DevGPU
 } Devtype;
 
+class Array;
+class Tuple;
+
 class Object {
 public:
   enum ObjectKind {
-    Undef=0,
-    Array,
-    Tuple
+    UndefKind=0,
+    ArrayKind,
+    TupleKind
   };
-  Object() : ref_cnt(0), kind(Undef) { }
+  Object() : ref_cnt(0), kind(UndefKind) { }
   Object(ObjectKind kind) : ref_cnt(0), kind(kind) { }
   void Retain() const { ++ref_cnt; }
-  void Release() const {
-    assert (ref_cnt > 0 && "Reference count is already zero.");
-    if (--ref_cnt == 0) delete static_cast<const Object *>(this);
-  }
+  inline void Release() const;
   ObjectKind kind;
 private:
   mutable unsigned ref_cnt;
@@ -64,9 +64,6 @@ public:
   bool ownsdata;
 };
 
-static inline bool cgt_is_array(Object *o) { return o->kind == Object::Array; }
-static inline bool cgt_is_tuple(Object *o) { return o->kind == Object::Tuple; }
-
 class Tuple : public Object {
 public:
   Tuple(size_t len);
@@ -81,6 +78,18 @@ public:
   size_t len;
   IRC<Object> *members;
 };
+
+void Object::Release() const {
+  assert (ref_cnt > 0 && "Reference count is already zero.");
+  if (--ref_cnt == 0) {
+    if (kind==ArrayKind) delete (const Array*)this;  // XXX is this legit?
+    else if (kind==TupleKind) delete (const Tuple*)this;
+    else assert(0 && "invalid kind");
+  }
+}
+
+static inline bool cgt_is_array(Object *o) { return o->kind == Object::ArrayKind; }
+static inline bool cgt_is_tuple(Object *o) { return o->kind == Object::TupleKind; }
 
 static inline size_t cgt_size(const Array *a) {
   size_t out = 1;

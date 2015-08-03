@@ -14,7 +14,7 @@
 namespace cgt {
 
 Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype)
-    : Object(ObjectKind::Array), ndim(ndim), dtype(dtype), 
+    : Object(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype), 
       devtype(devtype), ownsdata(true) {
   shape = new size_t[ndim];
   for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
@@ -24,7 +24,7 @@ Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype)
 
 Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype,
     void* fromdata, bool copy)
-    : Object(ObjectKind::Array), ndim(ndim), dtype(dtype), devtype(devtype) {
+    : Object(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype), devtype(devtype) {
   shape = new size_t[ndim];
   for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
   cgt_assert(fromdata != NULL);
@@ -46,7 +46,7 @@ Array::~Array() {
 }
 
 Tuple::Tuple(size_t len)
-    : Object(ObjectKind::Tuple), len(len) {
+    : Object(ObjectKind::TupleKind), len(len) {
   members = new IRC<Object>[len];
 }
 
