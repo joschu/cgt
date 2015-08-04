@@ -379,7 +379,7 @@ def as_node(val_or_node):
     """
     if isinstance(val_or_node, Node):
         return val_or_node
-    elif isinstance(val_or_node, (int, float, np.ndarray)):
+    elif isinstance(val_or_node, np.ndarray) or np.isscalar(val_or_node):
         return constant(val_or_node)
     elif val_or_node==[]:
         return constant(np.array([],dtype='i8')) # XXX maybe get rid of this
@@ -927,11 +927,18 @@ class ElwiseBinary(Op):
         node = Result(self, parents) # XXX TODO use staticmethod?
         node2sv = analysis["node2sv"]
         out = None
+        
         # The following replacements are allowed to return a scalar constant value
         # Before returning, we'll broadcast it back to the right shape
 
+        if isinstance(l.op,Fill) and not self.scalar_mask[1]:
+            out=Result(ElwiseBinary(self.opname, (True,False), self.info),
+                [constant(l.op.value), r])
+        elif isinstance(r.op,Fill) and not self.scalar_mask[0]:
+            out=Result(ElwiseBinary(self.opname, (False,True), self.info),
+                [l, constant(r.op.value)])
         # if both have single value, apply this operation numerically and fill the result with it
-        if l in node2sv and r in node2sv:
+        elif l in node2sv and r in node2sv:
             out =self.info.pyfunc(node2sv[l], node2sv[r])
         # if l has has a single value, apply the operation to l and return a Constant
         elif l in node2sv and isinstance(r.op, Constant):

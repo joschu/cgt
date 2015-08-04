@@ -1,0 +1,6 @@
+BUILDING THE DOCS
+
+    pip install -r requirements.txt
+    make html
+
+then open ``_build/html/index.html``

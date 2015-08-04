@@ -1,5 +1,14 @@
+__doc__ = """
+Neural turing machine.
+
+Doesn't work yet.
+
+"""
+
+
+
 import cgt, numpy as np, scipy.signal as ss, numpy.random as nr
-from cgt import floatX, core, nn
+from cgt import core, nn
 from collections import namedtuple
 from cgt.core import infer_shape
 
@@ -11,6 +20,7 @@ NTMOpts = namedtuple("NTMOpts",[
     "m", # dimension at each memory site
     "k", # dimension of input
     "p", # dimension of output
+    "ff_hid_sizes", # hidden layer sizes of feedforward controller
 ])
 
 
@@ -39,7 +49,7 @@ def make_ff_controller(opt):
     r_b_hm = r_bhm.reshape([r_bhm.shape[0], r_bhm.shape[1]*r_bhm.shape[2]])
     inp_bq = cgt.concatenate([r_b_hm, X_bk], axis=1)
 
-    hid_sizes = []
+    hid_sizes = opt.ff_hid_sizes
     activation = cgt.tanh
 
     layer_out_sizes = [in_size] + hid_sizes + [out_size]
@@ -86,9 +96,9 @@ def make_ff_controller(opt):
 # return M_bnm, w_bHn, r_bhm, y_bp
 def make_ntm_initial_states(opt):
     n, m, h, b = opt.n, opt.m, opt.h, opt.b
-    M_1nm = cgt.shared(nr.randn(1,n,m))
-    winit_1Hn = cgt.shared(nr.rand(1,2*h,n))
-    rinit_1hm = cgt.shared(nr.randn(1,h,m))
+    M_1nm = cgt.shared(.01*nr.randn(1,n,m))
+    winit_1Hn = cgt.shared(.01*nr.rand(1,2*h,n))
+    rinit_1hm = cgt.shared(.01*nr.randn(1,h,m))
     return [cgt.repeat(arr, b, axis=0) for arr in (M_1nm, winit_1Hn, rinit_1hm)]
 
 def ntm_address(opt, wprev_bhn, M_bnm, k_bhm, beta_bh, g_bh, s_bh3, gamma_bh):
@@ -193,8 +203,8 @@ class Correlate1d(cgt.EasyCustomOp):
     def __init__(self, axis, ndim):
         self.axis = axis
         cgt.EasyCustomOp.__init__(self,
-            input_types = [core.Tensor(floatX, ndim), core.Tensor(floatX, ndim)],
-            output_type = core.Tensor(floatX, ndim),
+            input_types = [core.Tensor(cgt.floatX, ndim), core.Tensor(cgt.floatX, ndim)],
+            output_type = core.Tensor(cgt.floatX, ndim),
             forward_impl = self.correlate_forward,
             pullback_impl = self.correlate_pullback)
     def correlate_forward(self, x, s):
@@ -225,12 +235,12 @@ class CopyTask(object):
         self.t = seq_length
         self.k = input_dim
     def gen_batch(self):
-        x_tbk = np.zeros((2*self.t + 2, self.b, self.k),floatX)
+        x_tbk = np.zeros((2*self.t + 2, self.b, self.k),cgt.floatX)
         x_tbk[0, :, 0] = 1 # start symbol
         message = nr.rand(self.t, self.b, self.k)
         x_tbk[1:self.t+1] = message  
         x_tbk[self.t+1, :, 1] = 1 # end symbol
-        y_tbk = np.zeros((2*self.t + 2, self.b, self.k),floatX)
+        y_tbk = np.zeros((2*self.t + 2, self.b, self.k),cgt.floatX)
         y_tbk[self.t+2:] = message # desired output
         return x_tbk, y_tbk
     def loss_timesteps(self):
@@ -240,7 +250,12 @@ class CopyTask(object):
 
 
 def main():
-    cgt.set_precision('quad')
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--grad_check",action="store_true")
+    args = parser.parse_args()
+
+    cgt.set_precision("quad" if args.grad_check else "single")
     np.random.seed(0)
     x = cgt.vector('x')
     y = cgt.vector('y')
@@ -255,6 +270,7 @@ def main():
         m = 5, # dimension at each memory site
         k = 2, # dimension of input
         p = 2, # dimension of output
+        ff_hid_sizes = []
     )
 
     # task parameters
@@ -262,13 +278,14 @@ def main():
 
     ntm = make_ntm(opt)
     params = ntm.get_parameters()
+    print params
     th = nn.setup_contiguous_storage(params)
     th[:] = nr.uniform(-0.08, 0.08, th.shape)
 
     task = CopyTask(opt.b, seq_length, opt.k)
     f_loss, f_loss_and_grad = make_funcs(opt, ntm, task.total_time(), task.loss_timesteps())
 
-    if True:
+    if args.grad_check:
         x,y = task.gen_batch()
         def f(thnew):
             thold = th.copy()

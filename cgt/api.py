@@ -73,7 +73,7 @@ def _get_nu_cast(dtype):
     return _nu_cast
 
 def cast(x, dtype):
-    dtype = core.Dtype.canon(dtype)
+    x = core.as_node(x)
     if (x.dtype == dtype):
         return x
     else:
@@ -159,8 +159,11 @@ def elwise_binary(opname, x, y):
 
 def fill(val, shape):
     assert isinstance(shape, list)
-    if isinstance(val, core.Node) and isinstance(val.op, core.Constant):
-        return core.Result(core.Fill(), [val.op.value]+shape)
+    val = core.as_node(val)
+    # if val is a constant, use a Fill Op, which includes the value as a attribute
+    if isinstance(val.op, core.Constant):
+        return core.Result(core.Fill(val.op.value), shape)
+    # if val is a non-constant variable, we can use a Repeat Op
     else:
         singleton = reshape(val, [1]*len(shape))
         return core.Result(core.Repeat(range(len(shape))), [singleton] + shape)
