@@ -240,7 +240,7 @@ def main():
     parser.add_argument("--size_batch", type=int,default=64)
     parser.add_argument("--n_layers",type=int,default=2)
     parser.add_argument("--n_unroll",type=int,default=64)
-    parser.add_argument("--step_size",type=float,default=1e-2)
+    parser.add_argument("--step_size",type=float,default=1e-1)
     parser.add_argument("--decay_rate",type=float,default=0.95)
     parser.add_argument("--n_epochs",type=int,default=20)
     parser.add_argument("--arch",choices=["lstm","gru"],default="lstm")
