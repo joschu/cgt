@@ -85,10 +85,6 @@ def cat_sample(ps):
     return out
 
 
-# - why does initial state persist between batches?
-# - GRU code and categories outputs
-# - zero initialization ?!
-
 def rmsprop_update(grad, state):
     state.sqgrad[:] *= state.decay_rate
     np.square(grad, out=state.scratch) # scratch=g^2

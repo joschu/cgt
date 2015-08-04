@@ -5,6 +5,7 @@ Neural network library, drawing inspiration from Torch's nn and nngraph
 import cgt
 from cgt import core, size
 import numpy as np
+from cgt.img_ops import *
 
 class Affine(object):
     """
