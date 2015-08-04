@@ -243,11 +243,11 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
 
                 else:
                     write_loc = node2memloc[node2memowner[node]]
-                instrs.append(CallByRef(node, read_locs, write_loc))
+                instrs.append(ReturnByRef(node, read_locs, write_loc))
             else:
                 assert node.op.call_type == "valret"
                 write_loc = counter.new_memloc()
-                instrs.append(CallByVal(node, read_locs, write_loc))
+                instrs.append(ReturnByVal(node, read_locs, write_loc))
         node2memloc[node] = write_loc
     return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
 
@@ -513,7 +513,7 @@ class BuildTup(Instr):
     def to_json(self):
         return {"type" : "BuildTup"} # XXX
 
-class CallByRef(Instr):
+class ReturnByRef(Instr):
     def __init__(self, node, read_locs, write_loc):
         self.node = node # XXX shouldn't need to store node here.
         self.read_locs = read_locs
@@ -523,11 +523,11 @@ class CallByRef(Instr):
             [interp.get(mem) for mem in self.read_locs], 
             interp.get(self.write_loc))
     def __repr__(self):
-        return "CallByRef:%s"%self.node.op.get_name()
+        return "ReturnByRef:%s"%self.node.op.get_name()
     def to_json(self):
-        return {"type" : "CallByRef", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
+        return {"type" : "ReturnByRef", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
 
-class CallByVal(Instr):
+class ReturnByVal(Instr):
     def __init__(self, node, read_locs, write_loc):
         self.node = node
         self.read_locs = read_locs
@@ -537,4 +537,4 @@ class CallByVal(Instr):
     def __repr__(self):
         return "ByVal:%s"%self.node.op.get_name()
     def to_json(self):
-        return {"type" : "CallByVal", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
+        return {"type" : "ReturnByVal", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}

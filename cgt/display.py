@@ -72,10 +72,21 @@ def print_text(outputs, o=sys.stdout):
         outputs = [outputs]
     node2name = {}
     for node in core.topsorted(outputs):
-        thisname = node2name[node] = "@%i"%len(node2name)
+        thisname = node2name[node] = (node.get_name() if node.is_input() else "") + "@%i"%len(node2name)
         if node.is_input():
-            o.write("Argument: %s\n"%thisname)
+            o.write("%s <- input\n"%thisname)
         else:
             o.write("%s = %s %s\n"%(thisname, node.op.get_name(), " ".join(node2name[parent]
                 for parent in node.parents)))
+
+def as_dot(nodes):
+    if isinstance(nodes, core.Node):
+        nodes = [nodes]
+    from graphviz import Digraph
+    g = Digraph()
+    for n in core.topsorted(nodes):
+        g.node(str(id(n)), str(n))
+        for p in n.parents:
+            g.edge(str(id(n)), str(id(p)))
+    return g
 

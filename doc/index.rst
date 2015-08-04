@@ -1,4 +1,3 @@
-
 *************************
 Computation Graph Toolkit
 *************************
@@ -9,13 +8,6 @@ Computation Graph Toolkit (CGT) is a library for evaluation and differentiation 
 .. CAUTION::
 
     **WORK IN PROGRESS!** This software is not yet released. There are some bugs and some rough edges. The user API may change, and the internals will change rapidly.
-
-
-
-.. toctree::
-   :maxdepth: 2
-
-   index
 
 
 What Does It Do?
@@ -35,14 +27,13 @@ CGT is motivated by large-scale machine learning and AI problems, however, the c
 With regard to previous work, CGT is most similar to Theano.
 However, CGT makes some core changes that necessitated a new codebase:
 
-1. C++/CUDA implementations of ops don't use the Python C-API. Furthermore, the computation graph is compiled into a datastructure that can be executed fully independently of python. Hence, multithreaded execution of the computation graphs is possible.
+1. C++/CUDA implementations of ops don't use the Python C-API. Furthermore, the computation graph is compiled into a data-structure that can be executed fully independently of python. Hence, multithreaded execution is possible.
 2. Internally, CGT substantially revises the internal datastructures and compilation pipeline. The following practical benefits result:
 
-    - Much faster graph simplification, which is designed carefully to take linear time in the size of the graph.
-    - Most shape errors can be detected at graph construction time.
+- Much faster graph simplification, which is designed carefully to take linear time in the size of the graph.
+- Most shape errors can be detected at graph construction time.
 
 CGT aims to make it easy to to construct large and complicated models, while ensuring that the resulting code is concise and closely resembles the underlying mathematical expressions.
-
 
 Installation
 ============
@@ -91,17 +82,8 @@ Follow the instructons for Option 2, but alter the cmake command to instead read
 Option 4: VM with preinstalled CGT + CUDA
 -----------------------------------------
 
-Internals
-=========
-
-Here we'll take a quick look at the datastructures used by CGT and the compilation pipeline used for compiling expressions into an executable form.
-
-.. notebook:: ../examples/display_tour.ipynb
-
-    
-
-
 TODO
+
 
 Running unit tests
 ------------------
@@ -110,11 +92,20 @@ You can run our suite of unit tests to verify your installation. In the source d
 
     python test/run_all_tests.py
 
+API Tour
+========
+
+.. notebook:: ../examples/api_tour.ipynb
 
 
+Internals Tour
+==============
+
+.. notebook:: ../examples/internals_tour.ipynb
 
 Debugging
 =========
+
 
 
 Cookbook

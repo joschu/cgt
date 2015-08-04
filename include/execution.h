@@ -104,9 +104,9 @@ private:
     MemLocation writeloc;
 };
 
-class CallByRef : public Instruction  {
+class ReturnByRef : public Instruction  {
 public:
-    CallByRef(vector<MemLocation> readlocs, MemLocation writeloc, ByRefFunCl closure)
+    ReturnByRef(vector<MemLocation> readlocs, MemLocation writeloc, ByRefFunCl closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
@@ -115,9 +115,9 @@ private:
     ByRefFunCl closure;
 };
 
-class CallByVal : public Instruction  {
+class ReturnByVal : public Instruction  {
 public:
-    CallByVal(vector<MemLocation> readlocs, MemLocation writeloc, ByValFunCl closure)
+    ReturnByVal(vector<MemLocation> readlocs, MemLocation writeloc, ByValFunCl closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:

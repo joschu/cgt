@@ -91,7 +91,7 @@ void BuildTup::fire(Interpreter* interp) {
     interp->set(writeloc, out);
 }
 
-void CallByRef::fire(Interpreter* interp) {
+void ReturnByRef::fire(Interpreter* interp) {
     int n_inputs = readlocs.size();
     cgtObject * reads[n_inputs];
     for (int i=0; i < n_inputs; ++i) {
@@ -102,7 +102,7 @@ void CallByRef::fire(Interpreter* interp) {
 }
 
 // TODO actually allocate tuple
-void CallByVal::fire(Interpreter* interp) {
+void ReturnByVal::fire(Interpreter* interp) {
     int n_inputs = readlocs.size();
     vector<cgtObject *> args(n_inputs);
     for (int i = 0; i < n_inputs; ++i) {
