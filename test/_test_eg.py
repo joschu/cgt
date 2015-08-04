@@ -7,7 +7,7 @@ class EgTestCase(unittest.TestCase):
         cgt.set_precision('double')
         x = cgt.vector()
         y = cgt.square(x)
-        eg = cgt.execution.the_whole_schmear([x],[y+y],[])
+        eg = cgt.execution.compilation_pipeline([x],[y+y],[])
         pprint.pprint(eg.to_json())
         import cycgt2
         interp = cycgt2.cInterpreter(eg)

@@ -9,9 +9,7 @@
 // Basic structs and enums
 // ================================================================
 
-namespace cgt {
-
-typedef enum Dtype {
+typedef enum cgtDtype {
   cgt_i1 = 1,
   cgt_i2 = 3,
   cgt_i4 = 5,
@@ -24,26 +22,23 @@ typedef enum Dtype {
   cgt_c16 = 15,
   cgt_c32 = 16,
   cgt_O = 17
-} Dtype;
+} cgtDtype;
 // print np.dtype('i1').num # etc
 
-typedef enum Devtype {
-  DevCPU,
-  DevGPU
-} Devtype;
+typedef enum cgtDevtype {
+  cgtCPU,
+  cgtGPU
+} cgtDevtype;
 
-class Array;
-class Tuple;
-
-class Object {
+class cgtObject {
 public:
   enum ObjectKind {
     UndefKind=0,
     ArrayKind,
     TupleKind
   };
-  Object() : ref_cnt(0), kind(UndefKind) { }
-  Object(ObjectKind kind) : ref_cnt(0), kind(kind) { }
+  cgtObject() : ref_cnt(0), kind(UndefKind) { }
+  cgtObject(ObjectKind kind) : ref_cnt(0), kind(kind) { }
   void Retain() const { ++ref_cnt; }
   inline void Release() const;
   ObjectKind kind;
@@ -51,58 +46,104 @@ private:
   mutable unsigned ref_cnt;
 };
 
-class Array : public Object {
+class cgtArray : public cgtObject {
 public:
-  Array(int ndim, size_t *shape, Dtype, Devtype);
-  Array(int ndim, size_t *shape, Dtype, Devtype, void* fromdata, bool copy);
-  ~Array();
+  cgtArray(int ndim, size_t *shape, cgtDtype, cgtDevtype);
+  cgtArray(int ndim, size_t *shape, cgtDtype, cgtDevtype, void* fromdata, bool copy);
+  ~cgtArray();
   int ndim;
-  Dtype dtype;
-  Devtype devtype;
+  cgtDtype dtype;
+  cgtDevtype devtype;
   size_t *shape;
   void *data;
   bool ownsdata;
 };
 
-class Tuple : public Object {
+class cgtTuple : public cgtObject {
 public:
-  Tuple(size_t len);
-  void setitem(int i, Object *o) {
+  cgtTuple(size_t len);
+  void setitem(int i, cgtObject *o) {
     members[i] = o;
   }
-  Object *getitem(int i) {
+  cgtObject *getitem(int i) {
     return members[i].get();
   }
   size_t size() {return len;}
-  ~Tuple();
+  ~cgtTuple();
   size_t len;
-  IRC<Object> *members;
+  IRC<cgtObject> *members;
 };
 
-void Object::Release() const {
+void cgtObject::Release() const {
   assert (ref_cnt > 0 && "Reference count is already zero.");
   if (--ref_cnt == 0) {
-    if (kind==ArrayKind) delete (const Array*)this;  // XXX is this legit?
-    else if (kind==TupleKind) delete (const Tuple*)this;
+    if (kind==ArrayKind) delete (const cgtArray *)this;  // XXX is this legit?
+    else if (kind==TupleKind) delete (const cgtTuple *)this;
     else assert(0 && "invalid kind");
   }
 }
 
-static inline bool cgt_is_array(Object *o) { return o->kind == Object::ArrayKind; }
-static inline bool cgt_is_tuple(Object *o) { return o->kind == Object::TupleKind; }
+typedef void (*cgtByRefFun)(void * /* closure data */, cgtObject ** /* read */, cgtObject * /* write */);
+typedef cgtObject *(*cgtByValFun)(void * /* closure data */, cgtObject ** /* read */);
 
-static inline size_t cgt_size(const Array *a) {
+// ================================================================
+// Error handling 
+// ================================================================
+
+#define cgt_assert(x)  \
+    do {\
+        if (!(x)) {\
+            fprintf (stderr, "Assertion failed: %s (%s:%d)\n", #x, \
+                __FILE__, __LINE__);\
+            fflush (stderr);\
+            abort();\
+        }\
+    } while (0)
+
+#define CGT_NORETURN __attribute__ ((noreturn))
+
+
+typedef enum {
+  cgtStatusOK = 0,
+  cgtStatusErr
+} cgtStatus;
+
+extern cgtStatus cgtGlobalStatus;
+extern char cgtGlobalErrorMsg[1000];
+
+static inline void clear_error() {
+  cgtGlobalStatus = cgtStatusOK;
+}
+
+// TODO can do it more safely now that we're in c++
+#define cgt_check(x, msg, ...) \
+    do {\
+        if ((!(x))) {\
+            sprintf(cgtGlobalErrorMsg, msg, ##__VA_ARGS__);\
+            cgtGlobalStatus = cgtStatusErr;\
+        }\
+    } while(0)
+
+
+// ================================================================
+// Memory management
+// ================================================================
+
+static inline bool cgt_is_array(cgtObject *o) { return o->kind == cgtObject::ArrayKind; }
+static inline bool cgt_is_tuple(cgtObject *o) { return o->kind == cgtObject::TupleKind; }
+
+static inline size_t cgt_size(const cgtArray *a) {
   size_t out = 1;
   for (size_t i = 0; i < a->ndim; ++i) out *= a->shape[i];
   return out;
 }
 
-static inline void cgt_get_strides(const Array *a, size_t *strides) {
+static inline void cgt_get_strides(const cgtArray *a, size_t *strides) {
   if (a->ndim > 0) strides[a->ndim - 1] = 1;
   for (int i = a->ndim - 2; i >= 0; --i) strides[i] = strides[i + 1] * a->shape[i + 1];
 }
 
-static inline int cgt_itemsize(Dtype dtype) {
+static inline int cgt_itemsize(cgtDtype dtype) {
   switch (dtype) {
     case cgt_i1:
       return 1;
@@ -131,61 +172,13 @@ static inline int cgt_itemsize(Dtype dtype) {
   }
 }
 
-static inline size_t cgt_nbytes(const Array *a) {
+static inline size_t cgt_nbytes(const cgtArray *a) {
   return cgt_size(a) * cgt_itemsize(a->dtype);
 }
-
-typedef void (*Inplacefun)(void * /* closure data */, Object ** /* read */, Object* /* write */);
-typedef Object *(*Valretfun)(void * /* closure data */, Object ** /* read */);
-
-// ================================================================
-// Error handling 
-// ================================================================
-
-#define cgt_assert(x)  \
-    do {\
-        if (!(x)) {\
-            fprintf (stderr, "Oy, vey! Assertion failed: %s (%s:%d)\n", #x, \
-                __FILE__, __LINE__);\
-            fflush (stderr);\
-            cgt::cgt_abort();\
-        }\
-    } while (0)
-
-#define CGT_NORETURN __attribute__ ((noreturn))
-
-CGT_NORETURN void cgt_abort();
-
-typedef enum {
-  StatusOK = 0,
-  StatusErr
-} Status;
-
-extern Status gStatus;
-extern char gErrorMsg[1000];
-
-static inline void cgt_clear_error() {
-  gStatus = StatusOK;
-}
-
-// TODO can do it more safely now that we're in c++
-#define cgt_check(x, msg, ...) \
-    do {\
-        if ((!(x))) {\
-            sprintf(cgt::gErrorMsg, msg, ##__VA_ARGS__);\
-            cgt::gStatus = cgt::StatusErr;\
-        }\
-    } while(0)
-
-
-// ================================================================
-// Memory management
-// ================================================================
 
 void *cgt_alloc(char devtype, size_t size);
 void cgt_free(char devtype, void *ptr);
 void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, size_t nbytes);
 
-}
 
 

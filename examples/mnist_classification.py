@@ -1,7 +1,7 @@
 # Initially copied from https://github.com/Newmu/Theano-Tutorials/blob/master/4_modern_net.py
 import cgt
 from cgt import nn
-from cgt.distributions import Categorical
+from cgt.distributions import categorical
 import numpy as np
 from example_utils import fmt_row, fetch_dataset, train_test_val_slices
 import time
@@ -71,11 +71,11 @@ def main():
 
     params = [w_h, w_h2, w_o]
 
-    cost_drop = -cgt.mean(Categorical.loglik(y, pofy_drop))
+    cost_drop = -cgt.mean(categorical.loglik(y, pofy_drop))
     updates = rmsprop_updates(cost_drop, params, lr=0.001)
 
     y_nodrop = cgt.argmax(pofy_drop, axis=1)
-    cost_nodrop = -cgt.mean(Categorical.loglik(y, pofy_nodrop))
+    cost_nodrop = -cgt.mean(categorical.loglik(y, pofy_nodrop))
     err_nodrop = cgt.cast(cgt.not_equal(y_nodrop, y), cgt.floatX).mean()
 
     train = cgt.function(inputs=[X, y], outputs=[], updates=updates)

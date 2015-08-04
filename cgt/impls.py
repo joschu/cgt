@@ -62,28 +62,28 @@ def compile_file(fname, libpath, extra_link_flags = ""):
         if fname.endswith(".cpp"):
             cap(r'''
 cd %(cacheroot)s && \
-c++ -fPIC -O3 -DNDEBUG %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
+c++ -fPIC -O3 -DNDEBUG -ffast-math %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ -fPIC -O3 -DNDEBUG -ffast-math %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
             '''%d)
         elif fname.endswith(".cu"):
             cap(r'''
 cd %(cacheroot)s && \
 nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -fPIC -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
+c++ -fPIC -O3 -DNDEBUG -ffast-math -fPIC -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
             '''%d)
                 # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
 
     else:
         if fname.endswith(".cpp"):
             cap('''
-c++ -fPIC -O3 -DNDEBUG %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
+c++ -fPIC -O3 -DNDEBUG -ffast-math %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ -fPIC -O3 -DNDEBUG -ffast-math -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
             '''%d)
         elif fname.endswith(".cu"):
             cap(r'''
 cd %(cacheroot)s && 
 nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler -fPIC -Xcompiler -O3 -Xcompiler -DNDEBUG %(includes)s %(defines)s && \
-c++  -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(cudalibs)s -Wl,-rpath,%(cudaroot)s
+c++  -fPIC -O3 -DNDEBUG -ffast-math -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(cudalibs)s -Wl,-rpath,%(cudaroot)s
             '''%d
             )
 

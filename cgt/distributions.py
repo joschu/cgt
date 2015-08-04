@@ -27,6 +27,7 @@ class _Categorical(Distribution):
         return -(p*cgt.log(q)).sum(axis=1)
     def loglik(self, labels, p):
         return cgt.log(p[cgt.arange(cgt.size(labels,0)),labels])
+categorical = _Categorical()
 
 class _DiagonalGaussian(Distribution):
     pass

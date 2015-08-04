@@ -50,13 +50,16 @@ def argmax(x, axis=None, keepdims=False):
 def batched_matmul(x, y):
     return core.Result(core.BatchedMul22(False,False), [x,y])
 
+
 def broadcast(opname, x, y, bcpat):
     (xpat, ypat) = bcpat.split(',')
     (xbcaxes, ybcaxes) = [[i for (i, letter) in enumerate(pat) if (letter == '1')] for pat in (xpat, ypat)]
     assert (x.get_ndim() == y.get_ndim())
     if xbcaxes:
+        for i in xbcaxes: core.assertequal1(size(x,i), 1, "you mislabeled axis %i as singleton"%i)
         x = core.Result(core.Repeat(xbcaxes), [x] + [size(y, ax) for ax in xbcaxes])
     if ybcaxes:
+        for i in ybcaxes: core.assertequal1(size(y,i), 1, "you mislabeled axis %i as singleton"%i)
         y = core.Result(core.Repeat(ybcaxes), [y] + [size(x, ax) for ax in ybcaxes])
     return elwise_binary(opname, x, y)
 
@@ -178,7 +181,7 @@ def getitem(arr, slis):
         return tuple_index(arr, slis)
     if (not _is_list_or_tuple(slis)):
         slis = [slis]
-    if all(((isinstance(sli, (int, slice)) or (isinstance(sli, slice) and (sli == _COLON))) for sli in slis)):
+    if all(isinstance(sli, (int, slice, type(None))) for sli in slis):
         return getitem_nonfancy(arr, slis)
     elif all((isinstance(sli, (np.ndarray, core.Node)) for sli in slis)):
         return getitem_fancy(arr, slis)
@@ -198,7 +201,7 @@ def getitem_nonfancy(arr, slis):
     if (not _is_list_or_tuple(slis)):
         slis = [slis]
     for sli in slis:
-        if (sli == _COLON):
+        if isinstance(sli, slice) and all(x is None for x in (sli.start, sli.stop, sli.step)):
             shapedesc.append(ax)
         elif (sli is None):
             shapedesc.append('+')
@@ -213,9 +216,9 @@ def getitem_nonfancy(arr, slis):
                 shapedesc.append('-')
             else:
                 raise NotImplementedError
-            start = (sli.start or 0)
+            start = (0 if sli.start is None else sli.start)
             stop = size(arr, ax) if (sli.stop is None) else sli.stop
-            step = (sli.step or 1)
+            step = (1 if sli.step is None else sli.step)
             if (isinstance(stop, int) and (stop < 0)):
                 stop = size(arr, ax) - stop
             out = core.Result(core.GetSli(ax), [out, start, stop, step])
@@ -227,7 +230,7 @@ def getitem_nonfancy(arr, slis):
         newshape = []
         for d in shapedesc:
             if (d == '+'):
-                newshape.append(d)
+                newshape.append(1)
             elif (d == '-'):
                 axidx += 1
             else:
@@ -258,8 +261,11 @@ def mean(x, axis=None, keepdims=False):
 def mul_multi(xs):
     return reduce(operator.mul, xs) if (len(xs) > 0) else constant(np.array(1, dtype='i8'))
 
-def norm(x, axes=None, p=2):
-    return pow(pow(x, p).sum(axes=axes), 1.0 / p)
+def norm(x, axis=None, p=2, keepdims=False):
+    if p==2:
+        return sqrt(square(x).sum(axis=axis,keepdims=keepdims))
+    else:
+        return pow(pow(x, p).sum(axis=axis,keepdims=keepdims), 1.0 / p)
 
 def outer(x, y):
     assert (x.ndim == y.ndim == 1)
@@ -267,7 +273,7 @@ def outer(x, y):
 
 def _validate_shape(shp,funcname):
     if len(shp)==1 and isinstance(shp[0],tuple):
-        raise ValueError("you called %s(x) where x is a tuple. You should call %s(*x) instead."%(funcname,funcname))
+        raise ValueError("you called %s(x) where x is a tuple. You should call %s(a,b,c...) instead."%(funcname,funcname))
 
 def rand(*shp):
     _validate_shape(shp,"rand")
@@ -287,6 +293,8 @@ def repeat(x, repeats, axis):
     return core.Result(core.Repeat([axis]), [x, constant(repeats)])
 
 def reshape(x, shp):
+    shp = map(core.as_node, shp)
+    assert all(s.ndim==0 and core.dtype_kind(s.dtype)=='i' for s in shp)
     return core.Result(core.Reshape(), [x] + list(shp))
 
 def rfft(x, periods, axes):
@@ -337,6 +345,9 @@ def sub2ind(subs, shp):
     for i in xrange(ndim-2, -1, -1):
         strides[i] = shp[i+1] * strides[i+1]
     return add_multi([stride*sub for (stride,sub) in utils.safezip(strides, subs)])
+
+def prod(x, axis=None, keepdims=False):
+    return cgt.exp(cgt.sum(cgt.log(x), axis=axis, keepdims=keepdims))
 
 def sum(x, axis=None, keepdims=False): #pylint: disable=W0622
     if x.dtype == 'i1':
@@ -396,8 +407,6 @@ def _red_axes(axis, ndim):
         return list(axis)
     else:
         raise ValueError("invalid argument 'axis'=%s" % axis)
-
-_COLON = slice(None, None, None)
 
 
 if sys.argv[0] != "gen_py.py":

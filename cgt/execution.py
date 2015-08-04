@@ -15,7 +15,7 @@ def function(inputs, outputs, dbg = None, updates=None):
     
     outputs = [make_tuple(*x) if isinstance(x, tuple) else x for x in outputs]
 
-    interp = the_whole_schmear(inputs, outputs, updates)
+    interp = compilation_pipeline(inputs, outputs, updates)
     return interp
 
 def function1(inputs, output, dbg=None, updates=None):
@@ -134,8 +134,13 @@ def topsorted_shapes_first(outputs, node2shape):
                     continue
             ps = i.parents
             ###### Changed part ######
-            if i.ndim > 0 and not i.is_input() and i.op.call_type=="inplace": 
-                ps = ps + node2shape[i]
+            if i.ndim > 0 and not i.is_input() and i.op.call_type=="inplace":
+                if i in node2shape:
+                    shpels = node2shape[i]
+                else:
+                    utils.warn("odd...")
+                    shpels = i.op.shp_apply(i.parents)
+                ps = ps + shpels
             elif is_tuple(i):
                 for arrshp in node2shape[i]:
                     ps = ps + arrshp
@@ -238,16 +243,16 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
 
                 else:
                     write_loc = node2memloc[node2memowner[node]]
-                instrs.append(InPlace(node, read_locs, write_loc))
+                instrs.append(CallByRef(node, read_locs, write_loc))
             else:
                 assert node.op.call_type == "valret"
                 write_loc = counter.new_memloc()
-                instrs.append(ValReturning(node, read_locs, write_loc))
+                instrs.append(CallByVal(node, read_locs, write_loc))
         node2memloc[node] = write_loc
     return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
 
 
-def the_whole_schmear(inputs, outputs, updates):
+def compilation_pipeline(inputs, outputs, updates):
     """
     Compiles the expression graph into an execution graph. 
     """
@@ -508,7 +513,7 @@ class BuildTup(Instr):
     def to_json(self):
         return {"type" : "BuildTup"} # XXX
 
-class InPlace(Instr):
+class CallByRef(Instr):
     def __init__(self, node, read_locs, write_loc):
         self.node = node # XXX shouldn't need to store node here.
         self.read_locs = read_locs
@@ -518,11 +523,11 @@ class InPlace(Instr):
             [interp.get(mem) for mem in self.read_locs], 
             interp.get(self.write_loc))
     def __repr__(self):
-        return "InPlace:%s"%self.node.op.get_name()
+        return "CallByRef:%s"%self.node.op.get_name()
     def to_json(self):
-        return {"type" : "InPlace", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
+        return {"type" : "CallByRef", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
 
-class ValReturning(Instr):
+class CallByVal(Instr):
     def __init__(self, node, read_locs, write_loc):
         self.node = node
         self.read_locs = read_locs
@@ -530,6 +535,6 @@ class ValReturning(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, self.node.op.py_apply_valret([interp.get(mem) for mem in self.read_locs]))
     def __repr__(self):
-        return "ValRet:%s"%self.node.op.get_name()
+        return "ByVal:%s"%self.node.op.get_name()
     def to_json(self):
-        return {"type" : "ValReturning", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
+        return {"type" : "CallByVal", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}

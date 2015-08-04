@@ -11,10 +11,8 @@
 // Object alloc/dealloc 
 // ================================================================
 
-namespace cgt {
-
-Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype)
-    : Object(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype), 
+cgtArray::cgtArray(int ndim, size_t *inshape, cgtDtype dtype, cgtDevtype devtype)
+    : cgtObject(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype),
       devtype(devtype), ownsdata(true) {
   shape = new size_t[ndim];
   for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
@@ -22,9 +20,9 @@ Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype)
   data = cgt_alloc(devtype, nbytes);
 }
 
-Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype,
+cgtArray::cgtArray(int ndim, size_t *inshape, cgtDtype dtype, cgtDevtype devtype,
     void* fromdata, bool copy)
-    : Object(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype), devtype(devtype) {
+    : cgtObject(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype), devtype(devtype) {
   shape = new size_t[ndim];
   for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
   cgt_assert(fromdata != NULL);
@@ -32,7 +30,7 @@ Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype,
     size_t nbytes = cgt_nbytes(this);
     data = cgt_alloc(devtype, nbytes);
     ownsdata = true;
-    cgt_memcpy(devtype, DevCPU, data, fromdata, nbytes);
+    cgt_memcpy(devtype, cgtCPU, data, fromdata, nbytes);
   }
   else {
     data = fromdata;
@@ -40,17 +38,17 @@ Array::Array(int ndim, size_t *inshape, Dtype dtype, Devtype devtype,
   }
 }
 
-Array::~Array() {
+cgtArray::~cgtArray() {
   delete[] shape;
   if (ownsdata) free(data);
 }
 
-Tuple::Tuple(size_t len)
-    : Object(ObjectKind::TupleKind), len(len) {
-  members = new IRC<Object>[len];
+cgtTuple::cgtTuple(size_t len)
+    : cgtObject(ObjectKind::TupleKind), len(len) {
+  members = new IRC<cgtObject>[len];
 }
 
-Tuple::~Tuple() {
+cgtTuple::~cgtTuple() {
   delete[] members;
 }
 
@@ -63,15 +61,16 @@ void cgt_abort() {
   abort();
 }
 
-Status gStatus = StatusOK;
-char gErrorMsg[1000];
+cgtStatus cgtGlobalStatus = cgtStatusOK;
+char cgtGlobalErrorMsg[1000];
+
 
 // ================================================================
 // Memory management 
 // ================================================================
 
 void *cgt_alloc(char devtype, size_t size) {
-  if (devtype == DevCPU) {
+  if (devtype == cgtCPU) {
     return malloc(size);
   }
   else {
@@ -86,7 +85,7 @@ void *cgt_alloc(char devtype, size_t size) {
 }
 
 void cgt_free(char devtype, void *ptr) {
-  if (devtype == DevCPU) {
+  if (devtype == cgtCPU) {
     free(ptr);
   }
   else {
@@ -99,15 +98,15 @@ void cgt_free(char devtype, void *ptr) {
 }
 
 void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, size_t nbytes) {
-  if (src_type == DevCPU && dest_type == DevCPU) {
+  if (src_type == cgtCPU && dest_type == cgtCPU) {
     memcpy(dest_ptr, src_ptr, nbytes);
   }
   else {
 #ifdef CGT_ENABLE_CUDA
         enum cudaMemcpyKind kind;
-        if       (src_type == DevCPU && dest_type == DevGPU) kind = cudaMemcpyHostToDevice;
-        else if  (src_type == DevGPU && dest_type == DevCPU) kind = cudaMemcpyDeviceToHost;
-        else if  (src_type == DevGPU && dest_type == DevGPU) kind = cudaMemcpyDeviceToDevice;
+        if       (src_type == cgtCPU && dest_type == cgtGPU) kind = cudaMemcpyHostToDevice;
+        else if  (src_type == cgtGPU && dest_type == cgtCPU) kind = cudaMemcpyDeviceToHost;
+        else if  (src_type == cgtGPU && dest_type == cgtGPU) kind = cudaMemcpyDeviceToDevice;
         else cgt_assert(0 && "invalid src/dest types");
         CUDA_CHECK(cudaMemcpy(dest_ptr, src_ptr, nbytes, kind));
         #else
@@ -116,4 +115,3 @@ void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, si
   }
 }
 
-}

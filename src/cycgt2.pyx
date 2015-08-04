@@ -18,9 +18,41 @@ cnp.import_array()
  
 
 
-cdef extern from "cgt_common.h" namespace "cgt":
+cdef extern from "cgt_common.h":
 
-    cdef enum Dtype:
+    cppclass IRC[T]:
+        pass
+
+    cppclass cgtObject:
+        pass
+
+    ctypedef void (*cgtByRefFun)(void*, cgtObject**, cgtObject*);
+    ctypedef cgtObject* (*cgtByValFun)(void*, cgtObject**);
+
+    enum cgtDevtype:
+        cgtCPU
+        cgtGPU
+
+    cppclass cgtArray(cgtObject):
+        cgtArray(int, size_t*, cgtDtype, cgtDevtype)
+        int ndim
+        cgtDtype dtype
+        cgtDevtype devtype
+        size_t* shape
+        void* data
+        size_t stride
+        bint ownsdata    
+
+    cppclass cgtTuple(cgtObject):
+        cgtTuple(size_t)
+        void setitem(int, cgtObject*)
+        cgtObject* getitem(int)
+        size_t size();
+        size_t len
+        cgtObject** members        
+
+
+    cdef enum cgtDtype:
         cgt_i1
         cgt_i2
         cgt_i4
@@ -34,47 +66,16 @@ cdef extern from "cgt_common.h" namespace "cgt":
         cgt_c32
         cgt_O
 
-    cppclass IRC[T]:
-        pass
+    size_t cgt_size(const cgtArray* a)
+    int cgt_itemsize(cgtDtype dtype)
+    size_t cgt_nbytes(const cgtArray* a)
 
-    cppclass Object:
-        pass
+    bint cgt_is_array(cgtObject*)
+    bint cgt_is_tuple(cgtObject*)
 
-    ctypedef void (*Inplacefun)(void*, Object**, Object*);
-    ctypedef Object* (*Valretfun)(void*, Object**);
-
-    enum Devtype:
-        DevCPU
-        DevGPU
-
-    cppclass Array(Object):
-        Array(int, size_t*, Dtype, Devtype)
-        int ndim
-        Dtype dtype
-        Devtype devtype
-        size_t* shape
-        void* data
-        size_t stride
-        bint ownsdata    
-
-    cppclass Tuple(Object):
-        Tuple(size_t)
-        void setitem(int, Object*)
-        Object* getitem(int)
-        size_t size();
-        size_t len
-        Object** members        
-
-    size_t cgt_size(const Array* a)
-    int cgt_itemsize(Dtype dtype)
-    size_t cgt_nbytes(const Array* a)
-
-    bint cgt_is_array(Object*)
-    bint cgt_is_tuple(Object*)
-
-    void* cgt_alloc(Devtype devtype, size_t)    
-    void cgt_free(Devtype devtype, void* ptr)
-    void cgt_memcpy(Devtype dest_type, Devtype src_type, void* dest_ptr, void* src_ptr, size_t nbytes)
+    void* cgt_alloc(cgtDevtype devtype, size_t)    
+    void cgt_free(cgtDevtype devtype, void* ptr)
+    void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void* dest_ptr, void* src_ptr, size_t nbytes)
 
 
 # Conversion funcs
@@ -83,17 +84,17 @@ cdef extern from "cgt_common.h" namespace "cgt":
 ctypedef cnp.Py_intptr_t npy_intp_t
 
 
-cdef object cgt2py_object(Object* o):
-    if cgt_is_array(o): return cgt2py_array(<Array*>o)
-    elif cgt_is_tuple(o): return cgt2py_tuple(<Tuple*>o)
+cdef object cgt2py_object(cgtObject* o):
+    if cgt_is_array(o): return cgt2py_array(<cgtArray*>o)
+    elif cgt_is_tuple(o): return cgt2py_tuple(<cgtTuple*>o)
     else: raise RuntimeError("cgt object seems to be invalid")
 
-cdef object cgt2py_array(Array* a):
+cdef object cgt2py_array(cgtArray* a):
     cdef cnp.ndarray nparr = cnp.PyArray_SimpleNew(a.ndim, <npy_intp_t*>a.shape, a.dtype) # XXX DANGEROUS CAST
-    cgt_memcpy(DevCPU, a.devtype, cnp.PyArray_DATA(nparr), a.data, cnp.PyArray_NBYTES(nparr))
+    cgt_memcpy(cgtCPU, a.devtype, cnp.PyArray_DATA(nparr), a.data, cnp.PyArray_NBYTES(nparr))
     return nparr
 
-cdef object cgt2py_tuple(Tuple* t):
+cdef object cgt2py_tuple(cgtTuple* t):
     cdef int i
     return tuple(cgt2py_object(t.getitem(i)) for i in xrange(t.len))
     # why doesn't the following work:
@@ -108,27 +109,27 @@ cdef cnp.ndarray _to_valid_array(object arr):
         out = out.copy()
     return out
 
-cdef Object* py2cgt_object(object o) except *:
+cdef cgtObject* py2cgt_object(object o) except *:
     if isinstance(o, tuple):
         return py2cgt_tuple(o)
     else:
         o = _to_valid_array(o)
         return py2cgt_Array(o)
 
-cdef Array* py2cgt_Array(cnp.ndarray arr):
-    cdef Array* out = new Array(arr.ndim, <size_t*>arr.shape, dtype_fromstr(arr.dtype), DevCPU)
-    cgt_memcpy(out.devtype, DevCPU, out.data, cnp.PyArray_DATA(arr), cgt_nbytes(out))
+cdef cgtArray* py2cgt_Array(cnp.ndarray arr):
+    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, dtype_fromstr(arr.dtype), cgtCPU)
+    cgt_memcpy(out.devtype, cgtCPU, out.data, cnp.PyArray_DATA(arr), cgt_nbytes(out))
     return out
 
-cdef Tuple* py2cgt_tuple(object o):
-    cdef Tuple* out = new Tuple(len(o))
+cdef cgtTuple* py2cgt_tuple(object o):
+    cdef cgtTuple* out = new cgtTuple(len(o))
     cdef int i
     for i in xrange(len(o)):
         out.setitem(i, py2cgt_object(o[i]))
     return out
 
 
-cdef Dtype dtype_fromstr(s):
+cdef cgtDtype dtype_fromstr(s):
     if s=='i1':
         return cgt_i1
     elif s=='i2':
@@ -156,7 +157,7 @@ cdef Dtype dtype_fromstr(s):
     else:
         raise ValueError("unrecognized dtype %s"%s)
 
-cdef object dtype_tostr(Dtype d):
+cdef object dtype_tostr(cgtDtype d):
     if d == cgt_i1:
         return 'i1'
     elif d == cgt_i2:
@@ -180,21 +181,21 @@ cdef object dtype_tostr(Dtype d):
     elif d == cgt_O:
         return 'obj'
     else:
-        raise ValueError("invalid Dtype")
+        raise ValueError("invalid cgtDtype")
 
-cdef object devtype_tostr(Devtype d):
-    if d == DevCPU:
+cdef object devtype_tostr(cgtDevtype d):
+    if d == cgtCPU:
         return "cpu"
-    elif d == DevGPU:
+    elif d == cgtGPU:
         return "gpu"
     else:
         raise RuntimeError
 
-cdef Devtype devtype_fromstr(object s):
+cdef cgtDevtype devtype_fromstr(object s):
     if s == "cpu":
-        return DevCPU
+        return cgtCPU
     elif s == "gpu":
-        return DevGPU
+        return cgtGPU
     else:
         raise ValueError("unrecognized devtype %s"%s)
 
@@ -245,12 +246,12 @@ cdef void* get_or_load_lib(libname) except *:
 ################################################################
  
 cdef extern from "execution.h" namespace "cgt":
-    cppclass InPlaceFunCl:
-        InPlaceFunCl(Inplacefun, void*)
-        InPlaceFunCl()
-    cppclass ValRetFunCl:
-        ValRetFunCl(Valretfun, void*)
-        ValRetFunCl()
+    cppclass ByRefFunCl:
+        ByRefFunCl(cgtByRefFun, void*)
+        ByRefFunCl()
+    cppclass ByValFunCl:
+        ByValFunCl(cgtByValFun, void*)
+        ByValFunCl()
     cppclass MemLocation:
         MemLocation(size_t)
         MemLocation()
@@ -262,16 +263,16 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass LoadArgument(Instruction):
         LoadArgument(int, MemLocation)
     cppclass Alloc(Instruction):
-        Alloc(Dtype, vector[MemLocation], MemLocation)
+        Alloc(cgtDtype, vector[MemLocation], MemLocation)
     cppclass BuildTup(Instruction):
         BuildTup(vector[MemLocation], MemLocation)
-    cppclass InPlace(Instruction):
-        InPlace(vector[MemLocation], MemLocation, InPlaceFunCl)
-    cppclass ValReturning(Instruction):
-        ValReturning(vector[MemLocation], MemLocation, ValRetFunCl)
+    cppclass CallByRef(Instruction):
+        CallByRef(vector[MemLocation], MemLocation, ByRefFunCl)
+    cppclass CallByVal(Instruction):
+        CallByVal(vector[MemLocation], MemLocation, ByValFunCl)
 
     cppclass Interpreter:
-        Tuple* run(Tuple*)
+        cgtTuple* run(cgtTuple*)
 
     Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation])
 
@@ -283,23 +284,23 @@ cdef vector[size_t] _tovectorlong(object xs):
     for x in xs: out.push_back(<size_t>x)
     return out
 
-cdef object _cgtarray2py(Array* a):
+cdef object _cgtarray2py(cgtArray* a):
     raise NotImplementedError
 
-cdef object _cgttuple2py(Tuple* t):
+cdef object _cgttuple2py(cgtTuple* t):
     raise NotImplementedError
 
-cdef object _cgtobj2py(Object* o):
+cdef object _cgtobj2py(cgtObject* o):
     if cgt_is_array(o):
-        return _cgtarray2py(<Array*>o)
+        return _cgtarray2py(<cgtArray*>o)
     else:
-        return _cgttuple2py(<Tuple*>o)
+        return _cgttuple2py(<cgtTuple*>o)
 
 cdef void* _ctypesstructptr(object o) except *:
     if o is None: return NULL
     else: return <void*><size_t>ctypes.cast(ctypes.pointer(o), ctypes.c_voidp).value    
 
-cdef void _pyfunc_inplace(void* cldata, Object** reads, Object* write):
+cdef void _pyfunc_inplace(void* cldata, cgtObject** reads, cgtObject* write):
     (pyfun, nin, nout) = <object>cldata
     pyread = [cgt2py_object(reads[i]) for i in xrange(nin)]
     pywrite = cgt2py_object(write)
@@ -308,21 +309,21 @@ cdef void _pyfunc_inplace(void* cldata, Object** reads, Object* write):
     except Exception as e:
         print e,pyfun
         raise e
-    cdef Tuple* tup
-    cdef Array* a
+    cdef cgtTuple* tup
+    cdef cgtArray* a
     if cgt_is_array(write):
         npout = <cnp.ndarray>pywrite
-        cgt_memcpy(DevCPU, DevCPU, (<Array*>write).data, npout.data, cgt_nbytes(<Array*>write))
+        cgt_memcpy(cgtCPU, cgtCPU, (<cgtArray*>write).data, npout.data, cgt_nbytes(<cgtArray*>write))
     else:
-        tup = <Tuple*> write
+        tup = <cgtTuple*> write
         for i in xrange(tup.size()):
             npout = <cnp.ndarray>pywrite[i]
-            a = <Array*>tup.getitem(i)
+            a = <cgtArray*>tup.getitem(i)
             assert cgt_is_array(a)
-            cgt_memcpy(DevCPU, DevCPU, a.data, npout.data, cgt_nbytes(a))
+            cgt_memcpy(cgtCPU, cgtCPU, a.data, npout.data, cgt_nbytes(a))
 
 
-cdef Object* _pyfunc_valret(void* cldata, Object** args):
+cdef cgtObject* _pyfunc_valret(void* cldata, cgtObject** args):
     (pyfun, nin, nout) = <object>cldata
     pyread = [cgt2py_object(args[i]) for i in xrange(nin)]
     pyout = pyfun(pyread)
@@ -339,29 +340,29 @@ cdef void* _getfun(libname, funcname) except *:
     return out
 
 
-cdef InPlaceFunCl _node2inplaceclosure(node) except *:
+cdef ByRefFunCl _node2inplaceclosure(node) except *:
     try:
         libname, funcname, cldata = impls.get_impl(node, "cpu") # TODO
         cfun = _getfun(libname, funcname)
         shit2.append(cldata)  # XXX
-        return InPlaceFunCl(<Inplacefun>cfun, _ctypesstructptr(cldata))
+        return ByRefFunCl(<cgtByRefFun>cfun, _ctypesstructptr(cldata))
     except core.MethodNotDefined:
         pyfun = node.op.py_apply_inplace        
         cldata = (pyfun, len(node.parents), 1)
         shit2.append(cldata)
-        return InPlaceFunCl(&_pyfunc_inplace, <PyObject*>cldata)
+        return ByRefFunCl(&_pyfunc_inplace, <PyObject*>cldata)
 
-cdef ValRetFunCl _node2valretclosure(node) except *:
+cdef ByValFunCl _node2valretclosure(node) except *:
     try:
         libname, funcname, cldata = impls.get_impl(node, "cpu") # TODO
         cfun = _getfun(libname, funcname)
         shit2.append(cldata)  # XXX
-        return ValRetFunCl(<Valretfun>cfun, _ctypesstructptr(cldata))
+        return ByValFunCl(<cgtByValFun>cfun, _ctypesstructptr(cldata))
     except core.MethodNotDefined:
         pyfun = node.op.py_apply_valret        
         cldata = (pyfun, len(node.parents), 1)
         shit2.append(cldata)
-        return ValRetFunCl(&_pyfunc_valret, <PyObject*>cldata)
+        return ByValFunCl(&_pyfunc_valret, <PyObject*>cldata)
 
 cdef MemLocation _tocppmem(object pymem):
     return MemLocation(<size_t>pymem.index)
@@ -381,10 +382,10 @@ cdef Instruction* _tocppinstr(object pyinstr) except *:
         out = new Alloc(dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
     elif t == execution.BuildTup:
         out = new BuildTup(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
-    elif t == execution.InPlace:
-        out = new InPlace(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(pyinstr.node))
-    elif t == execution.ValReturning:
-        out = new ValReturning(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(pyinstr.node))
+    elif t == execution.CallByRef:
+        out = new CallByRef(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(pyinstr.node))
+    elif t == execution.CallByVal:
+        out = new CallByVal(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(pyinstr.node))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out
@@ -418,10 +419,10 @@ cdef class CppInterpreterWrapper:
     def __call__(self, *pyargs):
         assert len(pyargs) == self.eg.n_args()
         # TODO: much better type checking on inputs
-        cdef Tuple* cargs = new Tuple(len(pyargs))
+        cdef cgtTuple* cargs = new cgtTuple(len(pyargs))
         for (i,pyarg) in enumerate(pyargs):
             cargs.setitem(i, py2cgt_object(pyarg))
-        cdef Tuple* ret = self.interp.run(cargs)
+        cdef cgtTuple* ret = self.interp.run(cargs)
         del cargs
         return list(cgt2py_object(ret))
 

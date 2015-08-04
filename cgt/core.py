@@ -242,6 +242,8 @@ class Node(object):
         return dot(self, other)
     def sum(self, axis=None, keepdims=False):
         return sum(self, axis=axis, keepdims=keepdims)
+    def prod(self, axis=None, keepdims=False):
+        return prod(self, axis=axis, keepdims=keepdims)
     def max(self, axis=None, keepdims=False):
         return max(self, axis=axis, keepdims=keepdims)
     def argmax(self, axis=None, keepdims=False):
@@ -474,7 +476,9 @@ class Data(Input):
             self.device = device
         self.name = "unnamed" if name is None else name
         assert self.value.dtype != object
-        self.fixed_shape_mask = (False,)*self.value.ndim if fixed_shape_mask is None else fixed_shape_mask
+        if fixed_shape_mask is None:  self.fixed_shape_mask = (False,)*self.value.ndim
+        elif fixed_shape_mask == "all": self.fixed_shape_mask = (True,)*self.value.ndim
+        else: self.fixed_shape_mask = fixed_shape_mask
         Input.__init__(self, _ndarray_type(value), name)
         self.op = GetData(self)
     def is_data(self):
@@ -587,16 +591,17 @@ def pullback(outputs, goutputs, wrt):
                 # XXX wil fail with unused outputs
             else:
                 gpars = node.op.pullback(node.parents, node, gnode)
-                for (par,gpar) in utils.safezip(node.parents, gpars):
-                    var2gs[par].append(gpar)
-                    # if gpar is not None:
-                    #     assert (par.get_ndim() == gpar.get_ndim())
-                    #     for (s0,s1) in zip(shape(par), shape(gpar)):
-                    #         assert_(equal(s0,s1),"node: "+str(node))
+                diffs = node.get_diff()
+                for (par,gpar,d) in utils.safezip3(node.parents, gpars,diffs):
+                    assert (gpar is not None) == d # grad is None iff not diff wrt input
+                    if d: var2gs[par].append(gpar)
 
     # only we already summed up the gradients for the input nodes, so just take
     # 0th element
     return [var2gs[node][0] for node in wrt]
+
+def infer_shape(x):
+    return tuple(x.op.value for x in  CACHER.simplify(cgt.shape(x)))
 
 def grad(cost, wrt):    
     """
@@ -666,18 +671,16 @@ class Constant(Op):
         if isinstance(self.value, tuple):
             raise MethodNotDefined
         return r"""
-using namespace cgt;
-extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgt::Array** reads, cgt::Array* write) {
+extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads, cgtArray* write) {
     cgt_memcpy(DevCPU, DevCPU, write->data, cldata->data, cgt_nbytes(write));
 }
 """
 
     def c_code_valret(self, inputs):
         return r"""
-using namespace cgt;
-extern "C" Array* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgt::Array** reads) {
-        auto out = new cgt::Array(cldata->ndim, (size_t*)cldata->shape, 
-            (cgt::Dtype)cldata->dtype, cgt::DevCPU, (void*)cldata->data, false);
+extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
+        auto out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
+            (cgtDtype)cldata->dtype, cgtCPU, (void*)cldata->data, false);
         return out;
 }"""
         return out;
@@ -688,8 +691,8 @@ shit = [] # XXX just so this stuff doesn't get dereferenced.
 
     # XXX why doesn't it work with valret ?!?!?!
     # for (int i=0; i < cldata->ndim; ++i) printf("%i %i\n", i, ((size_t*)cldata->shape)[i]);
-    # cgt::Array* out = new cgt::Array(cldata->ndim, (size_t*)cldata->shape, 
-    #     (cgt::Dtype)cldata->dtype, cgt::DevCPU, cldata->data, true);
+    # cgtArray* out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
+    #     (cgtDtype)cldata->dtype, cgtCPU, cldata->data, true);
     # return out;
 
 
@@ -755,8 +758,8 @@ class ScalarRng(Op):
     def get_name(self):
         return "rng{%s}"%self.kind
     def py_apply_inplace(self, reads, write):
-        if self.kind == "uniform": write[...] = np.random.rand(*reads).astype(cgt.floatX)
-        elif self.kind == "gaussian": write[...] = np.random.randn(*reads).astype(cgt.floatX)
+        if self.kind == "uniform": write[...] = np.random.rand(*reads)
+        elif self.kind == "gaussian": write[...] = np.random.randn(*reads)
         else: raise RuntimeError
     def pullback(self, inputs, output, goutput):
         raise NonDifferentiable
@@ -868,11 +871,11 @@ class ElwiseUnary(Op):
         return Tensor(out_type, inputs[0].get_ndim())
     def c_code(self, inputs):
         info = self.info
-        output = Result(self, inputs) # XXX should store this type info in op?
+        output = Result(self, inputs) # XXX should store this type info in node
         return r"""
 static inline %(cdtype1)s scalar_CGT_FUNCNAME(%(cdtype0)s x) {return %(cexpr)s;}
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
-    cgt::Array* read = reads[0];
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray* read = reads[0];
     int s = cgt_size(read);
     %(cdtype0)s* readdata = (%(cdtype0)s*)read->data;
     %(cdtype1)s* writedata = (%(cdtype1)s*)write->data;
@@ -891,8 +894,8 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype)s* in, %(cdty
     out[i] = CGT_FUNCNAME(in[i]);
   }
 }
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
-    cgt::Array* read = reads[0];
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray* read = reads[0];
     size_t n = cgt_size(read);
     int num_blocks, num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
@@ -991,7 +994,7 @@ class ElwiseBinary(Op):
         index1 = "0" if self.scalar_mask[1] else "i"
         return r"""
 static inline %(cdtype2)s scalar_CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     int s = cgt_size(reads[%(ind4shape)s]);
     %(cdtype0)s* in0 = (%(cdtype0)s*)reads[0]->data;
     %(cdtype1)s* in1 = (%(cdtype1)s*)reads[1]->data;
@@ -1017,7 +1020,7 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype0)s* x, %(cdty
     z[i] = CGT_FUNCNAME(x[%(index0)s], y[%(index1)s]);
   }
 }
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     size_t n = cgt_size(reads[1]);
     int num_blocks,num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
@@ -1061,11 +1064,10 @@ class Size(Op):
         return [("ax",ctypes.c_int,self.axis)]
     def c_code(self, _):
         return r"""
-extern "C" cgt::Array* CGT_FUNCNAME(void* cl0, cgt::Array** reads) {
+extern "C" cgtArray* CGT_FUNCNAME(void* cl0, cgtArray** reads) {
 CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
-    using namespace cgt;
-    cgt::Array* in = reads[0];
-    cgt::Array* out = new cgt::Array(0, NULL, cgt_i8, cgt::DevCPU);
+    cgtArray* in = reads[0];
+    cgtArray* out = new cgtArray(0, NULL, cgt_i8, cgtCPU);
     ((long*)out->data)[0] = in->shape[cl->ax];
     return out;
 }"""
@@ -1087,11 +1089,11 @@ class Reshape(Op):
         return [("ndim", ctypes.c_int,len(parents)-1)]
     def c_code(self, _inputs):
         return r"""
-extern "C" cgt::Array* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgt::Array** reads) {
-    cgt::Array* in = reads[0];
+extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
+    cgtArray* in = reads[0];
     size_t* newshape = new size_t[cldata->ndim];    
     for (int i=0; i < cldata->ndim; ++i) newshape[i] = static_cast<size_t*>(reads[i+1]->data)[0];
-    cgt::Array* out = new cgt::Array(cldata->ndim, newshape, in->dtype, in->devtype, in->data, false);
+    cgtArray* out = new cgtArray(cldata->ndim, newshape, in->dtype, in->devtype, in->data, false);
     return out;
 }
 """
@@ -1110,7 +1112,7 @@ class Concatenate(Op):
         out = []
         for x in inputs:
             end = start + size(x, self.axis)
-            out.append(Result(GetSli(gout), [start,end]))
+            out.append(Result(GetSli(self.axis), [gout, start,end, 1]))
             start = end
         return out
     def shp_apply(self, inputs):
@@ -1181,8 +1183,8 @@ class Transpose(Op):
         return inputs[0].get_type()
     def c_code(self, inputs):
         return r"""
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
-    cgt::Array *read = reads[0];
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray *read = reads[0];
     %(cdtype)s* indata = (%(cdtype)s*)read->data, *outdata = (%(cdtype)s*)write->data;
     for (int i=0; i < read->shape[0]; ++i) {
         for (int j=0; j < read->shape[1]; ++j) {
@@ -1207,7 +1209,7 @@ class Transport(Op):
         return shape(inputs[0])
     def c_code(self, _inputs):
         return """
-void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
+void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgt_memcpy(write->devtype, reads[0]->devtype, write->data, reads[0]->data, cgt_nbytes(reads[0]));    
 }
 """
@@ -1280,8 +1282,8 @@ class Sum(Op):
         outidxexpr = " + ".join(["i%(ax)s * outstrides[%(ax)s]"%dict(ax=ax) for ax in outdims])\
             if len(outdims)>0 else "0"
         return r"""
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
-    cgt::Array *read=reads[0];
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray *read=reads[0];
     size_t instrides[read->ndim];
     cgt_get_strides(read, instrides);
     size_t outstrides[write->ndim];
@@ -1378,8 +1380,8 @@ class GetSli(Op):
         inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*instrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join(["i%i"%ax + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
         return r"""
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
-    cgt::Array *in=read[0];
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray *in=read[0];
     long start = ((long*)read[1]->data)[0];
     //long stop = ((long*)read[2]->data)[0];
     long step = ((long*)read[3]->data)[0];
@@ -1402,7 +1404,6 @@ class IncSli(Op):
         return [True,False,True,True]
     def py_apply_inplace(self, reads, write):
         x, start, stop, step, y=reads
-        newx = x.copy()
         slices = [slice(None,None,None) for _ in xrange(x.ndim)]
         slices[self.axis] = slice(start,stop,step)
         write[slices] += y # XXX check that it's incremental
@@ -1423,8 +1424,8 @@ class IncSli(Op):
         incidxexpr =  " + ".join(["i%i"%ax + "*incstrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
         return r"""
-extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write) {
-    cgt::Array *in=reads[0], *inc = reads[4], *out=write;
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray *in=reads[0], *inc = reads[4], *out=write;
     long start = ((long*)reads[1]->data)[0];
     //long stop = ((long*)reads[2]->data)[0];
     long step = ((long*)reads[3]->data)[0];
@@ -1433,7 +1434,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt::Array** reads, cgt::Array* write
     cgt_get_strides(out, outstrides);
     size_t incstrides[inc->ndim];
     cgt_get_strides(inc, incstrides);
-    if (out->data != in->data) cgt_memcpy(cgt::DevCPU, cgt::DevCPU, out, in, cgt_nbytes(out));
+    if (out->data != in->data) cgt_memcpy(cgtCPU, cgtCPU, out, in, cgt_nbytes(out));
     %(openloops)s
         ((%(cdtype)s*)out->data)[%(outidxexpr)s] += ((%(cdtype)s*)inc->data)[%(incidxexpr)s];
     %(closeloops)s
@@ -1536,8 +1537,8 @@ class Mul22(Op):
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         return """
-extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgt::Array** AB, cgt::Array* C) {
-    cgt::Array *A=AB[0], *B=AB[1];
+extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgtArray** AB, cgtArray* C) {
+    cgtArray *A=AB[0], *B=AB[1];
     int lda = A->shape[1], ldb = B->shape[1], ldc = C->shape[1];
     int M = C->shape[0];
     int N = C->shape[1];  
@@ -1554,6 +1555,8 @@ class BatchedMul22(Op):
         self.tB = tB
     def py_apply_inplace(self, (x,y), z):
         for (xmat, ymat, zmat) in zip(x,y, z):
+            if self.tA: xmat = xmat.T
+            if self.tB: ymat = ymat.T            
             xmat.dot(ymat, out=zmat)
     def pullback(self, inputs, output, goutput):
         return [Result(BatchedMul22(False, not self.tB), [goutput, inputs[1]]),
@@ -1916,11 +1919,13 @@ class AnalysisCacher(object):
         self.analysis = init_analysis()
         self.repl = {}
     def simplify(self, xs):
-        for x in xs: self.simplify1(x)
+        with disable_cacher(): # not actually necessary but seems reasonable
+            for x in xs: self.simplify1(x)
         return [self.repl[x] for x in xs]
     def simplify1(self, x):
         assert isinstance(x, Node)
-        update_simplify_map(x, self.analysis, self.repl)
+        with disable_cacher():
+            update_simplify_map(x, self.analysis, self.repl)
         return self.repl[x]
 
 CACHER = AnalysisCacher()
@@ -1957,6 +1962,8 @@ def _noderepr(x):
 
 def assertequal1(x,y,msg):
     if not CACHER_ENABLED: return
+    x = as_node(x)
+    y = as_node(y)
     simpx = CACHER.simplify1(x)
     simpy = CACHER.simplify1(y)
     if isinstance(simpx.op,Constant) and isinstance(simpy.op,Constant) and simpx.op.value != simpy.op.value:
@@ -1964,6 +1971,8 @@ def assertequal1(x,y,msg):
 
 def assertequaln(xs,ys,msg):
     if not CACHER_ENABLED: return
+    xs = map(as_node,xs)
+    ys = map(as_node,ys)
     simpxs = CACHER.simplify(xs)
     simpys = CACHER.simplify(ys)
     for (x,y) in utils.safezip(simpxs,simpys):

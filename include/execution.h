@@ -7,24 +7,24 @@ using std::vector;
 
 // note: no-args initializers are only here because they're required by cython
 
-class InPlaceFunCl {
+class ByRefFunCl {
 public:
-    Inplacefun fptr;
+    cgtByRefFun fptr;
     void* data;
-    InPlaceFunCl(Inplacefun fptr, void* data) : fptr(fptr), data(data) {}
-    InPlaceFunCl() : fptr(NULL), data(NULL) {}
-    void operator()(Object** reads, Object* write) {
+    ByRefFunCl(cgtByRefFun fptr, void* data) : fptr(fptr), data(data) {}
+    ByRefFunCl() : fptr(NULL), data(NULL) {}
+    void operator()(cgtObject ** reads, cgtObject * write) {
         (*fptr)(data, reads, write);
     }
 };
 
-struct ValRetFunCl {
+struct ByValFunCl {
 public:
-    Valretfun fptr;
+    cgtByValFun fptr;
     void* data;
-    ValRetFunCl(Valretfun fptr, void* data) : fptr(fptr), data(data) {}
-    ValRetFunCl() : fptr(NULL), data(NULL) {}
-    Object * operator()(Object** args) {
+    ByValFunCl(cgtByValFun fptr, void* data) : fptr(fptr), data(data) {}
+    ByValFunCl() : fptr(NULL), data(NULL) {}
+    cgtObject * operator()(cgtObject ** args) {
         return (*fptr)(data, args);
     }
 };
@@ -62,11 +62,11 @@ private:
 class Interpreter {
 public:
     // called by external code
-    virtual Tuple * run(Tuple *)=0;
+    virtual cgtTuple * run(cgtTuple *)=0;
     // called by instructions:
-    virtual Object * get(MemLocation)=0;
-    virtual void set(MemLocation, Object *)=0;
-    virtual Object * getarg(int)=0;
+    virtual cgtObject * get(MemLocation)=0;
+    virtual void set(MemLocation, cgtObject *)=0;
+    virtual cgtObject * getarg(int)=0;
     virtual ~Interpreter() {}
 };
 
@@ -85,11 +85,11 @@ private:
 
 class Alloc : public Instruction {
 public:
-    Alloc(Dtype dtype, vector<MemLocation> readlocs, MemLocation writeloc)
+    Alloc(cgtDtype dtype, vector<MemLocation> readlocs, MemLocation writeloc)
     : dtype(dtype), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
 private:
-    Dtype dtype;
+    cgtDtype dtype;
     vector<MemLocation> readlocs;
     MemLocation writeloc;
 };
@@ -104,26 +104,26 @@ private:
     MemLocation writeloc;
 };
 
-class InPlace : public Instruction  {
+class CallByRef : public Instruction  {
 public:
-    InPlace(vector<MemLocation> readlocs, MemLocation writeloc, InPlaceFunCl closure)
+    CallByRef(vector<MemLocation> readlocs, MemLocation writeloc, ByRefFunCl closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    InPlaceFunCl closure;
+    ByRefFunCl closure;
 };
 
-class ValReturning : public Instruction  {
+class CallByVal : public Instruction  {
 public:
-    ValReturning(vector<MemLocation> readlocs, MemLocation writeloc, ValRetFunCl closure)
+    CallByVal(vector<MemLocation> readlocs, MemLocation writeloc, ByValFunCl closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    ValRetFunCl closure;
+    ByValFunCl closure;
 };
 
 
