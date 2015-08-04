@@ -94,9 +94,9 @@ def assign_devices(outputs, devfn=None):
 
 
 def is_tensor(x):
-    return isinstance(x.typ, Tensor)
+    return isinstance(x.typ, TensorType)
 def is_tuple(x):
-    return isinstance(x.typ, Tuple)
+    return isinstance(x.typ, TupleType)
 
 def make_interpreter(inputs, outputs, eg, node2memloc):
     assert isinstance(eg, ExecutionGraph)
@@ -424,7 +424,7 @@ def _copy(x):
 def typecheck_args(numargs, types):
     assert len(numargs)==len(types), "wrong number of arguments. got %i, expected %i"%(len(numargs),len(types))
     for (numarg,typ) in zip(numargs,types):
-        if isinstance(typ, Tensor):
+        if isinstance(typ, TensorType):
             assert numarg.dtype==typ.dtype and numarg.ndim==typ.ndim
     
 class SequentialInterpreter(Interpreter):

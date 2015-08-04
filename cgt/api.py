@@ -10,18 +10,18 @@ import sys
 # ================================================================
 
 def scalar(name=None, dtype=None, fixed_shape=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 0), name, fixed_shape=fixed_shape)
+    return core.Argument(core.TensorType(cgt.floatX if dtype is None else dtype, 0), name, fixed_shape=fixed_shape)
 def vector(name=None, dtype=None, fixed_shape=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 1), name, fixed_shape=fixed_shape)
+    return core.Argument(core.TensorType(cgt.floatX if dtype is None else dtype, 1), name, fixed_shape=fixed_shape)
 def matrix(name=None, dtype=None, fixed_shape=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 2), name, fixed_shape=fixed_shape)
+    return core.Argument(core.TensorType(cgt.floatX if dtype is None else dtype, 2), name, fixed_shape=fixed_shape)
 def tensor3(name=None, dtype=None, fixed_shape=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 3), name, fixed_shape=fixed_shape)
+    return core.Argument(core.TensorType(cgt.floatX if dtype is None else dtype, 3), name, fixed_shape=fixed_shape)
 def tensor4(name=None, dtype=None, fixed_shape=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, 4), name, fixed_shape=fixed_shape)
+    return core.Argument(core.TensorType(cgt.floatX if dtype is None else dtype, 4), name, fixed_shape=fixed_shape)
 
 def tensor(dtype, ndim, name=None, fixed_shape=None):
-    return core.Argument(core.Tensor(cgt.floatX if dtype is None else dtype, ndim), name, fixed_shape=fixed_shape)
+    return core.Argument(core.TensorType(cgt.floatX if dtype is None else dtype, ndim), name, fixed_shape=fixed_shape)
 
 # ================================================================
 # Symbolic functions
@@ -179,7 +179,7 @@ def floor_divide(x, y):
 
 def getitem(arr, slis):
     arr = core.as_node(arr)
-    if isinstance(arr.get_type(), core.Tuple):
+    if isinstance(arr.get_type(), core.TupleType):
         assert isinstance(slis, int)
         return tuple_index(arr, slis)
     if (not _is_list_or_tuple(slis)):
@@ -326,7 +326,7 @@ def set_precision(prec):
 def shape(x):
     x = core.as_node(x)
     typ = x.get_type()
-    if isinstance(typ, core.Tensor):
+    if isinstance(typ, core.TensorType):
         return [size(x, i) for i in xrange(x.ndim)]
     else:
         return tuple(map(shape, x.parents))

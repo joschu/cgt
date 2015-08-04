@@ -18,7 +18,7 @@ class SinCos(core.Op):
     def typ_apply(self, inputs):
         assert inputs[0].dtype == 'f4'
         d = inputs[0].ndim
-        return core.Tuple(core.Tensor(cgt.floatX, d), core.Tensor(cgt.floatX, d))
+        return core.TupleType(core.TensorType(cgt.floatX, d), core.TensorType(cgt.floatX, d))
     def py_apply_valret(self, reads):
         x = reads[0]
         return (np.sin(x), np.cos(x))
@@ -44,7 +44,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtTuple* write) {
     call_type = "inplace"
     def typ_apply(self, inputs):
         ndim = inputs[0].ndim
-        return core.Tuple(core.Tensor(cgt.floatX, ndim), core.Tensor(cgt.floatX, ndim))
+        return core.TupleType(core.TensorType(cgt.floatX, ndim), core.TensorType(cgt.floatX, ndim))
     def py_apply_inplace(self, reads, write):
         x = reads[0]
         write[0][...] = np.sin(x)

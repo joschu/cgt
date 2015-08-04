@@ -39,7 +39,7 @@ class Type(object):
     """
     pass
 
-class Tensor(Type):
+class TensorType(Type):
     """
     Type used to represent computation results (Nodes in the graph) 
     that are n-dimensional arrays. 
@@ -54,13 +54,13 @@ class Tensor(Type):
     def __eq__(self, other):
         return self.dtype == other.dtype and self.ndim == other.ndim
 
-class Tuple(Type):
+class TupleType(Type):
     """
     A compount type
     For now, we will only allow tuples of tensors, though we may allow tuple elements in the future
     """
     def __init__(self, *eltypes):
-        assert all(isinstance(eltype, Tensor) for eltype in eltypes)
+        assert all(isinstance(eltype, TensorType) for eltype in eltypes)
         self.eltypes = eltypes
         self.dtype = 'O'
     def __len__(self):
@@ -156,7 +156,7 @@ class Node(object):
     def get_dtype(self):
         return self.typ.dtype
     def get_ndim(self):
-        return self.typ.ndim if isinstance(self.typ, Tensor) else 0
+        return self.typ.ndim if isinstance(self.typ, TensorType) else 0
     def get_type(self):
         return self.typ
     def get_name(self):
@@ -228,7 +228,7 @@ class Node(object):
     def __iter__(self):
         raise TypeError("Node is not iterable")
     def __len__(self):
-        if isinstance(self.typ, Tuple):
+        if isinstance(self.typ, TupleType):
             return len(self.typ)
         else:
             raise ValueError("Node of type Tensor has no __len__")
@@ -257,13 +257,13 @@ class Node(object):
 
 def _ndarray_type(value):
     assert isinstance(value, np.ndarray)
-    return Tensor(value.dtype, value.ndim)
+    return TensorType(value.dtype, value.ndim)
 
 def _get_value_type(value):
     if isinstance(value, np.ndarray):
-        return Tensor(value.dtype, value.ndim)
+        return TensorType(value.dtype, value.ndim)
     elif isinstance(value, tuple):
-        return Tuple(*map(_get_value_type, value))
+        return TupleType(*map(_get_value_type, value))
 
 def _get_value_device(value):
     warnings.warn("todo: properly implement")
@@ -274,7 +274,7 @@ def _put_on_device(value, device):
     return value
 
 def num_components(node):
-    return len(node.get_type()) if isinstance(node.get_type(), Tuple) else 1
+    return len(node.get_type()) if isinstance(node.get_type(), TupleType) else 1
 
 class Op(object):
     """
@@ -500,10 +500,10 @@ def _singleton_ones(dtype, ndim):
     return constant(np.ones((1,)*ndim, dtype))
 
 def make_argument(typ):
-    if isinstance(typ, Tuple):
-        return Argument(Tuple(typ))
-    elif isinstance(typ, Tensor):
-        return Argument(Tensor(typ.dtype, typ.ndim))
+    if isinstance(typ, TupleType):
+        return Argument(TupleType(typ))
+    elif isinstance(typ, TensorType):
+        return Argument(TensorType(typ.dtype, typ.ndim))
     else:
         raise ValueError("expected Tuple or Tensor. Got %s"%typ)
 
@@ -712,7 +712,7 @@ class Fill(Op):
         return inputs
     def typ_apply(self, inputs):
         assert all(x.get_dtype() == 'i8' for x in inputs)
-        return Tensor(self.dtype, len(inputs))
+        return TensorType(self.dtype, len(inputs))
 
 def _is_int(node):
     return dtype_kind(node.dtype)=='i'
@@ -738,7 +738,7 @@ class Arange(Op):
         return [(stop - start)//step]
     def typ_apply(self, inputs):
         assert _list_is_valid_sli(inputs)
-        return Tensor(self.dtype, 1)
+        return TensorType(self.dtype, 1)
 
 class ScalarRng(Op):
     """
@@ -761,7 +761,7 @@ class ScalarRng(Op):
     def shp_apply(self, inputs):
         return inputs
     def typ_apply(self, inputs):
-        return Tensor(cgt.floatX, len(inputs))
+        return TensorType(cgt.floatX, len(inputs))
 
 # Elementwise
 # ----------------------------------------------------------------
@@ -863,7 +863,7 @@ class ElwiseUnary(Op):
         else:
             assert typeinfo in (cgt.floatX, cgt.complexX, 'i1','i2','i4','i8')
             out_type = typeinfo
-        return Tensor(out_type, inputs[0].get_ndim())
+        return TensorType(out_type, inputs[0].get_ndim())
     def c_code(self, inputs):
         info = self.info
         output = Result(self, inputs) # XXX should store this type info in node
@@ -985,7 +985,7 @@ class ElwiseBinary(Op):
         else:
             out_dtype = typeinfo
         ind4shape = 1 if self.scalar_mask[0] else 0
-        return Tensor(out_dtype, inputs[ind4shape].ndim)
+        return TensorType(out_dtype, inputs[ind4shape].ndim)
     def c_code(self, inputs):
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
@@ -1055,7 +1055,7 @@ class Size(Op):
     def shp_apply(self, _inputs):
         return []
     def typ_apply(self, _inputs):
-        return Tensor('i8',0)
+        return TensorType('i8',0)
     def get_replacement(self, inputs, _analysis):
         x = inputs[0]
         if x.is_input():
@@ -1086,7 +1086,7 @@ class Reshape(Op):
     def shp_apply(self, inputs):
         return inputs[1:]
     def typ_apply(self, inputs):
-        return Tensor(inputs[0].get_dtype(), len(inputs)-1)
+        return TensorType(inputs[0].get_dtype(), len(inputs)-1)
     def get_closure(self, parents):
         return [("ndim", ctypes.c_int,len(parents)-1)]
     def c_code(self, _inputs):
@@ -1122,7 +1122,7 @@ class Concatenate(Op):
         out[self.axis] = add_multi([size(x,self.axis) for x in inputs])
         return out
     def typ_apply(self, inputs):
-        return Tensor(_promote_multi([x.dtype for x in inputs]), inputs[0].ndim)
+        return TensorType(_promote_multi([x.dtype for x in inputs]), inputs[0].ndim)
 
 class Stack(Op):
     def get_diff(self, num_inputs):
@@ -1137,7 +1137,7 @@ class Stack(Op):
         return [constant(len(inputs))] + shape(inputs[0])
     def typ_apply(self, inputs):
         assert utils.allsame([x.get_type() for x in inputs])
-        return Tensor(inputs[0].get_dtype(), inputs[0].get_ndim()+1)
+        return TensorType(inputs[0].get_dtype(), inputs[0].get_ndim()+1)
 
 class Repeat(Op):
     call_type = "inplace"
@@ -1235,7 +1235,7 @@ class RFFT(Op):
         return out
     def typ_apply(self, inputs):
         assert inputs[0].dtype==cgt.floatX
-        return Tensor(cgt.complexX,inputs[0].ndim)
+        return TensorType(cgt.complexX,inputs[0].ndim)
 
 class IRFFT(Op):
     def __init__(self, axes):
@@ -1253,7 +1253,7 @@ class IRFFT(Op):
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, inputs):
-        return Tensor(cgt.floatX,inputs[0].ndim)
+        return TensorType(cgt.floatX,inputs[0].ndim)
 
 # Reductions
 # ----------------------------------------------------------------
@@ -1336,7 +1336,7 @@ class Argmax(Op):
         s = shape(x)
         return [(constant(1) if i == self.axis else s[i]) for i in xrange(x.get_ndim())]
     def typ_apply(self, inputs):
-        return Tensor('i8', inputs[0].ndim)
+        return TensorType('i8', inputs[0].ndim)
 
 # TODO consider reducing code duplication for e.g. shp_apply
 
@@ -1457,7 +1457,7 @@ class GetFlatIndices(Op):
         return shape(inputs[1])
     def typ_apply(self, inputs):
         assert inputs[1].ndim == 1 and dtype_kind(inputs[1].dtype) == 'i'
-        return Tensor(inputs[0].dtype,1)
+        return TensorType(inputs[0].dtype,1)
 
 
 class IncFlatIndices(Op):
@@ -1495,7 +1495,7 @@ class Mul21(Op):
             "shape mismatch at matrix-vector multiplication")         
         return [size(inputs[0], 1 if self.tA else 0)]
     def typ_apply(self, inputs):
-        return Tensor(inputs[0].get_dtype(), 1)
+        return TensorType(inputs[0].get_dtype(), 1)
     def get_expr(self, (xexpr,yexpr)):        
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
@@ -1570,7 +1570,7 @@ class Outer(Op):
     def shp_apply(self, inputs):
         return [size(inputs[0],0), size(inputs[1],0)]
     def typ_apply(self, _inputs):
-        return Tensor(cgt.floatX, 2)
+        return TensorType(cgt.floatX, 2)
 
 
 
@@ -1587,7 +1587,7 @@ class Dot(Op):
     def shp_apply(self, _inputs):
         return []
     def typ_apply(self, _inputs):
-        return Tensor(cgt.floatX, 0)
+        return TensorType(cgt.floatX, 0)
 
 # Composition
 # ----------------------------------------------------------------
@@ -1637,7 +1637,7 @@ class Composition(Op):
         return out
     def typ_apply(self, inputs):
         assert [x.get_type() for x in inputs] == [x.get_type() for x in self._inputs]
-        return Tuple(*self._out_typs)
+        return TupleType(*self._out_typs)
     @property
     def n_out(self):
         return len(self._outputs)
@@ -1658,7 +1658,7 @@ class TupleIndex(Op):
         return shape(inputs[0])[self.idx]
     def typ_apply(self, inputs):
         intype = inputs[0].get_type()
-        assert isinstance(intype, Tuple)
+        assert isinstance(intype, TupleType)
         return inputs[0].get_type()[self.idx]
 
 class MakeTuple(Op):
@@ -1668,7 +1668,7 @@ class MakeTuple(Op):
     def shp_apply(self, inputs):
         return tuple(shape(x) for x in inputs)
     def typ_apply(self, inputs):
-        return Tuple(*(x.get_type() for x in inputs))
+        return TupleType(*(x.get_type() for x in inputs))
     
 def unpack(tup):
     return [Result(TupleIndex(i),[tup]) for i in xrange(len(tup.get_type()))]
@@ -1685,7 +1685,7 @@ class Assertion(Op):
     def typ_apply(self, inputs):
         x, = inputs
         assert x.ndim==0 and x.dtype=='i1'
-        return Tensor('i8',0)
+        return TensorType('i8',0)
     def shp_apply(self, _):
         return []
     def py_apply_inplace(self, reads, write):
@@ -1706,7 +1706,7 @@ class DebugFunc(Op):
     def __init__(self, yourfunc):
         self.yourfunc = yourfunc
     def typ_apply(self, _):
-        return Tensor('i8',0)
+        return TensorType('i8',0)
     def shp_apply(self, _):
         return []
     def py_apply_inplace(self, reads, write):
@@ -1854,7 +1854,7 @@ def do_analysis(node, analysis):
         newparents = node.parents
         node2shape[node] = node.op.shp_apply(newparents)
         # assert all([s.get_dtype() == "i8" for s in node2shape[node]])
-    assert len(node2shape[node]) == node.ndim or isinstance(node.get_type(),Tuple)
+    assert len(node2shape[node]) == node.ndim or isinstance(node.get_type(),TupleType)
     # -- SCALAR VALUE --
     if isinstance(node, Result):
         op = node.op

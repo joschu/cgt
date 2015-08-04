@@ -4,7 +4,7 @@ from cgt import core
 class EasyCustomOp(core.Op):
     call_type = "valret"
     def __init__(self, input_types, output_type, forward_impl, pullback_impl=None,shapefun=None):
-        assert all(isinstance(typ, core.Tensor) for typ in input_types)
+        assert all(isinstance(typ, core.TensorType) for typ in input_types)
         assert isinstance(output_type, core.Type)
         self.input_types = input_types
         self.output_type = output_type
@@ -24,7 +24,7 @@ class EasyCustomOp(core.Op):
         if self.pullback_impl is None:
             raise core.MethodNotDefined
         pb_input_types = self.input_types + [self.output_type]*2
-        pb_output_type = core.Tuple(*self.input_types)
+        pb_output_type = core.TupleType(*self.input_types)
         pbop = EasyCustomOp(pb_input_types, pb_output_type, 
             forward_impl=self.pullback_impl, pullback_impl=None,
             shapefun = lambda *args : tuple(cgt.shape(x) for x in inputs)  )

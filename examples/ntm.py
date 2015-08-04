@@ -203,8 +203,8 @@ class Correlate1d(cgt.EasyCustomOp):
     def __init__(self, axis, ndim):
         self.axis = axis
         cgt.EasyCustomOp.__init__(self,
-            input_types = [core.Tensor(cgt.floatX, ndim), core.Tensor(cgt.floatX, ndim)],
-            output_type = core.Tensor(cgt.floatX, ndim),
+            input_types = [core.TensorType(cgt.floatX, ndim), core.TensorType(cgt.floatX, ndim)],
+            output_type = core.TensorType(cgt.floatX, ndim),
             forward_impl = self.correlate_forward,
             pullback_impl = self.correlate_pullback)
     def correlate_forward(self, x, s):
