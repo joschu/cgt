@@ -622,7 +622,8 @@ def grad(cost, wrt):
 # ----------------------------------------------------------------
 
 class Constant(Op):
-    call_type = "valret"
+    call_type = "inplace"
+    # XXX for some reason valret version gives rare segfaults
     def __init__(self, value):
         if isinstance(value, tuple):
             self.value = value # XXX need to make valid recursively?
@@ -672,7 +673,7 @@ class Constant(Op):
             raise MethodNotDefined
         return r"""
 extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads, cgtArray* write) {
-    cgt_memcpy(DevCPU, DevCPU, write->data, cldata->data, cgt_nbytes(write));
+    cgt_memcpy(cgtCPU, cgtCPU, write->data, cldata->data, cgt_nbytes(write));
 }
 """
 
@@ -688,12 +689,6 @@ extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads
 
 shit = [] # XXX just so this stuff doesn't get dereferenced.
 # this is a memory leak, will fix later
-
-    # XXX why doesn't it work with valret ?!?!?!
-    # for (int i=0; i < cldata->ndim; ++i) printf("%i %i\n", i, ((size_t*)cldata->shape)[i]);
-    # cgtArray* out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
-    #     (cgtDtype)cldata->dtype, cgtCPU, cldata->data, true);
-    # return out;
 
 
 class Fill(Op):
@@ -1373,18 +1368,18 @@ class GetSli(Op):
         assert inputs[1].dtype == inputs[2].dtype == inputs[3].dtype == 'i8'
         return inputs[0].get_type()
     def c_code(self, inputs):
-        raise MethodNotDefined        
+        raise MethodNotDefined
         x = inputs[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < out->shape[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*instrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join(["i%i"%ax + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
         return r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray *in=read[0];
-    long start = ((long*)read[1]->data)[0];
-    //long stop = ((long*)read[2]->data)[0];
-    long step = ((long*)read[3]->data)[0];
+    cgtArray *in=reads[0];
+    long start = ((long*)reads[1]->data)[0];
+    //long stop = ((long*)reads[2]->data)[0];
+    long step = ((long*)reads[3]->data)[0];
     size_t instrides[in->ndim];
     cgt_get_strides(in, instrides);
     size_t outstrides[write->ndim];
@@ -1465,13 +1460,6 @@ class IncFlatIndices(Op):
     def py_apply_inplace(self, reads, write):
         x,inds,y = reads
         write.flat[inds] += y # XXX
-    def pullback(self, inputs, output, goutput):
-        raise MethodNotDefined
-        _x, inds, _y = inputs 
-        gx = goutput
-        gy = Result(GetFlatIndices(), [goutput, inds])
-        raise Todo("not sure it's right")
-        # return [gx, None, gy]
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, inputs):

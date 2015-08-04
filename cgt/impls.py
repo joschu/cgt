@@ -104,6 +104,7 @@ def get_impl(node, devtype):
 
     # TODO: includes should be in cache, as well as info about definitions like
     # CGT_ENABLE_CUDA
+    # and flags
 
     compile_info = get_compile_info()    
     if devtype == "gpu" and not compile_info["CGT_ENABLE_CUDA"]:
