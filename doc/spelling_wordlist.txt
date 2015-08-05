@@ -1,0 +1,17 @@
+Theano
+codebase
+reimplement
+backend
+multithreading
+cmake
+preinstalled
+reimagines
+multithreaded
+subexpression
+optimizations
+arrayobject
+dlopen
+dlsym
+autotuning
+upcasting
+numpy

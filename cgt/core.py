@@ -369,6 +369,22 @@ class Op(object):
         pullback([x_1, ..., x_k], y, grady) := \sum_k J_k gradx_k
         """
         raise MethodNotDefined
+    def spliting(self):
+        """
+        Return a list [tensor_type_sig, split_specs]
+        where tensor_type_sig is a string labeling the input and output axes
+        and split_specs is a list of tuples (axis, split_type, split_args...) 
+
+        tensor_type_sig is easiest to illustrate with a few examples:
+        Mul22: i.j , j.k-> i.k
+        Sum{1} i.j -> i.1
+        GetSli{0} ij.1.1
+
+
+
+        """
+        raise MethodNotDefined
+
 
     def __repr__(self):
         return self.get_name()
