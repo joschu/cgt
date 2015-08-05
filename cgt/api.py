@@ -90,7 +90,13 @@ def concatenate(xs, axis=0):
     return core.Result(core.Concatenate(axis), xs)
 
 def constant(val):
-    return core.Result(core.Constant(val), [])
+    if isinstance(val, tuple):
+        val = core.as_valid_tuple(val)
+        op = core.ConstantTuple(val)
+    else:
+        val = core.as_valid_array(val)
+        op = core.ConstantTensor(val)
+    return core.Result(op, [])
 
 def dot(x, y):
     x = core.as_node(x)

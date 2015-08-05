@@ -123,7 +123,7 @@ Links and Further Reading
 Why not Build on Theano?
 ========================
 
-CGT is heavily based on Theano, and we (the authors of CGT) think that Theano is a beautiful and visionary piece of software.
+CGT is heavily based on Theano, and we (the authors of CGT) think that Theano is a beautiful and highly innovative piece of software.
 However, several limitation of Theano (in its current state) motivated us to consider creating a new library:
 
 - Optimization and compilation of the graphs is very slow. For this region, Theano becomes  inconvenient when working with large recurrent models. To use these models, one has to use the Scan operator, which is usually less convenient than constructing a graph with the unrolled computation. |br| **CGT solution**: (1) the main graph simplification process in CGT involves a single pass through the graph that applies several different types of replacement simultaneously (common subexpression elimination, constant propagation, arithmetic identities like ``x*1=x``.) In-place optimizations are performed in a second phase that also involves a single pass through the graph. Together, these phases take negligible time. Furthermore, we use a different graph data-structure (similar to SSA representations used by compilers) which allows for much cleaner simplification code. In Theano, the C++/CUDA compilation itself takes significant time, because Theano compiles a whole Python module (written in C++) for each function, which includes Python.h and numpy/arrayobject.h. On the other hand, CGT compiles a small C++ file with minimal header dependencies, taking a small fraction of a second, and the relevant function is later retrieved with ``dlopen`` and ``dlsym``.

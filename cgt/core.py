@@ -33,6 +33,9 @@ def as_valid_array(x):
     x = x.astype(Dtype.canon(x.dtype))
     return x
 
+def as_valid_tuple(x):
+    return tuple(as_valid_array(a) for a in x)
+
 class Type(object):
     """
     Represents a datatype for Nodes
@@ -49,7 +52,7 @@ class TensorType(Type):
     def __init__(self, dtype, ndim):
         self.dtype = Dtype.canon(dtype)
         self.ndim = ndim
-    def __repr__(self):
+    def __str__(self):
         return "Tensor(%s,%s)"%(self.dtype, self.ndim)
     def __eq__(self, other):
         return self.dtype == other.dtype and self.ndim == other.ndim
@@ -69,7 +72,7 @@ class TupleType(Type):
         return self.eltypes[i]
     def __iter__(self):
         return iter(self.eltypes)
-    def __repr__(self):
+    def __str__(self):
         return "Tup(" + ",".join(map(str,self.eltypes))+")"
     def __eq__(self, other):
         return len(self.eltypes) == len(other.eltypes)\
@@ -89,7 +92,7 @@ class Device(object):
         self.idx = idx
     def __eq__(self, other):
         return self.machine == other.machine and self.devtype == other.devtype and self.idx == other.idx
-    def __repr__(self):
+    def __str__(self):
         return "%s/%s/%s"%(self.machine,self.devtype,self.idx)
 
 def _promote(typ1, typ2):
@@ -159,8 +162,6 @@ class Node(object):
         return self.typ.ndim if isinstance(self.typ, TensorType) else 0
     def get_type(self):
         return self.typ
-    def get_name(self):
-        raise NotImplementedError
     def get_diff(self):
         return [] if self.op is None else self.op.get_diff(len(self.parents))
     # Unary ops
@@ -192,7 +193,7 @@ class Node(object):
     # def __eq__(self, other):
     #     return equal(self, other)
     # def __ne__(self, other):
-    #     return not_equal(self, other) ## XXX why is this necessary?
+    #     return not_equal(self, other)
 
     # TODO make these all match
     def __radd__(self, other):
@@ -232,8 +233,6 @@ class Node(object):
             return len(self.typ)
         else:
             raise ValueError("Node of type Tensor has no __len__")
-    def __repr__(self):
-        return self.get_name()
 
     def reshape(self, shp):
         assert isinstance(shp, (list,tuple))
@@ -282,7 +281,6 @@ class Op(object):
     """
 
     # attributes that can be overwritten in subclasses
-    dynamic_data = False # op contains to data that might be changed externally
     gpu_uses_c = False # even if output on GPU, use C implementation, not CUDA
     call_type = 'inplace' # or valret
     inplace_alias_ok = True
@@ -291,6 +289,8 @@ class Op(object):
     c_extra_link_flags = ""
     cuda_extra_includes = []
     cuda_extra_link_flags = ""
+
+    # pylint: disable=W0613
 
     def shp_apply(self, parents):
         """
@@ -312,18 +312,13 @@ class Op(object):
         """
         Return string expression for this operation, built from the parent expressions
         """
-        return "%s(%s)"%(self.get_name(), ",".join(parent_exprs))
+        return "%s(%s)"%(str(self), ",".join(parent_exprs))
     def get_hash(self):
         """
         Return a string that uniquely identifies the value of this Op.
         Should ideally be fixed across program runs
         """
         return cPickle.dumps(self.__dict__, -1)+self.__class__.__name__
-    def get_name(self):
-        """
-        Get a human-readable description of the Op, including its attributes
-        """
-        return type(self).__name__.lower()
     def py_apply_inplace(self, reads, write):
         """
         Apply python implementation of op to numeric inputs and outputs in-place
@@ -335,8 +330,21 @@ class Op(object):
         """
         raise MethodNotDefined
     def get_closure(self, _inputs):
-        """
-        XXX writeme
+        """        
+        Return a list (specifying the closure data) or None (indicating that no closure data is needed.)
+
+        For an Op with several attributes, some of them might be incorporated directly into the code of the Op,
+        whereas others can be provided at runtime. This function provides the data used to create a closure
+        containing the information that should be passed at runtime.
+        CGT will generate code for a struct with the desired field.
+
+        Closure data is specified in a list of triples of the form [(fieldname, fieldtype, fieldval)]
+        Fieldtype is a string
+        Fieldtypes is a ctypes type like ctypes.c_int or ctypes.c_void_p
+        Fieldval is the python value.
+
+        For example, let's say we want to store an int and a bool in the closure. Then we can return the triples
+        [("myint",ctypes.c_int, 3), ("mybool",ctypes.c_bool, True)]
         """
         return None
     def c_code(self, inputs):
@@ -363,13 +371,13 @@ class Op(object):
         """
         raise MethodNotDefined
     def pushforward(self, inputs, output, goutput):
-        """
+        r"""
         Compute symbolic expressions for derivatives obtained by "tangent propagation" on this Op
         Given a function y = f(x_1, x_2, ..., x_k), let J_k denote the Jacobian dy/dx_k
         pullback([x_1, ..., x_k], y, grady) := \sum_k J_k gradx_k
         """
         raise MethodNotDefined
-    def spliting(self):
+    def spliting(self, inputs):
         """
         Return a list [tensor_type_sig, split_specs]
         where tensor_type_sig is a string labeling the input and output axes
@@ -380,25 +388,23 @@ class Op(object):
         Sum{1} i.j -> i.1
         GetSli{0} ij.1.1
 
-
-
         """
         raise MethodNotDefined
 
-
-    def __repr__(self):
-        return self.get_name()
+    def __str__(self):
+        """
+        Get a human-readable description of the Op, including its attributes
+        """
+        return type(self).__name__.lower()
 
 def as_node(val_or_node):
-    """
+    """    
     If numeric data received, convert to a constant node
     """
     if isinstance(val_or_node, Node):
         return val_or_node
     elif isinstance(val_or_node, np.ndarray) or np.isscalar(val_or_node):
         return constant(val_or_node)
-    elif val_or_node==[]:
-        return constant(np.array([],dtype='i8')) # XXX maybe get rid of this
     elif isinstance(val_or_node, tuple):
         return make_tuple(*val_or_node)
     else:
@@ -416,16 +422,12 @@ class Result(Node):
         assert op is not None
         # self.stackinfo = traceback.extract_stack()
         Node.__init__(self, typ, op, parents)
-    def get_expr(self, parent_exprs):
-        return "%s(%s)"%(self.get_name(), ",".join(parent_exprs))
     def get_hash(self, node2hash):
         hashobj = hashlib.md5(self.op.get_hash())
         for p in self.parents: hashobj.update(node2hash[p])
         return hashobj.hexdigest()
-    def get_name(self):
-        return "Res{%s}"%self.op.get_name()
     def __repr__(self):
-        return self.get_name()
+        return "Result{%s,id=%i}"%(str(self.op),id(self))
 
 class Input(Node):
     """
@@ -442,8 +444,8 @@ class Input(Node):
         hashobj = hashlib.md5(str(id(self)))
         # XXX
         return hashobj.hexdigest()
-    def get_name(self):
-        return self.name
+    def __repr__(self):
+        raise NotImplementedError
     def get_fixed_shape(self):
         raise NotImplementedError
 
@@ -462,7 +464,7 @@ class Argument(Input):
     def is_argument(self):
         return True
     def __repr__(self):
-        return "Arg{%s,%s}"%(self.get_dtype(), self.get_ndim())
+        return "Argument{%s,name='%s',id=%s}"%(self.typ,self.name,id(self))
     def get_fixed_shape(self):
         return self.fixed_shape
 
@@ -499,8 +501,8 @@ class Data(Input):
         self.op = GetData(self)
     def is_data(self):
         return True
-    def get_name(self):
-        return self.name
+    def __repr__(self):
+        return "Data{%s,name='%s',id=%s}"%(self.typ,self.name,id(self))
     def get_device(self):
         return self.device
     def get_fixed_shape(self):
@@ -508,8 +510,6 @@ class Data(Input):
         return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
         return self.value
-    def __repr__(self):
-        return self.get_name() or "unnamed_data{ndim=%s,dtype=%s}"%(self.ndim, self.dtype)
     # TODO: remove external accesses to .value
 
 def _singleton_ones(dtype, ndim):
@@ -567,10 +567,6 @@ def pullback(outputs, goutputs, wrt):
     More precisely, suppose f is a function with (y_1, y_2, ..., y_k) = f(x_1, x_2, ..., x_n)
     Then pullback([x_1,...,x_n], [y_1,...,y_k], [gy_1, ..., gy_k]) := [gx_1, ..., gx_n]
     """
-    # XXX get rid of first args
-    # assert all(node.is_input() for node in wrt)    
-    # TODO Maybe get rid of inputs argument
-
     nodelist = list(topsorted(outputs))
 
     dio = differentiably_influences(outputs,nodelist=nodelist)
@@ -616,15 +612,15 @@ def pullback(outputs, goutputs, wrt):
     # 0th element
     return [var2gs[node][0] for node in wrt]
 
-def infer_shape(x):
-    return tuple(x.op.value for x in  CACHER.simplify(cgt.shape(x)))
+def infer_shape(arr):
+    return tuple(x.op.value for x in  CACHER.simplify(cgt.shape(arr)))
 
 def grad(cost, wrt):    
     """
     Compute the gradient of scalar-valued `cost` with respect to a list of variables `wrt`
     """
-    # TODO: be more clear on what types wrt are allowed to be. Do they need to be inputs?
     assert cost.get_ndim() == 0
+    assert all(x.is_input() for x in wrt), "Can only differentiate wrt Input nodes. (Or do you have a good reason to differentiate wrt a non-input? Let us know, we can probably implement it."
     gout = _singleton_ones(cost.get_dtype(), 0)
     return pullback([cost], [gout], wrt)
 
@@ -637,20 +633,24 @@ def grad(cost, wrt):
 # Constants
 # ----------------------------------------------------------------
 
-class Constant(Op):
+class Constant(Op): #pylint: disable=W0223
+    def __init__(self, value):
+        self.value = value
+    def get_value(self):
+        return self.value
+
+class ConstantTensor(Constant):
     call_type = "inplace"
     # XXX for some reason valret version gives rare segfaults
     def __init__(self, value):
-        if isinstance(value, tuple):
-            self.value = value # XXX need to make valid recursively?
-        else:
-            self.value = as_valid_array(value)
-            assert self.value.dtype != object
+        Constant.__init__(self, as_valid_array(value))
     def get_expr(self, parent_exprs):
-        return self.get_name()
-    def get_name(self):
+        return self._value_str()
+    def __str__(self):
+        return "const{%s}"%self._value_str()
+    def _value_str(self):
         ndim = self.value.ndim
-        return "const{%g}"%self.value if ndim==0 else "const{%s%g...%s}"%("["*ndim, self.value.flat[0], "]"*ndim)
+        return "%g"%self.value if ndim==0 else "%s%g...%s"%("["*ndim, self.value.flat[0], "]"*ndim)        
     def py_apply_valret(self, reads):
         return self.value
     def py_apply_inplace(self, reads, write):
@@ -659,20 +659,16 @@ class Constant(Op):
                 np.copyto(arrto, arrfrom)
         else:
             np.copyto(write,self.value)
-    def pullback(self, _inps, _out, _gout):
-        return []
     def shp_apply(self, _inputs):
-        if isinstance(self.value, np.ndarray):
-            return [constant(x) for x in self.value.shape] 
-        else:
-            return shape(as_node(self.value))
+        return [constant(x) for x in self.value.shape] 
     def typ_apply(self, inputs):
         assert len(inputs)==0
-        return _get_value_type(self.value)
+        return _ndarray_type(self.value)
     def get_hash(self):
         return str(id(self))
     def get_closure(self, _):
         if isinstance(self.value, tuple): raise MethodNotDefined
+        assert isinstance(self.value, np.narray)
         shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
         shit.append(self.value)
         return [
@@ -684,23 +680,41 @@ class Constant(Op):
         if self.call_type == "valret": return self.c_code_valret(*args)
         elif self.call_type == "inplace": return self.c_code_inplace(*args)
         else: raise ValueError
-    def c_code_inplace(self, inputs):
-        if isinstance(self.value, tuple):
-            raise MethodNotDefined
+    def c_code_inplace(self, _inputs):
         return r"""
 extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads, cgtArray* write) {
     cgt_memcpy(cgtCPU, cgtCPU, write->data, cldata->data, cgt_nbytes(write));
 }
 """
 
-    def c_code_valret(self, inputs):
+    def c_code_valret(self, _inputs):
         return r"""
 extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
         auto out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
             (cgtDtype)cldata->dtype, cgtCPU, (void*)cldata->data, false);
         return out;
 }"""
-        return out;
+
+
+class ConstantTuple(Constant):
+    call_type = "valret"
+    def __init__(self, value):
+        self.value = value
+    def get_expr(self, parent_exprs):
+        return str(self.value)
+    def __str__(self):
+        return "const{%s}"%str(self.value)
+    def py_apply_valret(self, reads):
+        return self.value
+    def shp_apply(self, _inputs):
+        return tuple(map(constant, x.shape) for x in self.value)
+        return shape(as_node(self.value))
+    def typ_apply(self, inputs):
+        assert len(inputs)==0
+        return _get_value_type(self.value)
+    def get_hash(self):
+        return str(id(self))
+
 
 
 shit = [] # XXX just so this stuff doesn't get dereferenced.
@@ -714,11 +728,12 @@ class Fill(Op):
     def __init__(self, value):
         self.value = as_valid_array(value)
         assert self.value.ndim ==0
+        assert self.value.dtype != "O"
         self.dtype = self.value.dtype
         assert self.value.ndim==0
     def get_diff(self, num_inputs):
         return [False]*num_inputs
-    def get_name(self):
+    def __str__(self):
         return "fill{%g}"%self.value
     def py_apply_inplace(self, reads, write):
         write[...] = self.value
@@ -760,13 +775,12 @@ class ScalarRng(Op):
     """
     (shape...) -> array filled with iid random numbers, from either uniform or normal distribution
     """
-    dynamic_data = True
     def __init__(self, kind):
         assert kind in ("uniform","gaussian")
         self.kind = kind
     def get_diff(self, num_inputs):
         return [False]*num_inputs
-    def get_name(self):
+    def __str__(self):
         return "rng{%s}"%self.kind
     def py_apply_inplace(self, reads, write):
         if self.kind == "uniform": write[...] = np.random.rand(*reads)
@@ -853,7 +867,7 @@ class ElwiseUnary(Op):
         self.info = UNARY_INFO[opname] if info is None else info
     def get_diff(self, _):
         return [self.info.diff]
-    def get_name(self):
+    def __str__(self):
         return self.opname
     def get_hash(self):
         return utils.hash_seq1(self.opname)
@@ -882,7 +896,7 @@ class ElwiseUnary(Op):
         return TensorType(out_type, inputs[0].get_ndim())
     def c_code(self, inputs):
         info = self.info
-        output = Result(self, inputs) # XXX should store this type info in node
+        out_dtype = self.typ_apply(inputs).dtype
         return r"""
 static inline %(cdtype1)s scalar_CGT_FUNCNAME(%(cdtype0)s x) {return %(cexpr)s;}
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
@@ -894,7 +908,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
         writedata[i] = scalar_CGT_FUNCNAME(readdata[i]);
     }
 }
-"""%dict(cdtype0=np2c[inputs[0].dtype], cdtype1=np2c[output.dtype], cexpr=info.cexpr)
+"""%dict(cdtype0=np2c[inputs[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
     def cuda_code(self, inputs):
         info = self.info
         npdtype = inputs[0].dtype
@@ -930,7 +944,7 @@ class ElwiseBinary(Op):
         return utils.hash_seq1(self.opname)        
     def get_expr(self, parent_exprs):
         return "(%s %s %s)"%(parent_exprs[0], self.opname, parent_exprs[1])
-    def get_name(self):
+    def __str__(self):
         return BINARY_INFO[self.opname].short
     def py_apply_inplace(self, reads, write):
         x,y = reads
@@ -940,7 +954,6 @@ class ElwiseBinary(Op):
         self.info.pyfunc(x,y, out=write)
     def get_replacement(self, parents, analysis):
         l,r = parents
-        node = Result(self, parents) # XXX TODO use staticmethod?
         node2sv = analysis["node2sv"]
         out = None
         
@@ -972,10 +985,9 @@ class ElwiseBinary(Op):
             if r in node2sv and node2sv[r] == 0: out = l
 
         if out is not None:
-            
-            out = cast(out, node.dtype)
-            
-            if out.ndim==0 and node.ndim>0:
+            outtyp = self.typ_apply(parents)
+            out = cast(out, outtyp.dtype)
+            if out.ndim==0 and outtyp.ndim>0:
                 ind4shape = 1 if self.scalar_mask[0] else 0
                 outshape = analysis["node2shape"][parents[ind4shape]]
                 out = fill(out, outshape)
@@ -1062,7 +1074,7 @@ class Size(Op):
         self.axis = axis
     def get_diff(self, _):
         return [False]
-    def get_name(self):
+    def __str__(self):
         return "size{%i}"%self.axis
     def py_apply_valret(self, reads):
         return np.array(reads[0].shape[self.axis])
@@ -1279,7 +1291,7 @@ class Sum(Op):
         self.axes = tuple(axes)
     def get_diff(self, _):
         return [True]
-    def get_name(self):
+    def __str__(self):
         return "sum{%s}"%(",".join(map(str,self.axes)))
     def py_apply_inplace(self, reads, write):
         reads[0].sum(axis = self.axes or None, out=write, keepdims=True)
@@ -1320,7 +1332,7 @@ class Max(Op):
         self.axes = tuple(axes)
     def get_diff(self, _):
         return [True]
-    def get_name(self):
+    def __str__(self):
         return "max{%s}"%(",".join(map(str,self.axes)))
     def py_apply_inplace(self, reads, write):
         reads[0].max(axis=self.axes or None,keepdims=True, out=write)
@@ -1343,7 +1355,7 @@ class Argmax(Op):
         self.axis = axis
     def get_diff(self, _):
         return [False]
-    def get_name(self):
+    def __str__(self):
         return "argmax{%s}"%self.axis
     def py_apply_inplace(self, reads, write):
         write.flat[:] = reads[0].argmax(axis=self.axis)
@@ -1424,7 +1436,7 @@ class IncSli(Op):
         x, start, stop, step, y=reads
         slices = [slice(None,None,None) for _ in xrange(x.ndim)]
         slices[self.axis] = slice(start,stop,step)
-        write[slices] += y # XXX check that it's incremental
+        write[slices] += y
     def pullback(self, inputs, output, goutput):
         _x, start, stop, step, _y = inputs
         gx = goutput
@@ -1482,7 +1494,7 @@ class IncFlatIndices(Op):
         return [True,False,True]
     def py_apply_inplace(self, reads, write):
         x,inds,y = reads
-        write.flat[inds] += y # XXX
+        write.flat[inds] += y
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, inputs):
@@ -1749,7 +1761,7 @@ class debug_context(object):
         assert debug_context.global_context is None, "can only be in one debug context at a time"
         debug_context.global_context = self
         return self
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, *_args):
         debug_context.global_context = None
 
 
@@ -1876,7 +1888,7 @@ def do_analysis(node, analysis):
         op = node.op
         if isinstance(op, Fill):
             node2sv[node] = op.value
-        elif isinstance(op, Constant) and utils.is_singleton(op.value):
+        elif isinstance(op, ConstantTensor) and utils.is_singleton(op.value):
             node2sv[node] = op.value.flat[0]
         elif isinstance(op, Repeat) and newparents[0] in node2sv:
             node2sv[node] = node2sv[newparents[0]]
@@ -1898,7 +1910,9 @@ def maybe_replace(node, analysis, repl):
         return newnode
     parents = node.parents
     # -- CONSTANT PROP --
-    if all(isinstance(par.op, Constant) for par in parents) and not node.op.dynamic_data:
+    # ASSUMPTION: the only type of nullary ops that we can propagate this way
+    # are subclasses of Constant
+    if len(parents) > 0 and all(isinstance(par.op, Constant) for par in parents):
         if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
         return constant(py_numeric_apply(node, [p.op.value for p in parents]))
     # -- SIZE --
@@ -1966,8 +1980,10 @@ def assertn(xs,msg=""):
             raise AssertionError(msg)
 
 def _noderepr(x):
-    if isinstance(x.op, Constant):
+    if isinstance(x.op, ConstantTensor):
         return x.op.value.item()
+    elif isinstance(x.op, ConstantTuple):
+        return x.op.value
     else:
         return "?"
 

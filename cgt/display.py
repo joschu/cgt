@@ -27,7 +27,7 @@ def _print_tree(node, depth, node2name, expands, o, nodefn):
         varname = node2name[node]
         new = False
     else:
-        varname = node.get_name() + "@%i"%len(node2name)
+        varname = _node_name(node) + "@%i"%len(node2name)
         node2name[node] = varname
         new = True
 
@@ -56,7 +56,7 @@ def _get_expr(node, node2s):
         return node2s[node]
     else:
         if node.is_input():
-            name = node2s[node] = node.get_name() or "@%i"%len(node2s)
+            name = node2s[node] = _node_name(node) or "@%i"%len(node2s)
             return name
         else:
             parent_exprs = [_get_expr(parent, node2s) 
@@ -72,11 +72,11 @@ def print_text(outputs, o=sys.stdout):
         outputs = [outputs]
     node2name = {}
     for node in core.topsorted(outputs):
-        thisname = node2name[node] = (node.get_name() if node.is_input() else "") + "@%i"%len(node2name)
-        if node.is_input():
-            o.write("%s <- input\n"%thisname)
+        thisname = node2name[node] = _node_name(node) + "@%i"%len(node2name)
+        if node.is_argument():
+            o.write("%s <- argument\n"%thisname)
         else:
-            o.write("%s = %s %s\n"%(thisname, node.op.get_name(), " ".join(node2name[parent]
+            o.write("%s <- %s %s\n"%(thisname, str(node.op), " ".join(node2name[parent]
                 for parent in node.parents)))
 
 def as_dot(nodes):
@@ -90,3 +90,8 @@ def as_dot(nodes):
             g.edge(str(id(n)), str(id(p)))
     return g
 
+def _node_name(node):
+    if node.is_input():
+        return node.name
+    else:
+        return ""

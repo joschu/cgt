@@ -78,9 +78,9 @@ def check_affine(f, *nu_inputs):
     PROB2RESULT[f.__name__]["grad"] = grad_count
 
 
-def type_dispatch(name):
+def type_dispatch(name, argind=0):
     def newfn(*args):
-        if isinstance(args[0], core.Node):
+        if isinstance(args[argind], core.Node):
             return cgt.__dict__[name](*args)
         else:
             return np.__dict__[name](*args)
@@ -90,6 +90,7 @@ def type_dispatch(name):
 sum = type_dispatch("sum")
 dot = type_dispatch("dot")
 max = type_dispatch("max")
+einsum = type_dispatch("einsum",1)
 repeat = type_dispatch("repeat")
 
 def xplusx(x):
@@ -179,6 +180,25 @@ def repeat0(x,y):
 def repeat1(x,y):
     return (repeat(x,7,1)*y).sum()
 
+
+def transpose021(x):
+    return sum(x.transpose([0,2,1]))
+
+def transpose012(x):
+    return sum(x.transpose([0,1,2]))
+
+def transpose102(x):
+    return sum(x.transpose([1,0,2]))
+
+def batchedmatmul(x,y):
+    return sum(einsum("nij,njk->nik", x, y))
+
+def rfft(x):
+    if isinstance(x, np.ndarray):
+        return np.real(np.fft.rfft2(x,(10,10),[0,1])).sum()
+    else:
+        return cgt.real(cgt.rfft(x, (10,10), [0,1])).sum()
+
 ################################################################
 ### Tests 
 ################################################################
@@ -232,8 +252,19 @@ class AffineTestCase(unittest.TestCase):
         check_affine(matvec, M23, v3)
         check_affine(vecvec, v3, v3b)
         check_affine(bcadd, M23, v13)
-        check_affine(matmatplusvec, M23, M35, v15) # Wrong because we have no broadcasting
+        check_affine(matmatplusvec, M23, M35, v15)
         check_affine(transpose, M23, nr.randn(3,2))
+
+
+        T235 = nr.randn(2,3,5)
+        T257 = nr.randn(2,5,7)
+        check_affine(transpose012, T235)
+        check_affine(transpose021, T235)
+        check_affine(transpose102, T235)
+        check_affine(batchedmatmul, T235, T257)
+
+        # check_affine(rfft, M35)
+
 
         # TODO: examples with constants
         # TODO: examples that mix scalar and matrix types
