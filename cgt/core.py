@@ -1288,16 +1288,25 @@ class Transpose(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def get_c_impl(self, inputs):
+        x = inputs[0]
+        d = {}
+        d["openloops"] = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        d["closeloops"] = "}"*x.ndim
+        d["outidxexpr"] = " + ".join(["i%i * outstrides[%i]"%(i,i) for i in xrange(x.ndim)])        
+        d["inidxexpr"] = " + ".join(["i%i * instrides[%i]"%(i,ax) for (i,ax) in enumerate(self.axes)])        
+        d["cdtype"] = np2c[x.dtype]
         code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read = reads[0];
     %(cdtype)s* indata = (%(cdtype)s*)read->data, *outdata = (%(cdtype)s*)write->data;
-    for (int i=0; i < read->shape[0]; ++i) {
-        for (int j=0; j < read->shape[1]; ++j) {
-            outdata[j*read->shape[0] + i] = indata[i*read->shape[1] + j];
-        }
-    }
-        }"""%dict(cdtype=np2c[inputs[0].dtype])
+    size_t instrides[read->ndim];
+    cgt_get_strides(read, instrides);
+    size_t outstrides[write->ndim];
+    cgt_get_strides(write, outstrides);
+    %(openloops)s
+        outdata[%(outidxexpr)s] = indata[%(inidxexpr)s];
+    %(closeloops)s
+        }"""%d
         return CImpl(code)
 
 class Transport(Op):

@@ -117,6 +117,7 @@ cdef cgtObject* py2cgt_object(object o) except *:
 
 cdef cgtArray* py2cgt_Array(cnp.ndarray arr):
     cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, dtype_fromstr(arr.dtype), cgtCPU)
+    if not arr.flags.c_contiguous: arr = arr.copy()
     cgt_memcpy(out.devtype, cgtCPU, out.data, cnp.PyArray_DATA(arr), cgt_nbytes(out))
     return out
 
