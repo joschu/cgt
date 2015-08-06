@@ -23,7 +23,7 @@ class Dtype: #pylint: disable=W0232
         dt = np.dtype(dt)
         if dt.char in 'fdg':
             return cgt.floatX
-        elif dt.char in 'iulBb':
+        elif dt.char in 'iulBb?':
             return 'i'+str(dt.itemsize)
         elif dt.char in 'FDG':
             return 'c'+str(dt.itemsize)
@@ -516,7 +516,14 @@ class GetData(Op):
     def get_py_impl(self):
         def f(reads): return self.datanode.get_value()
         return PyImpl(valret_func=f)
-
+    def get_c_impl(self, *args):
+        return CImpl(code=r"""
+extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
+    return (cgtArray*)cldata->ptr;
+}""")
+    def get_closure(self, _):
+        ptr = self.datanode._value.get_pointer()
+        return [("ptr", ctypes.c_void_p, ptr)]
 
 class Data(Input):
     """
@@ -527,15 +534,21 @@ class Data(Input):
     def __init__(self, value,name=None,device=None, fixed_shape_mask=None):
         value = as_valid_array(value)
         if device is None:
-            self.value = value
-            self.device = None#_get_value_device(value)
+            self.device = Device()
+        # TODO only if backend=cython
+        import cycgt2
+
+        self.use_numpy = cgt.load_config()["backend"] == "python"
+
+        if self.use_numpy:
+            self._value = value
         else:
-            self.value = _put_on_device(value, device)
-            self.device = device
+            self._value = cycgt2.CppArrayWrapper.from_numpy(value, self.device.devtype)
+
         self.name = "unnamed" if name is None else name
-        assert self.value.dtype != object
-        if fixed_shape_mask is None:  self.fixed_shape_mask = (False,)*self.value.ndim
-        elif fixed_shape_mask == "all": self.fixed_shape_mask = (True,)*self.value.ndim
+        assert self._value.dtype != object
+        if fixed_shape_mask is None:  self.fixed_shape_mask = (False,)*self._value.ndim
+        elif fixed_shape_mask == "all": self.fixed_shape_mask = (True,)*self._value.ndim
         else: self.fixed_shape_mask = fixed_shape_mask
         Input.__init__(self, _ndarray_type(value), name)
         self.op = GetData(self)
@@ -546,10 +559,11 @@ class Data(Input):
     def get_device(self):
         return self.device
     def get_fixed_shape(self):
-        shp = self.value.shape
+        shp = self._value.shape
         return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
-        return self.value
+        return self.value if self.use_numpy else self._value.to_numpy()
+
     # TODO: remove external accesses to .value
 
 def _singleton_ones(dtype, ndim):
@@ -652,6 +666,7 @@ def pullback(outputs, goutputs, wrt):
     # 0th element
     return [var2gs[node][0] for node in wrt]
 
+# XXX fails when non-constant
 def infer_shape(arr):
     return tuple(x.op.value for x in  CACHER.simplify(cgt.shape(arr)))
 
@@ -711,7 +726,6 @@ class ConstantTensor(Constant):
     def get_hash(self):
         return str(id(self))
     def get_closure(self, _):
-        if isinstance(self.value, tuple): raise MethodNotDefined
         assert isinstance(self.value, np.ndarray)
         shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
         shit.append(self.value)
@@ -2144,6 +2158,7 @@ def assertequaln(xs,ys,msg):
 # ================================================================
 
 def topsorted(outputs):
+    assert isinstance(outputs, (list,tuple))
     marks = {}
     out = []
     stack = [] #pylint: disable=W0621

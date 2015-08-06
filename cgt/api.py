@@ -271,6 +271,14 @@ def norm(x, axis=None, p=2, keepdims=False):
     else:
         return pow(pow(x, p).sum(axis=axis,keepdims=keepdims), 1.0 / p)
 
+def ones(shape, dtype=None): #pylint: disable=W0621
+    if (dtype is None):
+        dtype = cgt.floatX
+    return core.Result(core.Fill(np.array(1, dtype)), shape)
+
+def ones_like(x):
+    return ones(shape(x), x.dtype)
+
 def outer(x, y):
     assert (x.ndim == y.ndim == 1)
     return core.Result(core.Outer(), [x, y])

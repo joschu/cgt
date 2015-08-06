@@ -39,7 +39,8 @@ def setup_contiguous_storage(shareds, dtype = None):
     Moves the data stored in a bunch of Data variables to be slices of a single contiguous vector,
     and return a view on that vector.
     This facilitates writing optimization code that acts on flat vectors.
-    """    
+    """
+    raise RuntimeError("currently broken")
     dtype = dtype or cgt.floatX
     # assert utils.allsame([s.get_device() for s in shareds])
     tot_size = sum(s.value.size for s in shareds)

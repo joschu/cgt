@@ -2,10 +2,13 @@ from libcpp.vector cimport vector
 from cpython.ref cimport PyObject
 cimport numpy as cnp
 cimport cpython
+from libc.stdlib cimport abort
 
 import numpy as np
 import ctypes
 import os.path as osp
+import traceback
+
 
 import cgt
 from cgt import core, execution, impls
@@ -34,6 +37,7 @@ cdef extern from "cgt_common.h":
 
     cppclass cgtArray(cgtObject):
         cgtArray(int, size_t*, cgtDtype, cgtDevtype)
+        cgtArray(int, size_t*, cgtDtype, cgtDevtype, void* fromdata, bint copy)
         int ndim
         cgtDtype dtype
         cgtDevtype devtype
@@ -113,12 +117,17 @@ cdef cgtObject* py2cgt_object(object o) except *:
         return py2cgt_tuple(o)
     else:
         o = _to_valid_array(o)
-        return py2cgt_Array(o)
+        return py2cgt_array(o, cgtCPU)
 
-cdef cgtArray* py2cgt_Array(cnp.ndarray arr):
-    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, dtype_fromstr(arr.dtype), cgtCPU)
+cdef cgtArray* py2cgt_array(cnp.ndarray arr, cgtDevtype devtype):
+    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, devtype)
     if not arr.flags.c_contiguous: arr = arr.copy()
     cgt_memcpy(out.devtype, cgtCPU, out.data, cnp.PyArray_DATA(arr), cgt_nbytes(out))
+    return out
+
+cdef cgtArray* py2cgt_arrayview(cnp.ndarray arr):
+    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, cgtCPU, cnp.PyArray_DATA(arr), False)
+    assert arr.flags.c_contiguous
     return out
 
 cdef cgtTuple* py2cgt_tuple(object o):
@@ -222,7 +231,7 @@ def initialize_lib_dirs():
     if LIB_DIRS is None:
         LIB_DIRS = [".cgt/build/lib"]
 
-cdef void* get_or_load_lib(libname) except *:
+cdef void* get_or_load_lib(libname) except NULL:
     cdef void* handle
     initialize_lib_dirs()
     if libname in LIB_HANDLES:
@@ -276,39 +285,25 @@ cdef extern from "execution.h" namespace "cgt":
 
     Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation])
 
-# Conversion funcs
-# ----------------------------------------------------------------
-
 cdef vector[size_t] _tovectorlong(object xs):
     cdef vector[size_t] out = vector[size_t]()
     for x in xs: out.push_back(<size_t>x)
     return out
 
-cdef object _cgtarray2py(cgtArray* a):
-    raise NotImplementedError
-
-cdef object _cgttuple2py(cgtTuple* t):
-    raise NotImplementedError
-
-cdef object _cgtobj2py(cgtObject* o):
-    if cgt_is_array(o):
-        return _cgtarray2py(<cgtArray*>o)
-    else:
-        return _cgttuple2py(<cgtTuple*>o)
-
-cdef void* _ctypesstructptr(object o) except *:
+cdef void* _ctypesstructptr(object o) except NULL:
     if o is None: return NULL
     else: return <void*><size_t>ctypes.cast(ctypes.pointer(o), ctypes.c_voidp).value    
 
+# TODO inplace op can operate on views of data
 cdef void _pyfunc_inplace(void* cldata, cgtObject** reads, cgtObject* write):
     (pyfun, nin, nout) = <object>cldata
     pyread = [cgt2py_object(reads[i]) for i in xrange(nin)]
     pywrite = cgt2py_object(write)
     try:
         pyfun(pyread, pywrite)
-    except Exception as e:
-        print e,pyfun
-        raise e
+    except Exception:
+        traceback.print_exc()
+        abort()
     cdef cgtTuple* tup
     cdef cgtArray* a
     if cgt_is_array(write):
@@ -326,7 +321,11 @@ cdef void _pyfunc_inplace(void* cldata, cgtObject** reads, cgtObject* write):
 cdef cgtObject* _pyfunc_valret(void* cldata, cgtObject** args):
     (pyfun, nin, nout) = <object>cldata
     pyread = [cgt2py_object(args[i]) for i in xrange(nin)]
-    pyout = pyfun(pyread)
+    try:
+        pyout = pyfun(pyread)
+    except Exception:
+        traceback.print_exc()
+        abort()
     return py2cgt_object(pyout)
 
 
@@ -405,6 +404,31 @@ cdef ExecutionGraph* make_cpp_execution_graph(pyeg, oplib) except *:
         instrs.push_back(_tocppinstr(oplib, instr))
     return new ExecutionGraph(instrs,pyeg.n_args, pyeg.n_locs)
 
+cdef class CppArrayWrapper:
+    cdef cgtArray* arr
+    def to_numpy(self):
+        return cnp.PyArray_SimpleNewFromData(self.arr.ndim, <cnp.npy_intp*>self.arr.shape, self.arr.dtype, self.arr.data)
+    @staticmethod
+    def from_numpy(cnp.ndarray nparr, object pydevtype="cpu"):
+        cdef cgtDevtype devtype = devtype_fromstr(pydevtype)
+        out = CppArrayWrapper()
+        out.arr = py2cgt_array(nparr, devtype)
+        return out
+    @property
+    def ndim(self):
+        return self.arr.ndim
+    @property
+    def shape(self):
+        return [self.arr.shape[i] for i in xrange(self.arr.ndim)]
+    @property
+    def dtype(self):
+        return dtype_tostr(self.arr.dtype)
+    def get_pointer(self):
+        return <size_t>self.arr
+    def __dealloc__(self):
+        del self.arr
+
+
 cdef class CppInterpreterWrapper:
     """
     Convert python inputs to C++
@@ -413,15 +437,19 @@ cdef class CppInterpreterWrapper:
     """
     cdef ExecutionGraph* eg # owned
     cdef Interpreter* interp # owned
+    cdef object input_types
     def __init__(self, pyeg, oplib, input_types, output_locs):
         self.eg = make_cpp_execution_graph(pyeg, oplib)
         cdef vector[MemLocation] cpp_output_locs = _tocppmemvec(output_locs)
         self.interp = create_interpreter(self.eg, cpp_output_locs)
+        self.input_types = input_types
     def __dealloc__(self):
         if self.interp != NULL: del self.interp
         if self.eg != NULL: del self.eg
-    def __call__(self, *pyargs):
-        assert len(pyargs) == self.eg.n_args()
+    def __call__(self, *pyargs):        
+        pyargs = tuple(execution.as_valid_arg(arg) for arg in pyargs)
+        execution.typecheck_args(pyargs, self.input_types)
+
         # TODO: much better type checking on inputs
         cdef cgtTuple* cargs = new cgtTuple(len(pyargs))
         for (i,pyarg) in enumerate(pyargs):

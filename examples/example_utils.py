@@ -1,11 +1,11 @@
 import os, os.path as osp, shutil, numpy as np, urllib
 
-def train_test_val_slices(n, trainfrac, testfrac, valfrac):
-    assert trainfrac+testfrac+valfrac==1.0
+def train_val_test_slices(n, trainfrac, valfrac, testfrac):
+    assert trainfrac+valfrac+testfrac==1.0
     ntrain = int(np.round(n*trainfrac))
-    ntest = int(np.round(n*testfrac))
-    nval = n - ntrain - ntest
-    return slice(0,ntrain), slice(ntrain,ntrain+ntest), slice(ntrain+ntest,ntrain+ntest+nval)
+    nval = int(np.round(n*valfrac))
+    ntest = n - ntrain - nval
+    return slice(0,ntrain), slice(ntrain,ntrain+nval), slice(ntrain+nval,ntrain+nval+ntest)
 
 # helper methods to print nice table
 def fmt_item(x, l):
