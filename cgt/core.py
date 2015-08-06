@@ -1039,7 +1039,7 @@ class ElwiseBinary(Op):
                     raise RuntimeError("mismatched shapes %s %s. Note that implicit broadcasting isn't allowed. Use the broadcast(...) function"%(x.shape, y.shape))
             self.info.pyfunc(x,y, out=write)
         return PyImpl(inplace_func=f)
-    def c_code(self, inputs):
+    def get_c_impl(self, inputs):
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
         npdtype1 = inputs[1].dtype
@@ -1121,9 +1121,8 @@ class Size(Op):
                 return constant(fixed_shape[self.axis])
     def get_closure(self, inputs):
         return [("ax",ctypes.c_int,self.axis)]
-    def c_code(self, _):
-        raise RuntimeError # move to get_*_impl
-        return r"""
+    def get_c_impl(self, _):
+        code = r"""
 extern "C" cgtArray* CGT_FUNCNAME(void* cl0, cgtArray** reads) {
 CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
     cgtArray* in = reads[0];
@@ -1131,6 +1130,7 @@ CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
     ((long*)out->data)[0] = in->shape[cl->ax];
     return out;
 }"""
+        return CImpl(code)
 
 class Reshape(Op):
     gpu_uses_c = True
@@ -1149,9 +1149,8 @@ class Reshape(Op):
         return TensorType(inputs[0].get_dtype(), len(inputs)-1)
     def get_closure(self, parents):
         return [("ndim", ctypes.c_int,len(parents)-1)]
-    def c_code(self, _inputs):
-        raise RuntimeError # move to get_*_impl
-        return r"""
+    def get_c_impl(self, _):
+        code = r"""
 extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
     cgtArray* in = reads[0];
     size_t* newshape = new size_t[cldata->ndim];    
@@ -1160,6 +1159,7 @@ extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads
     return out;
 }
 """
+        return CImpl(code)
 
 class Concatenate(Op):
     call_type = "valret"
@@ -1249,9 +1249,8 @@ class Transpose(Op):
         return [inshape[ax] for ax in self.axes]
     def typ_apply(self, inputs):
         return inputs[0].get_type()
-    def c_code(self, inputs):
-        raise RuntimeError # move to get_c_impl
-        return r"""
+    def get_c_impl(self, inputs):
+        code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read = reads[0];
     %(cdtype)s* indata = (%(cdtype)s*)read->data, *outdata = (%(cdtype)s*)write->data;
@@ -1261,6 +1260,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
         }
     }
         }"""%dict(cdtype=np2c[inputs[0].dtype])
+        return CImpl(code)
 
 class Transport(Op):
     gpu_uses_c = True
@@ -1277,13 +1277,13 @@ class Transport(Op):
         return fn
     def shp_apply(self, inputs):
         return shape(inputs[0])
-    def c_code(self, _inputs):
-        raise RuntimeError # move to get_*_impl
-        return """
+    def get_c_impl(self, _inputs):
+        code = """
 void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgt_memcpy(write->devtype, reads[0]->devtype, write->data, reads[0]->data, cgt_nbytes(reads[0]));    
 }
 """
+        return CImpl(code)
 
 # TODO save computation by removing negative freq components
 class RFFT(Op):
@@ -1350,8 +1350,7 @@ class Sum(Op):
         return [(constant(1) if i in self.axes else s[i]) for i in xrange(x.get_ndim())]
     def typ_apply(self, inputs):
         return inputs[0].get_type()
-    def c_code(self, inputs):
-        raise RuntimeError # move to get_*_impl
+    def get_c_impl(self, inputs):
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
@@ -1359,7 +1358,7 @@ class Sum(Op):
         inidxexpr = " + ".join(["i%(ax)s * instrides[%(ax)s]"%dict(ax=ax) for ax in xrange(x.ndim)])
         outidxexpr = " + ".join(["i%(ax)s * outstrides[%(ax)s]"%dict(ax=ax) for ax in outdims])\
             if len(outdims)>0 else "0"
-        return r"""
+        code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read=reads[0];
     size_t instrides[read->ndim];
@@ -1373,7 +1372,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
     cdtype=np2c[inputs[0].dtype])
-    c_extra_includes = ["string.h"]
+        return CImpl(code, includes=["string.h"])
 
 class Max(Op):
     def __init__(self, axes):
@@ -1456,14 +1455,14 @@ class GetSli(Op):
     def typ_apply(self, inputs):
         assert inputs[1].dtype == inputs[2].dtype == inputs[3].dtype == 'i8'
         return inputs[0].get_type()
-    def c_code(self, inputs):
-        raise MethodNotDefined
+    def get_c_impl(self, inputs):
+        raise MethodNotDefined # XXXXXXXXX
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*instrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join(["i%i"%ax + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
-        return r"""
+        code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0];
     long start = ((long*)reads[1]->data)[0];
@@ -1479,6 +1478,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
     cdtype=np2c[inputs[0].dtype])
+        return CImpl(code)
 
 class IncSli(Op):
     writes_to_input = 0
@@ -1502,15 +1502,14 @@ class IncSli(Op):
         return shape(inputs[0])
     def typ_apply(self, inputs):
         return inputs[0].get_type()
-    def c_code(self, inputs):
-        raise RuntimeError # move this to get_c_impl
+    def get_c_impl(self, inputs):
         x = inputs[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         incidxexpr =  " + ".join(["i%i"%ax + "*incstrides[%i]"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
-        return r"""
+        code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0], *inc = reads[4], *out=write;
     long start = ((long*)reads[1]->data)[0];
@@ -1528,6 +1527,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops,
     cdtype=np2c[inputs[0].dtype], incidxexpr=incidxexpr)
+        return CImpl(code)
 
 class GetFlatIndices(Op):
     def get_diff(self, _):
@@ -1591,8 +1591,6 @@ class Mul21(Op):
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
 class Mul22(Op):
-    c_extra_includes = ["cblas.h"]
-    c_extra_link_flags = "-lblas"
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
@@ -1619,14 +1617,13 @@ class Mul22(Op):
         raise RuntimeError # move to get_c_impl
         return "mul22_%s"%(npdtype)
     # best gemm docs: https://software.intel.com/en-us/node/520775
-    def c_code(self, inputs):
-        raise RuntimeError # move to get_c_impl
+    def get_c_impl(self, inputs):
         npdtype = inputs[0].dtype
         try:
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
-        return """
+        code = """
 extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgtArray** AB, cgtArray* C) {
     cgtArray *A=AB[0], *B=AB[1];
     int lda = A->shape[1], ldb = B->shape[1], ldc = C->shape[1];
@@ -1638,6 +1635,7 @@ extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgtArray** AB, cgtArray* 
       ldb, beta, (%(cdtype)s*)C->data, ldc);
 }
 """%dict(letter=letter, cdtype = np2c[npdtype])
+        return CImpl(code, includes=["cblas.h"], link_flags="-lblas")
 
 class BatchedMul22(Op):
     def __init__(self, tA, tB):
