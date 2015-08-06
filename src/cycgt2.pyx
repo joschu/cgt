@@ -26,8 +26,8 @@ cdef extern from "cgt_common.h":
     cppclass cgtObject:
         pass
 
-    ctypedef void (*cgtByRefFun)(void*, cgtObject**, cgtObject*);
-    ctypedef cgtObject* (*cgtByValFun)(void*, cgtObject**);
+    ctypedef void (*cgtByRefFun)(void*, cgtObject**, cgtObject*)
+    ctypedef cgtObject* (*cgtByValFun)(void*, cgtObject**)
 
     enum cgtDevtype:
         cgtCPU
@@ -47,7 +47,7 @@ cdef extern from "cgt_common.h":
         cgtTuple(size_t)
         void setitem(int, cgtObject*)
         cgtObject* getitem(int)
-        size_t size();
+        size_t size()
         size_t len
         cgtObject** members        
 
