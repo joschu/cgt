@@ -25,7 +25,7 @@ class SinCos(core.Op):
         def f(reads):
             x = reads[0]
             return (np.sin(x), np.cos(x))
-        return cgt.PyImpl(valret_func=f)
+        return core.PyImpl(valret_func=f)
     c_extra_link_flags = "-lm"
     c_extra_includes = ["math.h"]
 
@@ -54,7 +54,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtTuple* write) {
             x = reads[0]
             write[0][...] = np.sin(x)
             write[1][...] = np.cos(x)
-        return cgt.PyImpl(inplace_func=f)
+        return core.PyImpl(inplace_func=f)
     c_extra_link_flags = "-lm"
     c_extra_includes = ["math.h"]
 

@@ -1,4 +1,5 @@
 from cgt.core import *
+import impls
 from collections import defaultdict
 from time import time
 
@@ -15,7 +16,7 @@ def function(inputs, outputs, dbg = None, updates=None):
     
     outputs = [make_tuple(*x) if isinstance(x, tuple) else x for x in outputs]
 
-    interp = compilation_pipeline(inputs, outputs, updates)
+    interp = run_compilation_pipeline(inputs, outputs, updates)
     return interp
 
 def function1(inputs, output, dbg=None, updates=None):
@@ -28,11 +29,10 @@ def function1(inputs, output, dbg=None, updates=None):
 # ================================================================
 
 def determine_devices(nodes):
-    return {} # TODO
+    return {n: "cpu" for n in nodes} # XXX HACK
 
 
 def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
-
     op = node.op
     parents = node.parents
     parent_devices = [node2dev[par] for par in parents]
@@ -43,12 +43,12 @@ def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
         devtype = "gpu"
     else:
         devtype = "cpu"
-    if devtype == "gpu":
-        try:
-            get_impl(node, "gpu")
-        except MethodNotDefined:
-            print "couldn't get gpu func for ", node
-            devtype = "cpu"
+    # if devtype == "gpu":
+    #     try:
+    #         get_impl(node, "gpu")
+    #     except MethodNotDefined:
+    #         print "couldn't get gpu func for ", node
+    #         devtype = "cpu"
 
 
     # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
@@ -98,7 +98,7 @@ def is_tensor(x):
 def is_tuple(x):
     return isinstance(x.typ, TupleType)
 
-def make_interpreter(inputs, outputs, eg, node2memloc):
+def make_interpreter(inputs, outputs, eg, node2memloc, node2dev):
     assert isinstance(eg, ExecutionGraph)
     input_types = [input.get_type() for input in inputs]
     output_types = [output.get_type() for output in outputs]
@@ -106,7 +106,7 @@ def make_interpreter(inputs, outputs, eg, node2memloc):
 
     backend = load_config()["backend"]
     if backend == "python":
-        oplib = OpLibrary() # XXX
+        oplib = impls.OpLibrary(force_python_impl=True)
         return SequentialInterpreter(eg, oplib, output_locs, input_types)
     elif backend == "cython":
         import cycgt2
@@ -253,7 +253,7 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
     return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
 
 
-def compilation_pipeline(inputs, outputs, updates):
+def run_compilation_pipeline(inputs, outputs, updates):
     """
     Compiles the expression graph into an execution graph. 
     """
@@ -284,7 +284,7 @@ def compilation_pipeline(inputs, outputs, updates):
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------
-    interp = make_interpreter(inputs, outputs_simple, eg, node2memloc)
+    interp = make_interpreter(inputs, outputs_simple, eg, node2memloc, node2dev)
 
     # Done!
     return interp
@@ -462,9 +462,9 @@ class SequentialInterpreter(Interpreter):
     def getarg(self, i):
         return self.args[i]
     def apply_inplace(self, node, reads, write):
-        self.oplib.apply_inplace(node, reads, write)
+        self.oplib.py_apply_inplace(node, reads, write)
     def apply_valret(self, node, reads):
-        return self.oplib.apply_valret(node, reads)
+        return self.oplib.py_apply_valret(node, reads)
 
 def is_data_mutable(node):
     if isinstance(node, Result):

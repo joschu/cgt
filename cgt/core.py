@@ -311,11 +311,12 @@ class PyImpl(OpImpl):
         return False
 
 class CImpl(OpImpl):
-    def __init__(self, code, includes=None, link_flags=None):
+    def __init__(self, code, closure=None, includes=None, link_flags=""):
         OpImpl.__init__(self, [code, includes, link_flags])
         self.code = code
+        self.closure = closure
         self.includes = [] if includes is None else includes
-        self.link_flags = [] if link_flags is None else link_flags
+        self.link_flags = link_flags
     def is_py(self):
         return False
     def is_c(self):
@@ -379,12 +380,12 @@ class Op(object):
     #     """
     #     Apply python implementation of op to numeric inputs and outputs in-place
     #     """
-    #     raise exceptions.MethodNotDefined
+    #     raise MethodNotDefined
     # def py_apply_valret(self, reads):
     #     """
     #     Apply and return value.
     #     """
-    #     raise exceptions.MethodNotDefined
+    #     raise MethodNotDefined
     # def get_closure(self, _inputs):
     #     """
     #     XXX writeme
@@ -394,13 +395,13 @@ class Op(object):
     #     """
     #     Return C code implementing this function, with the name of the function replaced by CGT_FUNCNAME.
     #     """
-    #     raise exceptions.MethodNotDefined
+    #     raise MethodNotDefined
     # def cuda_code(self, inputs):
     #     """
     #     See c_code
     #     This code will be compiled with nvcc
     #     """
-    #     raise exceptions.MethodNotDefined
+    #     raise MethodNotDefined
     def get_replacement(self, _newparents, _analysis):
         """
         Return the name of this node
@@ -412,24 +413,24 @@ class Op(object):
         Given a function y = f(x_1, x_2, ..., x_k), let J_k denote the Jacobian dy/dx_k
         pullback(...) computes gradx_k = J_k^T grady
         """
-        raise exceptions.MethodNotDefined
+        raise MethodNotDefined
     def pushforward(self, inputs, output, goutput):
         """
         Compute symbolic expressions for derivatives obtained by "tangent propagation" on this Op
         Given a function y = f(x_1, x_2, ..., x_k), let J_k denote the Jacobian dy/dx_k
         pullback([x_1, ..., x_k], y, grady) := \sum_k J_k gradx_k
         """
-        raise exceptions.MethodNotDefined
+        raise MethodNotDefined
 
     def __repr__(self):
         return self.get_name()
 
     def get_py_impl(self):
-        raise exceptions.MethodNotDefined
+        raise MethodNotDefined
     def get_c_impl(self, inputs):
-        raise exceptions.MethodNotDefined
+        raise MethodNotDefined
     def get_cuda_impl(self, inputs):
-        raise exceptions.MethodNotDefined
+        raise MethodNotDefined
 
 
 def as_node(val_or_node):
@@ -896,7 +897,6 @@ class ElwiseUnary(Op):
     """
     Elementwise unary operation
     """
-    c_extra_includes =  ["math.h"]
 
     def __init__(self, opname, info=None):
         self.opname = opname
@@ -932,11 +932,10 @@ class ElwiseUnary(Op):
             assert typeinfo in (cgt.floatX, cgt.complexX, 'i1','i2','i4','i8')
             out_type = typeinfo
         return TensorType(out_type, inputs[0].get_ndim())
-    def c_code(self, inputs):
-        raise RuntimeError # move this to get_c_impl
+    def get_c_impl(self, inputs):
         info = self.info
         output = Result(self, inputs) # XXX should store this type info in node
-        return r"""
+        code = r"""
 static inline %(cdtype1)s scalar_CGT_FUNCNAME(%(cdtype0)s x) {return %(cexpr)s;}
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray* read = reads[0];
@@ -948,6 +947,8 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     }
 }
 """%dict(cdtype0=np2c[inputs[0].dtype], cdtype1=np2c[output.dtype], cexpr=info.cexpr)
+        return CImpl(code, includes=["math.h"])
+    
     def cuda_code(self, inputs):
         raise RuntimeError # move this to get_cuda_impl
         info = self.info
@@ -1644,7 +1645,7 @@ class Mul22(Op):
         try:
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
         except KeyError:
-            raise exceptions.MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
+            raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         return """
 extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgtArray** AB, cgtArray* C) {
     cgtArray *A=AB[0], *B=AB[1];
@@ -2013,7 +2014,7 @@ def maybe_replace(node, analysis, repl):
         return newnode
     parents = node.parents
     # -- CONSTANT PROP --
-    if all(isinstance(par.op, Constant) for par in parents) and not node.op.dynamic_data:
+    if all(isinstance(par.op, Constant) for par in parents) and not node.op.volatile_data:
         if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
         return constant(py_numeric_apply(node, [p.op.value for p in parents]))
     # -- SIZE --
@@ -2224,7 +2225,7 @@ def get_numeric_shape_fun(node):
 def py_numeric_apply(node, vals):
     try:
         py_impl = node.op.get_py_impl()
-    except exceptions.MethodNotDefined:
+    except MethodNotDefined:
         print 'Op %s has no Python implementation' % repr(node.op)
         raise
     if node.op.call_type == "valret":

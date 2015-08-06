@@ -1,3 +1,5 @@
+from cgt.core import MethodNotDefined
+from collections import namedtuple
 import os, subprocess
 import os.path as osp
 from StringIO import StringIO
@@ -164,60 +166,70 @@ ctypes2str = {
 
 #     return (libpath,funcname,closure)
 
-class Binary(object):
-    def __init__(self, impl, pyfunc=None, c_libpath=None, c_funcname=None, c_closure=None):
-        assert not impl.is_python() or pyfunc is not None
-        assert not (impl.is_c() or impl.is_cuda()) or (c_libpath is not None and c_funcname is not None and c_closure is not None)
-        self.impl = impl
-        self.pyfunc = pyfunc
-        self.c_libpath = c_libpath
-        self.c_funcname = c_funcname
-        self.c_closure = c_closure
+
+_Binary = namedtuple('Binary', ['impl', 'pyfunc', 'c_libpath', 'c_funcname', 'c_closure'])
+def Binary(impl, pyfunc=None, c_libpath=None, c_funcname=None, c_closure=None):
+    assert not impl.is_py() or pyfunc is not None
+    assert not (impl.is_c() or impl.is_cuda()) or (c_libpath is not None and c_funcname is not None and c_closure is not None)
+    return _Binary(impl, pyfunc, c_libpath, c_funcname, c_closure)
+
 
 class OpLibrary(object):
     """
     Stores compiled Op implementations. Performs just-in-time compiling.
     """
 
-    def __init__(self):
+    def __init__(self, force_python_impl=False):
         self.node2implhash = {}
         self.implhash2binary = {}
+        self.force_python_impl = force_python_impl
 
     def num_impls_compiled(self):
         return len(self.implhash2binary)
 
-    @staticmethod
-    def _get_op_impl(node, devtype):
+    def _get_op_impl(self, node, devtype=None):
         """
         Grabs the preferred implementation of an op, falling back to
         Python if necessary
+
+        devtype ignored if Python impls are forced
         """
 
-        if core.load_config()["force_python_impl"]: raise core.MethodNotDefined # XXX hack
+        config = core.load_config()
+        force_python_impl = config["force_python_impl"]
+        disallow_python_impl = False#XXXconfig["disallow_python_impl"]
+
         compile_info = get_compile_info()
 
-        if devtype == "gpu":
-            if not compile_info["CGT_ENABLE_CUDA"]:
-                raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
+        if not force_python_impl and not self.force_python_impl:
+            assert devtype is not None
+            if devtype == "gpu":
+                if not compile_info["CGT_ENABLE_CUDA"]:
+                    raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
+                try:
+                    impl = node.op.get_cuda_impl(node.parents)
+                except MethodNotDefined:
+                    raise RuntimeError('Op %s has no CUDA implementation, but GPU mode is requested' % repr(node.op))
+                return impl
+
+            assert devtype == "cpu"
             try:
-                impl = node.op.get_cuda_impl(node.parents)
-            except exceptions.MethodNotDefined:
-                raise RuntimeError('Op %s has no CUDA implementation, but GPU mode is requested' % repr(node.op))
-            return impl
+                impl = node.op.get_c_impl(node.parents)
+            except MethodNotDefined:
+                if disallow_python_impl:
+                    import IPython; IPython.embed()
+                    raise RuntimeError("Op %s has no C implementation, but Python fallback is disabled" % repr(node.op))
+                else:
+                    print "Op %s has no C implementation, falling back to Python" % repr(node.op)
+            else:
+                return impl
 
-        assert devtype == "cpu"
-        try:
-            impl = node.op.get_c_impl(node.parents)
-        except exceptions.MethodNotDefined:
-            print 'Op %s has no C implementation, falling back to Python' % repr(node.op)
-        else:
-            return impl
-
+        if disallow_python_impl:
+            raise RuntimeError("Requested Python implementation for op %s, but Python implementations are disabled" % repr(node.op))
         try:
             impl = node.op.get_py_impl()
-        except exceptions.MethodNotDefined:
-            raise RuntimeError('Op %s has no Python implementation' % repr(node.op))
-
+        except MethodNotDefined:
+            raise RuntimeError("Op %s has no Python implementation" % repr(node.op))
         return impl
 
 
@@ -226,7 +238,7 @@ class OpLibrary(object):
         if impl.is_py():
             # A Python "binary" is just the function provided in the
             # Op implementation
-            if op.call_type == "inplace":
+            if node.op.call_type == "inplace":
                 assert impl.inplace_func is not None
                 pyfunc = impl.inplace_func
             else:
@@ -235,14 +247,14 @@ class OpLibrary(object):
             return Binary(impl, pyfunc=pyfunc)
 
         if impl.is_c() or impl.is_cuda():
-            common_includes = ["cgt_common.h","stdint.h","stddef.h"] if impl.is_c()
-                else ["cgt_common.h","cgt_cuda.h"]
+            common_includes = ["cgt_common.h","stdint.h","stddef.h"] if impl.is_c() else ["cgt_common.h","cgt_cuda.h"]
             includes = common_includes + impl.includes
 
             struct_code = StringIO()
             vals = []
             fields = []
-            triples = node.op.get_closure(node.parents)
+            # triples = node.op.get_closure(node.parents)
+            triples = impl.closure
             if triples is None:
                 closure = ctypes.c_void_p(0)
             else:
@@ -261,6 +273,7 @@ class OpLibrary(object):
                 closure = S(*vals)
 
             h = hashlib.md5(impl.code).hexdigest()[:10]
+            devtype = "cpu" if impl.is_c() else "gpu"
             funcname = devtype + node.op.__class__.__name__ + h
             ci = get_compile_info()
             CACHE_ROOT = ci["CACHE_ROOT"]
@@ -269,7 +282,6 @@ class OpLibrary(object):
             if not osp.exists(libpath):
                 s = StringIO()        
                 if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
-                print "compiling %(libpath)s for node %(node)s"%locals()
                 ext = "cpp" if impl.is_c() else "cu"
                 srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
                 # write c code to tmp file
@@ -281,24 +293,23 @@ class OpLibrary(object):
                 s.write(code)
                 with open(srcpath,"w") as fh:
                     fh.write(s.getvalue())
-
+                print "compiling %(srcpath)s to %(libpath)s for node %(node)s"%locals()
                 compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags=impl.link_flags)
 
             return Binary(impl, c_libpath=libpath, c_funcname=funcname, c_closure=closure)
 
         raise NotImplementedError
 
-    def _fetch_binary(self, node):
+    def _fetch_binary(self, node, devtype=None):
         """
         Gets the binary for node's Op, compiling its Impl if necessary.
         Assumes that if get_*_impl() is called on node.op twice,
         then the two Impls have the same hashes.
         """
-
         # If node has never been seen, check if its impl has been compiled,
         # and compile if necessary
         if node not in self.node2implhash:
-            impl = self._get_op_impl(node)
+            impl = self._get_op_impl(node, devtype)
             ihash = self.node2implhash[node] = impl.hash()
             if ihash in self.implhash2binary:
                 # Already compiled
@@ -311,9 +322,20 @@ class OpLibrary(object):
         assert ihash in self.implhash2binary
         return self.implhash2binary[ihash]
 
-    def apply_inplace(self, node, reads, write):
-        self._fetch_binary(node)(reads, write)
+    # def _call_binary(self, binary, args):
+    #     if binary.pyfunc is not None:
+    #         return binary.pyfunc(*args)
 
-    def apply_valret(self, node, reads):
-        return self._fetch_binary(node)(reads)
+    #     assert binary.c_libpath is not None and binary.c_funcname is not None and binary.c_closure is not None
+    #     return call_c_func()
 
+    def _py_apply_binary(self, node, args):
+        binary = self._fetch_binary(node)
+        assert binary.pyfunc is not None
+        return binary.pyfunc(*args)
+
+    def py_apply_inplace(self, node, reads, write):
+        self._py_apply_binary(node, (reads, write))
+
+    def py_apply_valret(self, node, reads):
+        return self._py_apply_binary(node, (reads,))
