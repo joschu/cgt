@@ -130,130 +130,130 @@ ctypes2str = {
     ctypes.c_float : "float"
 }
 
-def get_impl(node, devtype):
+# def get_impl(node, devtype):
 
-    # TODO: includes should be in cache, as well as info about definitions like
-    # CGT_ENABLE_CUDA
+#     # TODO: includes should be in cache, as well as info about definitions like
+#     # CGT_ENABLE_CUDA
 
-    compile_info = get_compile_info()    
-    if devtype == "gpu" and not compile_info["CGT_ENABLE_CUDA"]:
-        raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
+#     compile_info = get_compile_info()    
+#     if devtype == "gpu" and not compile_info["CGT_ENABLE_CUDA"]:
+#         raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
 
-    code_raw = (node.op.c_code if devtype=="cpu" else node.op.cuda_code)(node.parents)
-    if devtype == "cpu":
-        includes = ["cgt_common.h","stdint.h","stddef.h"] + node.op.c_extra_includes
-    else:
-        includes = ["cgt_common.h","cgt_cuda.h"] + node.op.cuda_extra_includes
+#     code_raw = (node.op.c_code if devtype=="cpu" else node.op.cuda_code)(node.parents)
+#     if devtype == "cpu":
+#         includes = ["cgt_common.h","stdint.h","stddef.h"] + node.op.c_extra_includes
+#     else:
+#         includes = ["cgt_common.h","cgt_cuda.h"] + node.op.cuda_extra_includes
 
-    struct_code = StringIO()
-    vals = []
-    fields = []
-    triples = node.op.get_closure(node.parents)
-    if triples is None:
-        closure = ctypes.c_void_p(0)
-    else:
-        struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
-        for (fieldname,fieldtype,val) in triples:
-            vals.append(val)
-            struct_code.write(ctypes2str[fieldtype])
-            struct_code.write(" ")
-            struct_code.write(fieldname)
-            struct_code.write(";\n")
-            fields.append((fieldname,fieldtype))
-        struct_code.write("} CGT_FUNCNAME_closure;\n")
+#     struct_code = StringIO()
+#     vals = []
+#     fields = []
+#     triples = node.op.get_closure(node.parents)
+#     if triples is None:
+#         closure = ctypes.c_void_p(0)
+#     else:
+#         struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
+#         for (fieldname,fieldtype,val) in triples:
+#             vals.append(val)
+#             struct_code.write(ctypes2str[fieldtype])
+#             struct_code.write(" ")
+#             struct_code.write(fieldname)
+#             struct_code.write(";\n")
+#             fields.append((fieldname,fieldtype))
+#         struct_code.write("} CGT_FUNCNAME_closure;\n")
 
-        class S(ctypes.Structure):
-            _fields_ = fields
-        closure = S(*vals)
-
-
-    h = hashlib.md5(code_raw).hexdigest()[:10]
-    funcname = devtype + node.op.__class__.__name__ + h
-    ci = get_compile_info()
-    CACHE_ROOT = ci["CACHE_ROOT"]
-    libpath = osp.join(CACHE_ROOT, funcname + ".so")
-
-    if not osp.exists(libpath):
-        s = StringIO()        
-        if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
-        print "compiling %(libpath)s for node %(node)s"%locals()
-        ext = "cc" if devtype == "cpu" else "cu"
-        srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
-        # write c code to tmp file
-        s = StringIO()
-        for filename in includes:
-            s.write('#include "%s"\n'%filename)
-        s.write(struct_code.getvalue().replace("CGT_FUNCNAME",funcname))
-        code = code_raw.replace("CGT_FUNCNAME",funcname)
-        s.write(code)
-        with open(srcpath,"w") as fh:
-            fh.write(s.getvalue())
-
-        compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags = node.op.c_extra_link_flags)
-
-    return (libpath,funcname,closure)
+#         class S(ctypes.Structure):
+#             _fields_ = fields
+#         closure = S(*vals)
 
 
-def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
+#     h = hashlib.md5(code_raw).hexdigest()[:10]
+#     funcname = devtype + node.op.__class__.__name__ + h
+#     ci = get_compile_info()
+#     CACHE_ROOT = ci["CACHE_ROOT"]
+#     libpath = osp.join(CACHE_ROOT, funcname + ".so")
 
-    op = node.op
-    parents = node.parents
-    parent_devices = [node2dev[par] for par in parents]
-    if isinstance(op,Transport):
-        assert parent_devices[0].devtype==op.src
-        devtype = op.targ   
-    elif any(pardev.devtype == "gpu" for pardev in parent_devices):
-        devtype = "gpu"
-    else:
-        devtype = "cpu"
-    if devtype == "gpu":
-        try:
-            get_impl(node, "gpu")
-        except MethodNotDefined:
-            print "couldn't get gpu func for ", node
-            devtype = "cpu"
+#     if not osp.exists(libpath):
+#         s = StringIO()        
+#         if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
+#         print "compiling %(libpath)s for node %(node)s"%locals()
+#         ext = "cc" if devtype == "cpu" else "cu"
+#         srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
+#         # write c code to tmp file
+#         s = StringIO()
+#         for filename in includes:
+#             s.write('#include "%s"\n'%filename)
+#         s.write(struct_code.getvalue().replace("CGT_FUNCNAME",funcname))
+#         code = code_raw.replace("CGT_FUNCNAME",funcname)
+#         s.write(code)
+#         with open(srcpath,"w") as fh:
+#             fh.write(s.getvalue())
+
+#         compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags = node.op.c_extra_link_flags)
+
+#     return (libpath,funcname,closure)
 
 
-    # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
-    idx = 0 if idx is None else idx
-    machine = "default" if machine is None else machine
-    return Device(machine, devtype, idx)
+# def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
+
+#     op = node.op
+#     parents = node.parents
+#     parent_devices = [node2dev[par] for par in parents]
+#     if isinstance(op,Transport):
+#         assert parent_devices[0].devtype==op.src
+#         devtype = op.targ   
+#     elif any(pardev.devtype == "gpu" for pardev in parent_devices):
+#         devtype = "gpu"
+#     else:
+#         devtype = "cpu"
+#     if devtype == "gpu":
+#         try:
+#             get_impl(node, "gpu")
+#         except exceptions.MethodNotDefined:
+#             print "couldn't get gpu func for ", node
+#             devtype = "cpu"
 
 
-def assign_devices(outputs, devfn=None):
-    # First assign each node to a device
-    node2dev={}
-    for node in topsorted(outputs):        
-        maybedev = None if devfn is None else devfn(node)
-        if maybedev: 
-            node2dev[node] = maybedev
-        elif node.is_argument():
-            node2dev[node] = Device(devtype="cpu")
-        elif node.is_data():
-            node2dev[node] = node.get_device()
-        else:
-            node2dev[node] = determine_device(node, node2dev)
+#     # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
+#     idx = 0 if idx is None else idx
+#     machine = "default" if machine is None else machine
+#     return Device(machine, devtype, idx)
 
-    # Now make a new computation graph with 
-    replace = {}
-    newnode2dev = {}
-    for node in topsorted(outputs):
-        parents = node.parents
-        dev = node2dev[node]
-        if node.is_input():
-            replace[node] = node
-        else:
-            newparents = []
-            for par in parents:
-                if node2dev[par] == dev:
-                    newparents.append(replace[par])
-                else:
-                    newparents.append(transport(replace[par], node2dev[par], dev))
-                    newnode2dev[newparents[-1]] = dev
-            replace[node] = Result(node.op, newparents, typ=node.get_type())
-        newnode2dev[replace[node]] = dev
 
-    return [replace[node] for node in outputs], newnode2dev
+# def assign_devices(outputs, devfn=None):
+#     # First assign each node to a device
+#     node2dev={}
+#     for node in topsorted(outputs):        
+#         maybedev = None if devfn is None else devfn(node)
+#         if maybedev: 
+#             node2dev[node] = maybedev
+#         elif node.is_argument():
+#             node2dev[node] = Device(devtype="cpu")
+#         elif node.is_data():
+#             node2dev[node] = node.get_device()
+#         else:
+#             node2dev[node] = determine_device(node, node2dev)
+
+#     # Now make a new computation graph with 
+#     replace = {}
+#     newnode2dev = {}
+#     for node in topsorted(outputs):
+#         parents = node.parents
+#         dev = node2dev[node]
+#         if node.is_input():
+#             replace[node] = node
+#         else:
+#             newparents = []
+#             for par in parents:
+#                 if node2dev[par] == dev:
+#                     newparents.append(replace[par])
+#                 else:
+#                     newparents.append(transport(replace[par], node2dev[par], dev))
+#                     newnode2dev[newparents[-1]] = dev
+#             replace[node] = Result(node.op, newparents, typ=node.get_type())
+#         newnode2dev[replace[node]] = dev
+
+#     return [replace[node] for node in outputs], newnode2dev
 
 def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
     config = load_config()
@@ -335,66 +335,142 @@ class OpLibrary(object):
     """
 
     def __init__(self):
-        self.op2implhash = {}
+        self.node2implhash = {}
         self.implhash2binary = {}
 
-    def _get_op_impl(self, op):
+    def num_impls_compiled(self):
+        return len(self.implhash2binary)
+
+    @staticmethod
+    def _get_op_impl(node, devtype):
         """
         Grabs the preferred implementation of an op, falling back to
         Python if necessary
         """
-        # TODO: C and CUDA, with fallback to Python
-        # This implementation just uses the Python Impl
-        try:
-            impl = op.get_py_impl()
+
+        compile_info = get_compile_info()
+
+        if devtype == "gpu":
+            if not compile_info["CGT_ENABLE_CUDA"]:
+                raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
+            try:
+                impl = node.op.get_cuda_impl(node.parents)
+            except exceptions.MethodNotDefined:
+                raise RuntimeError('Op %s has no CUDA implementation, but GPU mode is requested' % repr(node.op))
             return impl
-        except MethodNotDefined:
-            print 'Op %s has no Python implementation' % repr(op)
-            raise
 
-    def _compile_impl(self, op, impl):
-        # "Compile" refers to extracting and processing an implementation
-        # so "compiling" a Python implementation just means to form the Python
-        # function that computes the Op
-        # a Python "binary" is just this function
-
-        binary = None
-
-        # Only works with Python impls now
-        assert isinstance(impl, PyImpl)
-        if op.call_type == "inplace":
-            assert impl.inplace_func is not None
-            binary = impl.inplace_func
+        try:
+            impl = node.op.get_c_impl(node.parents)
+        except exceptions.MethodNotDefined:
+            print 'Op %s has no C implementation, falling back to Python' % repr(node.op)
         else:
-            assert impl.valret_func is not None
-            binary = impl.valret_func
+            return impl # XXXXX
 
-        return binary
+        try:
+            impl = node.op.get_py_impl()
+        except exceptions.MethodNotDefined:
+            raise RuntimeError('Op %s has no Python implementation' % repr(node.op))
 
-    def _fetch_binary(self, op):
-        """
-        Gets the binary for an Op, compiling its Impl if necessary.
-        Assumes that if get_*_impl() is called on an Op twice, then the two Impls have the same hashes.
-        """
+        return impl
 
-        # If Op has never been seen, check if its impl has been compiled,
-        # and compile if necessary
-        if op not in self.op2implhash:
-            impl = self._get_op_impl(op)
-            implhash = self.op2implhash[op] = impl.hash()
-            if implhash in self.implhash2binary:
-                return self.implhash2binary[implhash]
-            binary = self.implhash2binary[implhash] = self._compile_impl(op, impl)
+
+    @staticmethod
+    def _compile_impl(node, impl):
+        if impl.is_py():
+            # A Python "binary" is just the function provided in the
+            # Op implementation
+            if op.call_type == "inplace":
+                assert impl.inplace_func is not None
+                binary = impl.inplace_func
+            else:
+                assert impl.valret_func is not None
+                binary = impl.valret_func
             return binary
-        # We saw the Op before, just return its compiled impl directly
-        implhash = self.op2implhash[op]
-        assert implhash in self.implhash2binary
-        return self.implhash2binary[implhash]
 
-    def apply_inplace(self, op, reads, write):
-        self._fetch_binary(op)(reads, write)
-    def apply_valret(self, op, reads):
-        return self._fetch_binary(op)(reads)
+        if impl.is_c() or impl.is_cuda():
+            common_includes = ["cgt_common.h","stdint.h","stddef.h"] if impl.is_c()
+                else ["cgt_common.h","cgt_cuda.h"]
+            includes = common_includes + impl.includes
+
+            struct_code = StringIO()
+            vals = []
+            fields = []
+            triples = node.op.get_closure(node.parents)
+            if triples is None:
+                closure = ctypes.c_void_p(0)
+            else:
+                struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
+                for (fieldname,fieldtype,val) in triples:
+                    vals.append(val)
+                    struct_code.write(ctypes2str[fieldtype])
+                    struct_code.write(" ")
+                    struct_code.write(fieldname)
+                    struct_code.write(";\n")
+                    fields.append((fieldname,fieldtype))
+                struct_code.write("} CGT_FUNCNAME_closure;\n")
+
+                class S(ctypes.Structure):
+                    _fields_ = fields
+                closure = S(*vals)
+
+            h = hashlib.md5(impl.code).hexdigest()[:10]
+            funcname = devtype + node.op.__class__.__name__ + h
+            ci = get_compile_info()
+            CACHE_ROOT = ci["CACHE_ROOT"]
+            libpath = osp.join(CACHE_ROOT, funcname + ".so")
+
+            if not osp.exists(libpath):
+                s = StringIO()        
+                if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
+                print "compiling %(libpath)s for node %(node)s"%locals()
+                ext = "cc" if impl.is_c() else "cu"
+                srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
+                # write c code to tmp file
+                s = StringIO()
+                for filename in includes:
+                    s.write('#include "%s"\n'%filename)
+                s.write(struct_code.getvalue().replace("CGT_FUNCNAME",funcname))
+                code = impl.code.replace("CGT_FUNCNAME",funcname)
+                s.write(code)
+                with open(srcpath,"w") as fh:
+                    fh.write(s.getvalue())
+
+                compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags = node.op.c_extra_link_flags)
+
+            binary = blah
+            return (libpath,funcname,closure)
+
+        raise NotImplementedError
+
+
+    def _fetch_binary(self, node):
+        """
+        Gets the binary for node's Op, compiling its Impl if necessary.
+        Assumes that if get_*_impl() is called on node.op twice,
+        then the two Impls have the same hashes.
+        """
+
+        # If node has never been seen, check if its impl has been compiled,
+        # and compile if necessary
+        if node not in self.node2implhash:
+            impl = self._get_op_impl(node)
+            ihash = self.node2implhash[node] = impl.hash()
+            if ihash in self.implhash2binary:
+                # Already compiled
+                return self.implhash2binary[ihash]
+            # Compile and store
+            binary = self.implhash2binary[ihash] = self._compile_impl(node, impl)
+            return binary
+        # We saw the node before, just return its compiled impl directly
+        ihash = self.node2implhash[node]
+        assert ihash in self.implhash2binary
+        return self.implhash2binary[ihash]
+
+    def apply_inplace(self, node, reads, write):
+        self._fetch_binary(node)(reads, write)
+
+    def apply_valret(self, node, reads):
+        return self._fetch_binary(node)(reads)
 
 
 
@@ -444,9 +520,9 @@ class Interpreter(object):
         raise NotImplementedError
     def getarg(self, i):
         raise NotImplementedError
-    def apply_op_inplace(self, op, reads, write):
+    def apply_inplace(self, node, reads, write):
         raise NotImplementedError
-    def apply_op_valret(self, op, reads):
+    def apply_valret(self, node, reads):
         raise NotImplementedError
 
 class SequentialInterpreter(Interpreter):
@@ -469,10 +545,10 @@ class SequentialInterpreter(Interpreter):
         self.storage[mem.index] = val
     def getarg(self, i):
         return self.args[i]
-    def apply_op_inplace(self, op, reads, write):
-        self.oplib.apply_inplace(op, reads, write)
-    def apply_op_valret(self, op, reads):
-        return self.oplib.apply_valret(op, reads)
+    def apply_inplace(self, node, reads, write):
+        self.oplib.apply_inplace(node, reads, write)
+    def apply_valret(self, node, reads):
+        return self.oplib.apply_valret(node, reads)
 
 def make_execution_graph(inputs, outputs):
     G = ExecutionGraph(len(inputs))
@@ -596,7 +672,7 @@ class InPlace(Instr):
         self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
-        interp.apply_op_inplace(self.node.op,
+        interp.apply_inplace(self.node,
             [interp.get(mem) for mem in self.read_locs],
             interp.get(self.write_loc))
     def to_json(self):
@@ -608,6 +684,6 @@ class ValReturning(Instr):
         self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
-        interp.set(self.write_loc, interp.apply_op_valret(self.node.op, [interp.get(mem) for mem in self.read_locs]))
+        interp.set(self.write_loc, interp.apply_valret(self.node, [interp.get(mem) for mem in self.read_locs]))
     def to_json(self):
         return {"type" : "ValReturning", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}

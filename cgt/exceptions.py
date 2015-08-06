@@ -1,3 +1,6 @@
+class MethodNotDefined(Exception):
+    pass
+
 class NonDifferentiable(Exception):
     pass
 

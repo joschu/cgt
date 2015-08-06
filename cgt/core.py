@@ -288,10 +288,6 @@ def _put_on_device(value, device):
 def num_components(node):
     return len(node.get_type()) if isinstance(node.get_type(), Tuple) else 1
 
-class MethodNotDefined(Exception):
-    pass
-
-
 
 class OpImpl(object):
     def __init__(self, hashfields):
@@ -306,19 +302,46 @@ class OpImpl(object):
         s = "\0".join(repr(field) for field in self._hashfields)
         return hashlib.md5(s).hexdigest()
 
+    def is_py(self):
+        raise NotImplementedError
+    def is_c(self):
+        raise NotImplementedError
+    def is_cuda(self):
+        raise NotImplementedError
+
 class PyImpl(OpImpl):
     def __init__(self, inplace_func=None, valret_func=None):
         assert (inplace_func is None) != (valret_func is None)
         OpImpl.__init__(self, [id(inplace_func), id(valret_func)])
         self.inplace_func = inplace_func
         self.valret_func = valret_func
+    def is_py(self):
+        return True
+    def is_c(self):
+        return False
+    def is_cuda(self):
+        return False
 
 class CImpl(OpImpl):
-    def __init__(self, code, includes, link_flags):
+    def __init__(self, code, includes=None, link_flags=None):
         OpImpl.__init__(self, [code, includes, link_flags])
         self.code = code
-        self.includes = includes
-        self.link_flags = link_flags
+        self.includes = [] if includes is None else includes
+        self.link_flags = [] if link_flags is None else link_flags
+    def is_py(self):
+        return False
+    def is_c(self):
+        return True
+    def is_cuda(self):
+        return False
+
+class CUDAImpl(CImpl):
+    def is_py(self):
+        return False
+    def is_c(self):
+        return False
+    def is_cuda(self):
+        return True
 
 class Op(object):
     """
@@ -367,12 +390,12 @@ class Op(object):
     #     """
     #     Apply python implementation of op to numeric inputs and outputs in-place
     #     """
-    #     raise MethodNotDefined
+    #     raise exceptions.MethodNotDefined
     # def py_apply_valret(self, reads):
     #     """
     #     Apply and return value.
     #     """
-    #     raise MethodNotDefined
+    #     raise exceptions.MethodNotDefined
     # def get_closure(self, _inputs):
     #     """
     #     XXX writeme
@@ -382,13 +405,13 @@ class Op(object):
     #     """
     #     Return C code implementing this function, with the name of the function replaced by CGT_FUNCNAME.
     #     """
-    #     raise MethodNotDefined
+    #     raise exceptions.MethodNotDefined
     # def cuda_code(self, inputs):
     #     """
     #     See c_code
     #     This code will be compiled with nvcc
     #     """
-    #     raise MethodNotDefined
+    #     raise exceptions.MethodNotDefined
     def get_replacement(self, _newparents, _analysis):
         """
         Return the name of this node
@@ -400,24 +423,24 @@ class Op(object):
         Given a function y = f(x_1, x_2, ..., x_k), let J_k denote the Jacobian dy/dx_k
         pullback(...) computes gradx_k = J_k^T grady
         """
-        raise MethodNotDefined
+        raise exceptions.MethodNotDefined
     def pushforward(self, inputs, output, goutput):
         """
         Compute symbolic expressions for derivatives obtained by "tangent propagation" on this Op
         Given a function y = f(x_1, x_2, ..., x_k), let J_k denote the Jacobian dy/dx_k
         pullback([x_1, ..., x_k], y, grady) := \sum_k J_k gradx_k
         """
-        raise MethodNotDefined
+        raise exceptions.MethodNotDefined
 
     def __repr__(self):
         return self.get_name()
 
     def get_py_impl(self):
-        raise MethodNotDefined
-    def get_c_impl(self):
-        raise MethodNotDefined
-    def get_cuda_impl(self):
-        raise MethodNotDefined
+        raise exceptions.MethodNotDefined
+    def get_c_impl(self, inputs):
+        raise exceptions.MethodNotDefined
+    def get_cuda_impl(self, inputs):
+        raise exceptions.MethodNotDefined
 
 def _as_node(val_or_node):
     """
@@ -929,7 +952,6 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
         return ["cgt_cuda.h","cgt_common.h"]
 
 class ElwiseBinary(Op):
-    c_extra_includes =  ["math.h"]    
     # +, -, *, /, <, ^, //
     def __init__(self, opname, scalar_mask, info=None):
         assert opname in BINARY_INFO        
@@ -944,13 +966,6 @@ class ElwiseBinary(Op):
         return "(%s %s %s)"%(parent_exprs[0], self.opname, parent_exprs[1])
     def get_name(self):
         return BINARY_INFO[self.opname].short
-    def get_py_impl(self):
-        def f(reads, write):
-            x,y = reads
-            if self.scalar_mask==(False,False):
-                assert x.shape==y.shape, "Implicit broadcasting isn't allowed. Use the broadcast(...) function"
-            self.info.pyfunc(x,y, out=write)
-        return PyImpl(inplace_func=f)
     def get_replacement(self, parents, analysis):
         node2sv = analysis["node2sv"]
         ind4shape = 1 if self.scalar_mask[0] else 0
@@ -983,8 +998,14 @@ class ElwiseBinary(Op):
             out_type = typeinfo
         ind4shape = 1 if self.scalar_mask[0] else 0
         return Tensor(out_type, inputs[ind4shape].ndim)
-    def c_code(self, inputs):
-        raise RuntimeError # move to get_*_impl
+    def get_py_impl(self):
+        def f(reads, write):
+            x,y = reads
+            if self.scalar_mask==(False,False):
+                assert x.shape==y.shape, "Implicit broadcasting isn't allowed. Use the broadcast(...) function"
+            self.info.pyfunc(x,y, out=write)
+        return PyImpl(inplace_func=f)
+    def get_c_impl(self, inputs):
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
         npdtype1 = inputs[1].dtype
@@ -992,7 +1013,7 @@ class ElwiseBinary(Op):
         ind4shape = 1 if self.scalar_mask[0] else 0
         index0 = "0" if self.scalar_mask[0] else "i"
         index1 = "0" if self.scalar_mask[1] else "i"
-        return r"""
+        code = r"""
 static inline %(cdtype2)s scalar_CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
 extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     int s = cgt_size(io[%(ind4shape)s]);
@@ -1005,10 +1026,9 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgt_array** io) {
     }
 }
 """%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
-    cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape)  
-    def c_includes(self):
-        raise RuntimeError # move to get_*_impl
-        return ["cgt_common.h","math.h"]
+    cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape) 
+        return CImpl(code=code, includes=["cgt_common.h", "math.h"])
+
     def cuda_code(self, inputs):
         raise RuntimeError # move to get_*_impl
         typ2 = self.typ_apply(inputs)
@@ -1504,7 +1524,7 @@ class IncFlatIndices(Op):
             write.flat[inds] += y # XXX
         return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
-        raise MethodNotDefined
+        raise exceptions.MethodNotDefined
         _x, inds, _y = inputs 
         gx = goutput
         gy = Result(GetFlatIndices(), [goutput, inds])
@@ -1574,7 +1594,7 @@ class Mul22(Op):
         try:
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
         except KeyError:
-            raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
+            raise exceptions.MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         return """
 typedef struct gemm_closure {
     bool tA, tB;
@@ -2361,7 +2381,7 @@ def get_numeric_shape_fun(node):
 def py_numeric_apply(node, vals):
     try:
         py_impl = node.op.get_py_impl()
-    except MethodNotDefined:
+    except exceptions.MethodNotDefined:
         print 'Op %s has no Python implementation' % repr(node.op)
         raise
     if node.op.call_type == "valret":
