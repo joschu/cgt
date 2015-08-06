@@ -6,6 +6,7 @@ fh = sys.stdout
 os.chdir(osp.dirname(osp.dirname(osp.realpath(cgt.__file__))))
 
 with open("cgt/api_autogen.py","w") as fh:
+    fh.write("\nfrom . import core\n")
 
     for (shortname,info) in sorted(UNARY_INFO.iteritems(), key = lambda x:x[1].short):    
         fh.write(
@@ -21,4 +22,3 @@ def {npname}(x, y):
     return core.elwise_binary("{infixname}", x,y)
     """.format(infixname = infixname, npname=info.short))
     
-    fh.write("\nfrom . import core\n")

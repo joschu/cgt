@@ -1,4 +1,6 @@
 
+from . import core
+
 def abs(x):
     return core.Result(core.ElwiseUnary("abs"), [x])
     
@@ -77,4 +79,3 @@ def power(x, y):
 def subtract(x, y):
     return core.elwise_binary("-", x,y)
     
-from . import core

@@ -2,7 +2,10 @@
 import operator
 import numpy as np
 import sys
-
+if sys.argv[0] != "gen_py.py":
+    from api_autogen import *
+import cgt
+from . import core, utils
 # Every non-underscored function in this file should have a docstring, and it should enforce that the input data is valid
 
 # ================================================================
@@ -409,8 +412,3 @@ def _red_axes(axis, ndim):
     else:
         raise ValueError("invalid argument 'axis'=%s" % axis)
 
-
-if sys.argv[0] != "gen_py.py":
-    from api_autogen import *
-import cgt
-from . import core, utils

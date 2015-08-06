@@ -2,6 +2,8 @@ import sys, numpy as np, hashlib, copy, cPickle, ctypes, warnings, os
 from collections import defaultdict,namedtuple
 import __builtin__
 import traceback
+import cgt
+from . import utils
 
 # ================================================================
 # Datatypes
@@ -2313,5 +2315,3 @@ def load_config():
                 _CONFIG[lhs] = rhs
     return _CONFIG
 
-import cgt
-from . import utils

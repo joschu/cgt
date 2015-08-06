@@ -544,6 +544,6 @@ class ReturnByVal(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, interp.apply_valret(self.node, [interp.get(mem) for mem in self.read_locs]))
     def __repr__(self):
-        return "ByVal:%s"%self.node.op.get_name()
+        return "ReturnByVal:%s"%self.node.op.get_name()
     def to_json(self):
         return {"type" : "ReturnByVal", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
