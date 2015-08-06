@@ -287,7 +287,7 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass Interpreter:
         cgtTuple* run(cgtTuple*)
 
-    Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation])
+    Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation], parallel)
 
 cdef vector[size_t] _tovectorlong(object xs):
     cdef vector[size_t] out = vector[size_t]()
@@ -442,10 +442,10 @@ cdef class CppInterpreterWrapper:
     cdef ExecutionGraph* eg # owned
     cdef Interpreter* interp # owned
     cdef object input_types
-    def __init__(self, pyeg, oplib, input_types, output_locs):
+    def __init__(self, pyeg, oplib, input_types, output_locs, parallel):
         self.eg = make_cpp_execution_graph(pyeg, oplib)
         cdef vector[MemLocation] cpp_output_locs = _tocppmemvec(output_locs)
-        self.interp = create_interpreter(self.eg, cpp_output_locs)
+        self.interp = create_interpreter(self.eg, cpp_output_locs, parallel)
         self.input_types = input_types
     def __dealloc__(self):
         if self.interp != NULL: del self.interp

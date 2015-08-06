@@ -1,6 +1,7 @@
 #pragma once
 #include "cgt_common.h"
 #include <vector>
+#include <thread>
 
 namespace cgt {
 using std::vector;
@@ -43,6 +44,15 @@ class Instruction {
 public:
     virtual void fire(Interpreter*)=0;
     virtual ~Instruction() {};
+    const vector<MemLocation>& get_readlocs() const {
+        return readlocs;
+    }
+    const MemLocation& get_writeloc() const {
+        return writeloc;
+    }
+private:
+    vector<MemLocation> readlocs;
+    MemLocation writeloc;
 };
 
 class ExecutionGraph {
@@ -53,6 +63,7 @@ public:
     const vector<Instruction*>& instrs() const {return instrs_;}
     size_t n_args() const {return n_args_;}
     size_t n_locs() const {return n_locs_;}
+    size_t n_instrs() const {return instrs_.size();}
 private:
     vector<Instruction*> instrs_; // owns, will delete
     size_t n_args_;
@@ -71,7 +82,7 @@ public:
 };
 
 // pass by value because of cython
-Interpreter* create_interpreter(ExecutionGraph*, vector<MemLocation> output_locs);
+Interpreter* create_interpreter(ExecutionGraph*, vector<MemLocation> output_locs, bool parallel);
 
 class LoadArgument : public Instruction  {
 public:
