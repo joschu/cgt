@@ -54,14 +54,14 @@ def batched_matmul(x, y):
 def broadcast(opname, x, y, bcpat):
     (xpat, ypat) = bcpat.split(',')
     (xbcaxes, ybcaxes) = [[i for (i, letter) in enumerate(pat) if (letter == '1')] for pat in (xpat, ypat)]
-    assert (x.get_ndim() == y.get_ndim())
+    assert (x.ndim == y.ndim)
     if xbcaxes:
         for i in xbcaxes: core.assertequal1(size(x,i), 1, "you mislabeled axis %i as singleton"%i)
         x = core.Result(core.Repeat(xbcaxes), [x] + [size(y, ax) for ax in xbcaxes])
     if ybcaxes:
         for i in ybcaxes: core.assertequal1(size(y,i), 1, "you mislabeled axis %i as singleton"%i)
         y = core.Result(core.Repeat(ybcaxes), [y] + [size(x, ax) for ax in ybcaxes])
-    return elwise_binary(opname, x, y)
+    return core.elwise_binary(opname, x, y)
 
 def _get_nu_cast(dtype):
     castfunc = np.cast[dtype]
@@ -154,14 +154,6 @@ def einsum(desc, x, y):
     yt = transpose(y, iyloop + iycontr + ijusty).reshape([mul_multi([yshp[i] for i in icol]) for icol in [iyloop, iycontr, ijusty]])
     zt = batched_matmul(xt, yt)
     return transpose(zt.reshape([size(x, xdesc.index(c)) for c in loop] + [size(x, xdesc.index(c)) for c in justx] + [size(y, ydesc.index(c)) for c in justy]), utils.invert_perm([zdesc.index(c) for c in loop + justx + justy]))
-
-def elwise_binary(opname, x, y):
-    (x, y) = map(core.as_node, (x, y))
-    scalar_mask = ((x.ndim == 0), (y.ndim == 0))
-    op = core.ElwiseBinary(opname, scalar_mask)
-    if (scalar_mask == (False, False)):
-        assert (x.ndim == y.ndim)
-    return core.Result(op, [x, y])
 
 def fill(val, shape):
     assert isinstance(shape, list)
@@ -377,9 +369,9 @@ def transpose(arr, axes=None):
         assert arr.ndim == 2
         axes = [1,0]
     else:
-        assert _is_list_or_tuple(axes) and len(axes) == arr.get_ndim()
+        assert _is_list_or_tuple(axes) and len(axes) == arr.ndim
         axes = list(axes)
-    if axes == range(arr.get_ndim()):
+    if axes == range(arr.ndim):
         return arr
     else:
         return core.Result(core.Transpose(axes), [arr])
@@ -393,10 +385,10 @@ def zeros(shape, dtype=None): #pylint: disable=W0621
     return core.Result(core.Fill(np.array(0, dtype)), shape)
 
 def zeros_like(x):
-    return zeros(shape(x), x.get_dtype())
+    return zeros(shape(x), x.dtype)
 
 def _dropdims(x, axes):
-    return reshape(x, [size(x, i) for i in xrange(x.get_ndim()) if (i not in axes)])
+    return reshape(x, [size(x, i) for i in xrange(x.ndim) if (i not in axes)])
 
 def _is_list_or_tuple(xs):
     return isinstance(xs, (list, tuple))

@@ -14,7 +14,7 @@ def function(inputs, outputs, dbg = None, updates=None):
 
     if dbg: raise Todo("debug functionality is broken")
     
-    outputs = [make_tuple(*x) if isinstance(x, tuple) else x for x in outputs]
+    outputs = [cgt.make_tuple(*x) if isinstance(x, tuple) else x for x in outputs]
 
     interp = run_compilation_pipeline(inputs, outputs, updates)
     return interp
@@ -187,7 +187,7 @@ def determine_memowner(nodes_sorted, updates, node2dev):
             nodeshape = node.op.shp_apply(node.parents)
             for parent in node.parents:
                 if (len(node2child[parent])==1
-                        and nodeshape==shape(parent) # XXX not a very robust way to check
+                        and nodeshape==cgt.shape(parent) # XXX not a very robust way to check
                         and node.dtype == parent.dtype
                         and is_data_mutable(parent)):
                     base = parent

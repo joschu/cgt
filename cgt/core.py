@@ -156,10 +156,6 @@ class Node(object):
         return False
     def is_data(self):
         return False
-    def get_dtype(self):
-        return self.typ.dtype
-    def get_ndim(self):
-        return self.typ.ndim if isinstance(self.typ, TensorType) else 0
     def get_type(self):
         return self.typ
     def get_diff(self):
@@ -181,15 +177,15 @@ class Node(object):
     def __pow__(self, other):
         return elwise_binary("**", self, other)
     def __floordiv__(self, other):
-        return floor_divide(self, other)
+        return cgt.floor_divide(self, other)
     def __gt__(self, other):
-        return greater(self, other)
+        return cgt.greater(self, other)
     def __ge__(self, other):
-        return greater_equal(self, other)
+        return cgt.greater_equal(self, other)
     def __lt__(self, other):
-        return less(self, other)
+        return cgt.less(self, other)
     def __le__(self, other):
-        return less_equal(self, other)
+        return cgt.less_equal(self, other)
     # def __eq__(self, other):
     #     return equal(self, other)
     # def __ne__(self, other):
@@ -199,33 +195,33 @@ class Node(object):
     def __radd__(self, other):
         return self.__add__(other)
     def __rsub__(self, other):
-        return constant(other).__sub__(self)
+        return cgt.constant(other).__sub__(self)
     def __rmul__(self, other):
         return self.__mul__(other)
     def __rdiv__(self, other):
-        return constant(other).__div__(self)
+        return cgt.constant(other).__div__(self)
     def __rtruediv__(self, other):
-        return constant(other).__rtruediv__(self)
+        return cgt.constant(other).__rtruediv__(self)
     def __rfloordiv__(self, other):
-        return constant(other).__floordiv__(self)
+        return cgt.constant(other).__floordiv__(self)
 
     @property
     def shape(self):
-        return shape(self)
+        return cgt.shape(self)
     @property
     def ndim(self):
-        return self.get_ndim()
+        return self.typ.ndim if isinstance(self.typ, TensorType) else 0
     @property
     def dtype(self):
-        return self.get_dtype()
+        return self.typ.dtype
     @property
     def T(self):
-        return transpose(self)
+        return cgt.transpose(self)
     
     __array_priority__ = 1000 # precedence over numpy operators
 
     def __getitem__(self, slis):
-        return getitem(self, slis)
+        return cgt.getitem(self, slis)
     def __iter__(self):
         raise TypeError("Node is not iterable")
     def __len__(self):
@@ -236,23 +232,23 @@ class Node(object):
 
     def reshape(self, shp):
         assert isinstance(shp, (list,tuple))
-        return reshape(self, shp)
+        return cgt.reshape(self, shp)
     def dot(self, other):
-        return dot(self, other)
+        return cgt.dot(self, other)
     def sum(self, axis=None, keepdims=False):
-        return sum(self, axis=axis, keepdims=keepdims)
+        return cgt.sum(self, axis=axis, keepdims=keepdims)
     def prod(self, axis=None, keepdims=False):
-        return prod(self, axis=axis, keepdims=keepdims)
+        return cgt.prod(self, axis=axis, keepdims=keepdims)
     def max(self, axis=None, keepdims=False):
-        return max(self, axis=axis, keepdims=keepdims)
+        return cgt.max(self, axis=axis, keepdims=keepdims)
     def argmax(self, axis=None, keepdims=False):
-        return argmax(self, axis=axis, keepdims=keepdims)
+        return cgt.argmax(self, axis=axis, keepdims=keepdims)
     def mean(self, axis=None, keepdims=False):
-        return mean(self, axis=axis, keepdims=keepdims)
+        return cgt.mean(self, axis=axis, keepdims=keepdims)
     def transpose(self, axes=None):
-        return transpose(self, axes=axes)
+        return cgt.transpose(self, axes=axes)
     def flatten(self):
-        return flatten(self)
+        return cgt.flatten(self)
 
 def _ndarray_type(value):
     assert isinstance(value, np.ndarray)
@@ -445,9 +441,9 @@ def as_node(val_or_node):
     if isinstance(val_or_node, Node):
         return val_or_node
     elif isinstance(val_or_node, np.ndarray) or np.isscalar(val_or_node):
-        return constant(val_or_node)
+        return cgt.constant(val_or_node)
     elif isinstance(val_or_node, tuple):
-        return make_tuple(*val_or_node)
+        return cgt.make_tuple(*val_or_node)
     else:
         raise ValueError("expected numeric data or Node, got object of type %s"%type(val_or_node))
 
@@ -555,7 +551,7 @@ class Data(Input):
     # TODO: remove external accesses to .value
 
 def _singleton_ones(dtype, ndim):
-    return constant(np.ones((1,)*ndim, dtype))
+    return cgt.constant(np.ones((1,)*ndim, dtype))
 
 def make_argument(typ):
     if isinstance(typ, TupleType):
@@ -634,7 +630,7 @@ def pullback(outputs, goutputs, wrt):
         # once we reach a node, we have already backpropagated from all parents
         # so now we can sum up the gradients
         if len(var2gs[node]) > 1:
-            var2gs[node] = [add_multi(var2gs[node])]
+            var2gs[node] = [cgt.add_multi(var2gs[node])]
         # only one gradient at this point
         gnode = var2gs[node][0]
         if isinstance(node, Result):
@@ -661,9 +657,9 @@ def grad(cost, wrt):
     """
     Compute the gradient of scalar-valued `cost` with respect to a list of variables `wrt`
     """
-    assert cost.get_ndim() == 0
+    assert cost.ndim == 0
     assert all(x.is_input() for x in wrt), "Can only differentiate wrt Input nodes. (Or do you have a good reason to differentiate wrt a non-input? Let us know, we can probably implement it."
-    gout = _singleton_ones(cost.get_dtype(), 0)
+    gout = _singleton_ones(cost.dtype, 0)
     return pullback([cost], [gout], wrt)
 
 
@@ -706,7 +702,7 @@ class ConstantTensor(Constant):
     def pullback(self, _inps, _out, _gout):
         return []
     def shp_apply(self, _inputs):
-        return [constant(x) for x in self.value.shape] 
+        return [cgt.constant(x) for x in self.value.shape] 
     def typ_apply(self, inputs):
         assert len(inputs)==0
         return _ndarray_type(self.value)
@@ -748,7 +744,7 @@ extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads
 class ConstantTuple(Constant):
     call_type = "valret"
     def __init__(self, value):
-        self.value = value
+        Constant.__init__(value)
     def get_expr(self, parent_exprs):
         return str(self.value)
     def __str__(self):
@@ -756,8 +752,8 @@ class ConstantTuple(Constant):
     def py_apply_valret(self, reads):
         return self.value
     def shp_apply(self, _inputs):
-        return tuple(map(constant, x.shape) for x in self.value)
-        return shape(as_node(self.value))
+        return tuple(map(cgt.constant, x.shape) for x in self.value)
+        return cgt.shape(as_node(self.value))
     def typ_apply(self, inputs):
         assert len(inputs)==0
         return _get_value_type(self.value)
@@ -793,7 +789,7 @@ class Fill(Op):
     def shp_apply(self, inputs):
         return inputs
     def typ_apply(self, inputs):
-        assert all(x.get_dtype() == 'i8' for x in inputs)
+        assert all(x.dtype == 'i8' for x in inputs)
         return TensorType(self.dtype, len(inputs))
 
 def _is_int(node):
@@ -934,10 +930,10 @@ class ElwiseUnary(Op):
     def pullback(self, (x,), y, gy): #pylint: disable=W0613
         return [self.info.gradexpr(x, y, gy)]
     def shp_apply(self, inputs):
-        return shape(inputs[0])
+        return cgt.shape(inputs[0])
     def typ_apply(self, inputs):
         typeinfo = self.info.typeinfo
-        intype = inputs[0].get_dtype()
+        intype = inputs[0].dtype
         if typeinfo == 's':
             out_type = intype
         elif typeinfo == 'i':
@@ -949,7 +945,7 @@ class ElwiseUnary(Op):
         else:
             assert typeinfo in (cgt.floatX, cgt.complexX, 'i1','i2','i4','i8')
             out_type = typeinfo
-        return TensorType(out_type, inputs[0].get_ndim())
+        return TensorType(out_type, inputs[0].ndim)
     def get_c_impl(self, inputs):
         info = self.info
         out_dtype = self.typ_apply(inputs).dtype
@@ -1014,10 +1010,10 @@ class ElwiseBinary(Op):
 
         if isinstance(l.op,Fill) and not self.scalar_mask[1]:
             out=Result(ElwiseBinary(self.opname, (True,False), self.info),
-                [constant(l.op.value), r])
+                [cgt.constant(l.op.value), r])
         elif isinstance(r.op,Fill) and not self.scalar_mask[0]:
             out=Result(ElwiseBinary(self.opname, (False,True), self.info),
-                [l, constant(r.op.value)])
+                [l, cgt.constant(r.op.value)])
         # if both have single value, apply this operation numerically and fill the result with it
         elif l in node2sv and r in node2sv:
             out =self.info.pyfunc(node2sv[l], node2sv[r])
@@ -1038,28 +1034,28 @@ class ElwiseBinary(Op):
 
         if out is not None:
             outtyp = self.typ_apply(parents)
-            out = cast(out, outtyp.dtype)
+            out = cgt.cast(out, outtyp.dtype)
             if out.ndim==0 and outtyp.ndim>0:
                 ind4shape = 1 if self.scalar_mask[0] else 0
                 outshape = analysis["node2shape"][parents[ind4shape]]
-                out = fill(out, outshape)
+                out = cgt.fill(out, outshape)
 
         return out
 
     def pullback(self, (x, y), z, gz): #pylint: disable=W0613
         gin = BINARY_INFO[self.opname].gradexpr(x, y, z, gz)
-        return [sum(gv) if (v.ndim==0 and gv.ndim > 0) else gv for (v,gv) in utils.safezip([x,y],gin)]
+        return [cgt.sum(gv) if (v.ndim==0 and gv.ndim > 0) else gv for (v,gv) in utils.safezip([x,y],gin)]
     def shp_apply(self, inputs):
         ind4shape = 1 if self.scalar_mask[0] else 0
-        return shape(inputs[ind4shape])
+        return cgt.shape(inputs[ind4shape])
     def typ_apply(self, inputs):
         assert ((inputs[0].ndim==0) == self.scalar_mask[0]) and ((inputs[1].ndim==0) == self.scalar_mask[1])
         if self.scalar_mask==(False,False):
             assert inputs[0].ndim == inputs[1].ndim
-            assertequaln(shape(inputs[0]),shape(inputs[1]),"shape mismatch at elementwise binary operation")
+            assertequaln(cgt.shape(inputs[0]),cgt.shape(inputs[1]),"shape mismatch at elementwise binary operation")
         typeinfo = BINARY_INFO[self.opname].typeinfo
         if typeinfo == 'p':
-            out_dtype = _promote(inputs[0].get_dtype(), inputs[1].get_dtype())
+            out_dtype = _promote(inputs[0].dtype, inputs[1].dtype)
         elif typeinfo == 'f':
             out_dtype = cgt.floatX
         else:
@@ -1123,6 +1119,13 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
         raise RuntimeError # move to get_*_impl
         return ["cgt_cuda.h","cgt_common.h"]
 
+def elwise_binary(opname, x, y):
+    (x, y) = map(as_node, (x, y))
+    scalar_mask = ((x.ndim == 0), (y.ndim == 0))
+    op = ElwiseBinary(opname, scalar_mask)
+    if (scalar_mask == (False, False)):
+        assert (x.ndim == y.ndim)
+    return Result(op, [x, y])
 
 # Shape manip
 # ----------------------------------------------------------------
@@ -1153,7 +1156,7 @@ class Size(Op):
         if x.is_input():
             fixed_shape = x.get_fixed_shape()
             if fixed_shape[self.axis] is not None:
-                return constant(fixed_shape[self.axis])
+                return cgt.constant(fixed_shape[self.axis])
     def get_closure(self, inputs):
         return [("ax",ctypes.c_int,self.axis)]
     def get_c_impl(self, _):
@@ -1177,11 +1180,11 @@ class Reshape(Op):
             return reads[0].reshape(reads[1:])
         return PyImpl(valret_func=f)
     def pullback(self, inputs, _out, gout):
-        return [reshape(gout, shape(inputs[0]))] + [None]*(len(inputs)-1)
+        return [cgt.reshape(gout, cgt.shape(inputs[0]))] + [None]*(len(inputs)-1)
     def shp_apply(self, inputs):
         return inputs[1:]
     def typ_apply(self, inputs):
-        return TensorType(inputs[0].get_dtype(), len(inputs)-1)
+        return TensorType(inputs[0].dtype, len(inputs)-1)
     def get_closure(self, parents):
         return [("ndim", ctypes.c_int,len(parents)-1)]
     def get_c_impl(self, _):
@@ -1209,13 +1212,13 @@ class Concatenate(Op):
         start = 0
         out = []
         for x in inputs:
-            end = start + size(x, self.axis)
+            end = start + cgt.size(x, self.axis)
             out.append(Result(GetSli(self.axis), [gout, start,end, 1]))
             start = end
         return out
     def shp_apply(self, inputs):
-        out = shape(inputs[0])
-        out[self.axis] = add_multi([size(x,self.axis) for x in inputs])
+        out = cgt.shape(inputs[0])
+        out[self.axis] = cgt.add_multi([cgt.size(x,self.axis) for x in inputs])
         return out
     def typ_apply(self, inputs):
         return TensorType(_promote_multi([x.dtype for x in inputs]), inputs[0].ndim)
@@ -1231,10 +1234,10 @@ class Stack(Op):
     def pullback(self, inputs, output, goutput):
         return [goutput[i] for i in xrange(len(inputs))]
     def shp_apply(self, inputs):
-        return [constant(len(inputs))] + shape(inputs[0])
+        return [cgt.constant(len(inputs))] + cgt.shape(inputs[0])
     def typ_apply(self, inputs):
         assert utils.allsame([x.get_type() for x in inputs])
-        return TensorType(inputs[0].get_dtype(), inputs[0].get_ndim()+1)
+        return TensorType(inputs[0].dtype, inputs[0].ndim+1)
 
 class Repeat(Op):
     call_type = "inplace"
@@ -1258,14 +1261,14 @@ class Repeat(Op):
             shp = self.shp_apply(parents)
             return Result(Fill(value), shp)
     def pullback(self, inputs, output, goutput):
-        return [sum(goutput, self.axes, keepdims=True)] + [None]*(len(inputs)-1)
+        return [cgt.sum(goutput, self.axes, keepdims=True)] + [None]*(len(inputs)-1)
     def shp_apply(self, inputs):
-        out = shape(inputs[0])
+        out = cgt.shape(inputs[0])
         for (ax,rep) in utils.safezip(self.axes, inputs[1:]):
             out[ax] = rep
         return out
     def typ_apply(self, inputs):
-        assert all(x.get_dtype() == "i8" for x in inputs[1:])
+        assert all(x.dtype == "i8" for x in inputs[1:])
         return inputs[0].get_type()
 
 class Transpose(Op):
@@ -1278,9 +1281,9 @@ class Transpose(Op):
             np.copyto(write, reads[0].transpose(self.axes))
         return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
-        return [transpose(goutput, utils.invert_perm(self.axes))] # XXX is this right?
+        return [cgt.transpose(goutput, utils.invert_perm(self.axes))]
     def shp_apply(self, inputs):
-        inshape = shape(inputs[0])
+        inshape = cgt.shape(inputs[0])
         return [inshape[ax] for ax in self.axes]
     def typ_apply(self, inputs):
         return inputs[0].get_type()
@@ -1311,7 +1314,7 @@ class Transport(Op):
             return x
         return fn
     def shp_apply(self, inputs):
-        return shape(inputs[0])
+        return cgt.shape(inputs[0])
     def get_c_impl(self, _inputs):
         code = """
 void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
@@ -1333,9 +1336,9 @@ class RFFT(Op):
             np.copyto(write, np.fft.fftn(x,shp,self.axes))
         return PyImpl(inplace_func=f)
     def pullback(self, inputs, _outputs, goutput):
-        return real(Result(RFFT(self.axes),[goutput]+inputs[1:]))
+        return cgt.real(Result(RFFT(self.axes),[goutput]+inputs[1:]))
     def shp_apply(self, inputs):
-        out = shape(inputs[0])
+        out = cgt.shape(inputs[0])
         for (ax,sz) in utils.safezip(self.axes, inputs[1:]):
             out[ax]=sz
         return out
@@ -1359,7 +1362,7 @@ class IRFFT(Op):
     def pullback(self, inputs, _outputs, goutput):
         return Result(IRFFT(self.axes),[goutput]) # XXX is this right?
     def shp_apply(self, inputs):
-        return shape(inputs[0])
+        return cgt.shape(inputs[0])
     def typ_apply(self, inputs):
         return TensorType(cgt.floatX,inputs[0].ndim)
 
@@ -1378,11 +1381,11 @@ class Sum(Op):
             reads[0].sum(axis = self.axes or None, out=write, keepdims=True)
         return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
-        return [Result(Repeat(self.axes), [goutput] + [size(inputs[0],ax) for ax in self.axes])]
+        return [Result(Repeat(self.axes), [goutput] + [cgt.size(inputs[0],ax) for ax in self.axes])]
     def shp_apply(self, inputs):
         x = inputs[0]
-        s = shape(x)
-        return [(constant(1) if i in self.axes else s[i]) for i in xrange(x.get_ndim())]
+        s = cgt.shape(x)
+        return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def get_c_impl(self, inputs):
@@ -1425,12 +1428,12 @@ class Max(Op):
         inputpat = "x"*x.ndim
         singpat = "".join(["1" if i in self.axes else "x" for i in xrange(x.ndim)])
         bcpat = singpat+","+inputpat
-        return [broadcast("*", goutput, broadcast("==", output, x, bcpat), bcpat)]
+        return [cgt.broadcast("*", goutput, cgt.broadcast("==", output, x, bcpat), bcpat)]
         # XXX doesn't deal well with corner case
     def shp_apply(self, inputs):
         x = inputs[0]
-        s = shape(x)
-        return [(constant(1) if i in self.axes else s[i]) for i in xrange(x.get_ndim())]
+        s = cgt.shape(x)
+        return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
     def typ_apply(self, inputs):
         return inputs[0].get_type()
 
@@ -1447,8 +1450,8 @@ class Argmax(Op):
         return PyImpl(inplace_func=f)
     def shp_apply(self, inputs):
         x = inputs[0]
-        s = shape(x)
-        return [(constant(1) if i == self.axis else s[i]) for i in xrange(x.get_ndim())]
+        s = cgt.shape(x)
+        return [(cgt.constant(1) if i == self.axis else s[i]) for i in xrange(x.ndim)]
     def typ_apply(self, inputs):
         return TensorType('i8', inputs[0].ndim)
 
@@ -1479,13 +1482,13 @@ class GetSli(Op):
             return x[slices]
         return PyImpl(valret_func=f)
     def pullback(self, inputs, output, goutput):
-        ginput = zeros_like(inputs[0])
+        ginput = cgt.zeros_like(inputs[0])
         return [Result(IncSli(self.axis), [ginput] + inputs[1:] + [goutput])] + [None]*3
     def shp_apply(self, inputs):
         arr, start, stop, step = inputs
-        s = shape(arr) #pylint: disable=W0621
+        s = cgt.shape(arr) #pylint: disable=W0621
         newshape = copy.copy(s)
-        newshape[self.axis] = ceil_divide(stop - start, step)
+        newshape[self.axis] = cgt.ceil_divide(stop - start, step)
         return newshape
     def typ_apply(self, inputs):
         assert inputs[1].dtype == inputs[2].dtype == inputs[3].dtype == 'i8'
@@ -1534,7 +1537,7 @@ class IncSli(Op):
         gy = Result(GetSli(self.axis), [goutput, start, stop, step])        
         return [gx, None, None, None, gy]
     def shp_apply(self, inputs):
-        return shape(inputs[0])
+        return cgt.shape(inputs[0])
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def get_c_impl(self, inputs):
@@ -1573,10 +1576,10 @@ class GetFlatIndices(Op):
         return PyImpl(inplace_func=f)
     def pullback(self, inputs, output, goutput):
         x,inds = inputs
-        ginput = zeros_like(x)
+        ginput = cgt.zeros_like(x)
         return [Result(IncFlatIndices(), [ginput, inds, goutput]), None]
     def shp_apply(self, inputs):
-        return shape(inputs[1])
+        return cgt.shape(inputs[1])
     def typ_apply(self, inputs):
         assert inputs[1].ndim == 1 and dtype_kind(inputs[1].dtype) == 'i'
         return TensorType(inputs[0].dtype,1)
@@ -1592,7 +1595,7 @@ class IncFlatIndices(Op):
             write.flat[inds] += y # XXX
         return PyImpl(inplace_func=f)
     def shp_apply(self, inputs):
-        return shape(inputs[0])
+        return cgt.shape(inputs[0])
     def typ_apply(self, inputs):
         return inputs[0].get_type()
 
@@ -1613,15 +1616,15 @@ class Mul21(Op):
         return PyImpl(inplace_func=f)
     def get_replacement(self, inputs, analysis):
         if inputs[1] in analysis["node2sv"]:
-            return sum(inputs[0],0 if self.tA else 1) * analysis["node2sv"][inputs[1]]
+            return cgt.sum(inputs[0],0 if self.tA else 1) * analysis["node2sv"][inputs[1]]
     def pullback(self, inputs, _output, goutput):
-        return [outer(goutput,inputs[1]), Result(Mul21(not self.tA), [inputs[0],goutput])]
+        return [cgt.outer(goutput,inputs[1]), Result(Mul21(not self.tA), [inputs[0],goutput])]
     def shp_apply(self, inputs):
-        assertequal1(size(inputs[0],0 if self.tA else 1),size(inputs[1],0),
+        assertequal1(cgt.size(inputs[0],0 if self.tA else 1),cgt.size(inputs[1],0),
             "shape mismatch at matrix-vector multiplication")         
-        return [size(inputs[0], 1 if self.tA else 0)]
+        return [cgt.size(inputs[0], 1 if self.tA else 0)]
     def typ_apply(self, inputs):
-        return TensorType(inputs[0].get_dtype(), 1)
+        return TensorType(inputs[0].dtype, 1)
     def get_expr(self, (xexpr,yexpr)):        
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
@@ -1640,11 +1643,11 @@ class Mul22(Op):
         return [Result(Mul22(False, not self.tB), [goutput, inputs[1]]),
                 Result(Mul22(not self.tA, False), [inputs[0], goutput])]
     def shp_apply(self, inputs):
-        return [size(inputs[0], 1 if self.tA else 0),size(inputs[1],0 if self.tB else 1)]
+        return [cgt.size(inputs[0], 1 if self.tA else 0),cgt.size(inputs[1],0 if self.tB else 1)]
     def typ_apply(self, inputs):
-        assertequal1(size(inputs[0],0 if self.tA else 1),size(inputs[1],1 if self.tB else 0), 
+        assertequal1(cgt.size(inputs[0],0 if self.tA else 1),cgt.size(inputs[1],1 if self.tB else 0), 
             "shape mismatch at matrix-matrix multiplication")         
-        assert inputs[0].get_dtype()==cgt.floatX and inputs[1].get_dtype()==cgt.floatX
+        assert inputs[0].dtype==cgt.floatX and inputs[1].dtype==cgt.floatX
         return inputs[0].get_type()
     def get_closure(self, inputs):
         return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB)]
@@ -1687,9 +1690,9 @@ class BatchedMul22(Op):
         return [Result(BatchedMul22(False, not self.tB), [goutput, inputs[1]]),
                 Result(BatchedMul22(not self.tA, False), [inputs[0], goutput])]
     def shp_apply(self, inputs):
-        return [size(inputs[0],0), size(inputs[0], 2 if self.tA else 1),size(inputs[1],1 if self.tB else 2)]
+        return [cgt.size(inputs[0],0), cgt.size(inputs[0], 2 if self.tA else 1),cgt.size(inputs[1],1 if self.tB else 2)]
     def typ_apply(self, inputs):
-        # assert inputs[0].get_dtype()==cgt.floatX and inputs[1].get_dtype()==cgt.floatX
+        # assert inputs[0].dtype==cgt.floatX and inputs[1].dtype==cgt.floatX
         return inputs[0].get_type()
 
 class Outer(Op):
@@ -1700,7 +1703,7 @@ class Outer(Op):
     def pullback(self, inputs, _output, goutput):
         return [goutput.dot(inputs[0]), inputs[1].dot(goutput)]
     def shp_apply(self, inputs):
-        return [size(inputs[0],0), size(inputs[1],0)]
+        return [cgt.size(inputs[0],0), cgt.size(inputs[1],0)]
     def typ_apply(self, _inputs):
         return TensorType(cgt.floatX, 2)
 
@@ -1794,7 +1797,7 @@ class TupleIndex(Op):
             return reads[0][self.idx]
         return PyImpl(valret_func=f)
     def shp_apply(self, inputs):
-        return shape(inputs[0])[self.idx]
+        return cgt.shape(inputs[0])[self.idx]
     def typ_apply(self, inputs):
         intype = inputs[0].get_type()
         assert isinstance(intype, TupleType)
@@ -1807,7 +1810,7 @@ class MakeTuple(Op):
             return tuple(inputs)
         return PyImpl(valret_func=f)
     def shp_apply(self, inputs):
-        return tuple(shape(x) for x in inputs)
+        return tuple(cgt.shape(x) for x in inputs)
     def typ_apply(self, inputs):
         return TupleType(*(x.get_type() for x in inputs))
     
@@ -1992,13 +1995,13 @@ def do_analysis(node, analysis):
     analysis["hash2node"][h] = node
     # -- SHAPE --
     if node.is_input():
-        node2shape[node] = shape(node)
+        node2shape[node] = cgt.shape(node)
     elif isinstance(node.op, TupleIndex):
         node2shape[node] = node2shape[node.parents[0]][node.op.idx]
     else:
         newparents = node.parents
         node2shape[node] = node.op.shp_apply(newparents)
-        # assert all([s.get_dtype() == "i8" for s in node2shape[node]])
+        # assert all([s.dtype == "i8" for s in node2shape[node]])
     assert len(node2shape[node]) == node.ndim or isinstance(node.get_type(),TupleType)
     # -- SCALAR VALUE --
     if isinstance(node, Result):
@@ -2031,7 +2034,7 @@ def maybe_replace(node, analysis, repl):
     # are subclasses of Constant
     if len(parents) > 0 and all(isinstance(par.op, Constant) for par in parents):
         if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
-        return constant(py_numeric_apply(node, [p.op.value for p in parents]))
+        return cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
     # -- SIZE --
     if isinstance(node.op, Size):
         s = analysis["node2shape"][parents[0]][node.op.axis]
@@ -2225,7 +2228,7 @@ def get_numeric_shape_fun(node):
 
     singletuple = not isinstance(syshape, list)
     if singletuple: # XXX
-        syshape = [make_tuple(*syshape)]
+        syshape = [cgt.make_tuple(*syshape)]
     nodes = topsorted(syshape)
     def fn(vals):
         node2val = {node:val for (node,val) in utils.safezip(args, vals)}
@@ -2301,7 +2304,5 @@ def load_config():
                 _CONFIG[lhs] = rhs
     return _CONFIG
 
-from .api import *
-from .api_autogen import *
-from . import utils
 import cgt
+from . import utils
