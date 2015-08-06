@@ -1,3 +1,5 @@
+from cgt.core import MethodNotDefined
+from collections import namedtuple
 import os, subprocess
 import os.path as osp
 from StringIO import StringIO
@@ -98,69 +100,168 @@ ctypes2str = {
     ctypes.c_float : "float"
 }
 
-def get_impl(node, devtype):
+_Binary = namedtuple('Binary', ['pyimpl', 'c_libpath', 'c_funcname'])
+def Binary(impl, c_libpath=None, c_funcname=None):
+    if impl.is_py():
+        return _Binary(impl, None, None)
+    assert not (impl.is_c() or impl.is_cuda()) or (c_libpath is not None and c_funcname is not None)
+    return _Binary(None, c_libpath, c_funcname)
 
-    if core.load_config()["force_python_impl"]: raise core.MethodNotDefined # XXX hack
 
-    # TODO: includes should be in cache, as well as info about definitions like
-    # CGT_ENABLE_CUDA
-    # and flags
-
-    compile_info = get_compile_info()    
-    if devtype == "gpu" and not compile_info["CGT_ENABLE_CUDA"]:
-        raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
-
-    code_raw = (node.op.c_code if devtype=="cpu" else node.op.cuda_code)(node.parents)
-    if devtype == "cpu":
-        includes = ["cgt_common.h","stdint.h","stddef.h"] + node.op.c_extra_includes
-    else:
-        includes = ["cgt_common.h","cgt_cuda.h"] + node.op.cuda_extra_includes
-
+def _build_struct_code(triples):
+    if triples is None:
+        return ""
     struct_code = StringIO()
+    struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
+    for (fieldname,fieldtype,val) in triples:
+        struct_code.write(ctypes2str[fieldtype])
+        struct_code.write(" ")
+        struct_code.write(fieldname)
+        struct_code.write(";\n")
+    struct_code.write("} CGT_FUNCNAME_closure;\n")
+    return struct_code.getvalue()
+
+def _build_closure(triples):
+    if triples is None:
+        return ctypes.c_void_p(0)
     vals = []
     fields = []
-    triples = node.op.get_closure(node.parents)
-    if triples is None:
-        closure = ctypes.c_void_p(0)
-    else:
-        struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
-        for (fieldname,fieldtype,val) in triples:
-            vals.append(val)
-            struct_code.write(ctypes2str[fieldtype])
-            struct_code.write(" ")
-            struct_code.write(fieldname)
-            struct_code.write(";\n")
-            fields.append((fieldname,fieldtype))
-        struct_code.write("} CGT_FUNCNAME_closure;\n")
-
-        class S(ctypes.Structure):
-            _fields_ = fields
-        closure = S(*vals)
+    for (fieldname,fieldtype,val) in triples:
+        vals.append(val)
+        fields.append((fieldname,fieldtype))
+    class S(ctypes.Structure):
+        _fields_ = fields
+    closure = S(*vals)
+    return closure
 
 
-    h = hashlib.md5(code_raw).hexdigest()[:10]
-    funcname = devtype + node.op.__class__.__name__ + h
-    ci = get_compile_info()
-    CACHE_ROOT = ci["CACHE_ROOT"]
-    libpath = osp.join(CACHE_ROOT, funcname + ".so")
+class OpLibrary(object):
+    """
+    Stores compiled Op implementations. Performs just-in-time compiling.
+    """
 
-    if not osp.exists(libpath):
-        s = StringIO()        
-        if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
-        print "compiling %(libpath)s for node %(node)s"%locals()
-        ext = "cpp" if devtype == "cpu" else "cu"
-        srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
-        # write c code to tmp file
-        s = StringIO()
-        for filename in includes:
-            s.write('#include "%s"\n'%filename)
-        s.write(struct_code.getvalue().replace("CGT_FUNCNAME",funcname))
-        code = code_raw.replace("CGT_FUNCNAME",funcname)
-        s.write(code)
-        with open(srcpath,"w") as fh:
-            fh.write(s.getvalue())
+    def __init__(self, force_python_impl=False):
+        self.node2implhash = {} # maps node -> (impl hash, closure)
+        self.implhash2binary = {}
+        self.force_python_impl = force_python_impl
 
-        compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags = node.op.c_extra_link_flags)
+    def num_impls_compiled(self):
+        return len(self.implhash2binary)
 
-    return (libpath,funcname,closure)
+    def _get_op_impl(self, node, devtype=None):
+        """
+        Grabs the preferred implementation of an op, falling back to
+        Python if necessary
 
+        devtype ignored if Python impls are forced
+        """
+
+        config = core.load_config()
+        force_python_impl = config["force_python_impl"]
+        disallow_python_impl = config["disallow_python_impl"]
+        compile_info = get_compile_info()
+
+        if not force_python_impl and not self.force_python_impl:
+            assert devtype is not None
+            if devtype == "gpu":
+                if not compile_info["CGT_ENABLE_CUDA"]:
+                    raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
+                try:
+                    impl = node.op.get_cuda_impl(node.parents)
+                except MethodNotDefined:
+                    raise RuntimeError('Op %s has no CUDA implementation, but GPU mode is requested' % repr(node.op))
+                return impl
+
+            assert devtype == "cpu"
+            try:
+                impl = node.op.get_c_impl(node.parents)
+            except MethodNotDefined:
+                if disallow_python_impl:
+                    raise RuntimeError("Op %s has no C implementation, but Python fallback is disabled" % repr(node.op))
+                else:
+                    print "Op %s has no C implementation, falling back to Python" % repr(node.op)
+            else:
+                return impl
+
+        if disallow_python_impl:
+            raise RuntimeError("Requested Python implementation for op %s, but Python implementations are disabled" % repr(node.op))
+        try:
+            impl = node.op.get_py_impl()
+        except MethodNotDefined:
+            raise RuntimeError("Op %s has no Python implementation" % repr(node.op))
+        return impl
+
+
+    @staticmethod
+    def _compile_impl(node, impl):
+        if impl.is_py():
+            # A Python "binary" is just the function provided in the
+            # Op implementation
+            return Binary(impl)
+
+        if impl.is_c() or impl.is_cuda():
+            common_includes = ["cgt_common.h","stdint.h","stddef.h"] if impl.is_c() else ["cgt_common.h","cgt_cuda.h"]
+            includes = common_includes + impl.includes
+
+            struct_code = _build_struct_code(node.op.get_closure(node.parents))
+
+            devtype = "cpu" if impl.is_c() else "gpu"
+            funcname = "%s_%s_%s" % (devtype, node.op.__class__.__name__, impl.hash())
+            ci = get_compile_info()
+            CACHE_ROOT = ci["CACHE_ROOT"]
+            libpath = osp.join(CACHE_ROOT, funcname + ".so")
+
+            if not osp.exists(libpath):
+                s = StringIO()
+                if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
+                ext = "cpp" if impl.is_c() else "cu"
+                srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
+                # write c code to tmp file
+                s = StringIO()
+                for filename in includes:
+                    s.write('#include "%s"\n'%filename)
+                s.write(struct_code.replace("CGT_FUNCNAME",funcname))
+                code = impl.code.replace("CGT_FUNCNAME",funcname)
+                s.write(code)
+                with open(srcpath,"w") as fh:
+                    fh.write(s.getvalue())
+                print "compiling %(srcpath)s to %(libpath)s for node %(node)s"%locals()
+                compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags=impl.link_flags)
+
+            return Binary(impl, c_libpath=libpath, c_funcname=funcname)
+
+        raise NotImplementedError
+
+    def fetch_binary(self, node, devtype=None):
+        """
+        Gets the binary for node's Op, compiling its Impl if necessary.
+        Assumes that if get_*_impl() is called on node.op twice,
+        then the two Impls have the same hashes.
+        """
+        # If node has never been seen, check if its impl has been compiled,
+        # and compile if necessary
+        if node not in self.node2implhash:
+            impl = self._get_op_impl(node, devtype)
+            ihash = self.node2implhash[node] = impl.hash()
+            if ihash in self.implhash2binary:
+                # Already compiled
+                return self.implhash2binary[ihash]
+            # Compile and store
+            binary = self.implhash2binary[ihash] = self._compile_impl(node, impl)
+            return binary
+        # We saw the node before, just return its compiled impl directly
+        ihash = self.node2implhash[node]
+        assert ihash in self.implhash2binary
+        return self.implhash2binary[ihash]
+
+    def fetch_closure(self, node):
+        # TODO: cache these
+        return _build_closure(node.op.get_closure(node.parents))
+
+    # These functions are only for the python SequentialInterpreter
+    # and only work when the nodes use (forced) python impls
+    def py_apply_inplace(self, node, reads, write):
+        self.fetch_binary(node).pyimpl.inplace_func(reads, write)
+
+    def py_apply_valret(self, node, reads):
+        return self.fetch_binary(node).pyimpl.valret_func(reads)

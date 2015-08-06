@@ -8,14 +8,13 @@ import ctypes
 import os.path as osp
 
 import cgt
-from cgt import exceptions, core, execution, impls
+from cgt import core, execution, impls
 
 cnp.import_array()
 
 ################################################################
 ### CGT common datatypes 
 ################################################################
- 
 
 
 cdef extern from "cgt_common.h":
@@ -26,8 +25,8 @@ cdef extern from "cgt_common.h":
     cppclass cgtObject:
         pass
 
-    ctypedef void (*cgtByRefFun)(void*, cgtObject**, cgtObject*);
-    ctypedef cgtObject* (*cgtByValFun)(void*, cgtObject**);
+    ctypedef void (*cgtByRefFun)(void*, cgtObject**, cgtObject*)
+    ctypedef cgtObject* (*cgtByValFun)(void*, cgtObject**)
 
     enum cgtDevtype:
         cgtCPU
@@ -47,7 +46,7 @@ cdef extern from "cgt_common.h":
         cgtTuple(size_t)
         void setitem(int, cgtObject*)
         cgtObject* getitem(int)
-        size_t size();
+        size_t size()
         size_t len
         cgtObject** members        
 
@@ -340,29 +339,33 @@ cdef void* _getfun(libname, funcname) except *:
     return out
 
 
-cdef ByRefFunCl _node2inplaceclosure(node) except *:
-    try:
-        libname, funcname, cldata = impls.get_impl(node, "cpu") # TODO
-        cfun = _getfun(libname, funcname)
-        shit2.append(cldata)  # XXX
-        return ByRefFunCl(<cgtByRefFun>cfun, _ctypesstructptr(cldata))
-    except core.MethodNotDefined:
-        pyfun = node.op.py_apply_inplace        
-        cldata = (pyfun, len(node.parents), 1)
-        shit2.append(cldata)
-        return ByRefFunCl(&_pyfunc_inplace, <PyObject*>cldata)
+cdef ByRefFunCl _node2inplaceclosure(oplib, node) except *:
+    binary = oplib.fetch_binary(node, devtype="cpu")
+    if binary.pyimpl is not None:
+        assert binary.pyimpl.valret_func is None
+        pyfun = binary.pyimpl.inplace_func        
+        py_closure = (pyfun, len(node.parents), 1)
+        shit2.append(py_closure)
+        return ByRefFunCl(&_pyfunc_inplace, <PyObject*>py_closure)
+    else:
+        cfun = _getfun(binary.c_libpath, binary.c_funcname)
+        closure = oplib.fetch_closure(node)
+        shit2.append(closure)  # XXX
+        return ByRefFunCl(<cgtByRefFun>cfun, _ctypesstructptr(closure))
 
-cdef ByValFunCl _node2valretclosure(node) except *:
-    try:
-        libname, funcname, cldata = impls.get_impl(node, "cpu") # TODO
-        cfun = _getfun(libname, funcname)
-        shit2.append(cldata)  # XXX
-        return ByValFunCl(<cgtByValFun>cfun, _ctypesstructptr(cldata))
-    except core.MethodNotDefined:
-        pyfun = node.op.py_apply_valret        
-        cldata = (pyfun, len(node.parents), 1)
-        shit2.append(cldata)
-        return ByValFunCl(&_pyfunc_valret, <PyObject*>cldata)
+cdef ByValFunCl _node2valretclosure(oplib, node) except *:
+    binary = oplib.fetch_binary(node, devtype="cpu")
+    if binary.pyimpl is not None:
+        assert binary.pyimpl.inplace_func is None
+        pyfun = binary.pyimpl.valret_func        
+        py_closure = (pyfun, len(node.parents), 1)
+        shit2.append(py_closure)
+        return ByValFunCl(&_pyfunc_valret, <PyObject*>py_closure)
+    else:
+        cfun = _getfun(binary.c_libpath, binary.c_funcname)
+        closure = oplib.fetch_closure(node)
+        shit2.append(closure)  # XXX
+        return ByValFunCl(<cgtByValFun>cfun, _ctypesstructptr(closure))
 
 cdef MemLocation _tocppmem(object pymem):
     return MemLocation(<size_t>pymem.index)
@@ -373,7 +376,7 @@ cdef vector[MemLocation] _tocppmemvec(object pymemlist) except *:
         out.push_back(_tocppmem(pymem))
     return out
 
-cdef Instruction* _tocppinstr(object pyinstr) except *:
+cdef Instruction* _tocppinstr(object oplib, object pyinstr) except *:
     t = type(pyinstr)
     cdef Instruction* out
     if t == execution.LoadArgument:
@@ -383,9 +386,9 @@ cdef Instruction* _tocppinstr(object pyinstr) except *:
     elif t == execution.BuildTup:
         out = new BuildTup(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
     elif t == execution.ReturnByRef:
-        out = new ReturnByRef(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(pyinstr.node))
+        out = new ReturnByRef(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(oplib, pyinstr.node))
     elif t == execution.ReturnByVal:
-        out = new ReturnByVal(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(pyinstr.node))
+        out = new ReturnByVal(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(oplib, pyinstr.node))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out
@@ -394,11 +397,11 @@ cdef Instruction* _tocppinstr(object pyinstr) except *:
 ### Wrapper classes
 ################################################################
 
-cdef ExecutionGraph* make_cpp_execution_graph(pyeg) except *:
+cdef ExecutionGraph* make_cpp_execution_graph(pyeg, oplib) except *:
     "make an execution graph object"
     cdef vector[Instruction*] instrs
     for instr in pyeg.instrs:
-        instrs.push_back(_tocppinstr(instr))
+        instrs.push_back(_tocppinstr(oplib, instr))
     return new ExecutionGraph(instrs,pyeg.n_args, pyeg.n_locs)
 
 cdef class CppInterpreterWrapper:
@@ -409,8 +412,8 @@ cdef class CppInterpreterWrapper:
     """
     cdef ExecutionGraph* eg # owned
     cdef Interpreter* interp # owned
-    def __init__(self, pyeg, input_types, output_locs):
-        self.eg = make_cpp_execution_graph(pyeg)
+    def __init__(self, pyeg, oplib, input_types, output_locs):
+        self.eg = make_cpp_execution_graph(pyeg, oplib)
         cdef vector[MemLocation] cpp_output_locs = _tocppmemvec(output_locs)
         self.interp = create_interpreter(self.eg, cpp_output_locs)
     def __dealloc__(self):
