@@ -32,8 +32,11 @@ cgt.sublime-project
 cgt.sublime-workspace
 
 
-doc
 doc2
 notes
 notes2
 build2
+.idea
+*-checkpoint.ipynb
+docjunk
+downloads/*

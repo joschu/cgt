@@ -25,7 +25,7 @@ for horizon in horizons:
 
     # cgt.print_tree(M)
     print "simplifying..."
-    M_simp = cgt.simplify(M)
+    M_simp = cgt.simplify([M])
     print "done"
     # cgt.print_tree(M_simp)
     print "fn before:",cgt.count_nodes(M)

@@ -1,15 +1,17 @@
 import cgt
 import unittest
 import numpy as np 
+import pprint
 class EgTestCase(unittest.TestCase):
     def runTest(self):
+        cgt.set_precision('double')
         x = cgt.vector()
-        y = cgt.sin(x)
-        eg = cgt.execution.make_execution_graph([x],[y])
-        print eg.to_json()
+        y = cgt.square(x)
+        eg = cgt.execution.compilation_pipeline([x],[y+y],[])
+        pprint.pprint(eg.to_json())
         import cycgt2
         interp = cycgt2.cInterpreter(eg)
-        print interp([np.array([3,4,5,6],'f4')])
+        print interp(np.array([3,4,5,6],'f8'))
 
 if __name__ == "__main__":
     EgTestCase().runTest()

@@ -23,7 +23,11 @@ def main():
     else:
         # Run all tests in the directory of this script
         tests = unittest.TestLoader().discover(os.path.dirname(filename))
-        unittest.TextTestRunner().run(tests)
+
+        import cgt
+        for precision in ["single","double"]:
+            cgt.set_precision(precision)
+            unittest.TextTestRunner().run(tests)
 
 
 if __name__ == '__main__':

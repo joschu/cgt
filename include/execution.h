@@ -7,24 +7,24 @@ using std::vector;
 
 // note: no-args initializers are only here because they're required by cython
 
-class InPlaceFun {
+class ByRefFunCl {
 public:
-    cgt_inplacefun fptr;
+    cgtByRefFun fptr;
     void* data;
-    InPlaceFun(cgt_inplacefun fptr, void* data) : fptr(fptr), data(data) {}
-    InPlaceFun() : fptr(NULL), data(NULL) {}
-    void operator()(cgt_object** args) {
-        (*fptr)(data, args);
+    ByRefFunCl(cgtByRefFun fptr, void* data) : fptr(fptr), data(data) {}
+    ByRefFunCl() : fptr(NULL), data(NULL) {}
+    void operator()(cgtObject ** reads, cgtObject * write) {
+        (*fptr)(data, reads, write);
     }
 };
 
-struct ValRetFun {
+struct ByValFunCl {
 public:
-    cgt_valretfun fptr;
+    cgtByValFun fptr;
     void* data;
-    ValRetFun(cgt_valretfun fptr, void* data) : fptr(fptr), data(data) {printf("value %zui\n", ((size_t*)data)[0]);}
-    ValRetFun() : fptr(NULL), data(NULL) {}
-    cgt_object* operator()(cgt_object** args) {
+    ByValFunCl(cgtByValFun fptr, void* data) : fptr(fptr), data(data) {}
+    ByValFunCl() : fptr(NULL), data(NULL) {}
+    cgtObject * operator()(cgtObject ** args) {
         return (*fptr)(data, args);
     }
 };
@@ -42,40 +42,36 @@ class Interpreter;
 class Instruction {
 public:
     virtual void fire(Interpreter*)=0;
+    virtual ~Instruction() {};
 };
 
 class ExecutionGraph {
 public:
-    ExecutionGraph(int n_args, int n_locs, vector<MemLocation> output_locs)
-    : n_args_(n_args), locs(n_locs), output_locs(output_locs) {
-        for (int i=0; i < n_locs; ++i) locs[i].index = i;
-    }
-    int n_outputs() {return output_locs.size();}    
-    int n_args() {return n_args_;}
-    int n_mem_locs() {return locs.size();}
-    void add_instr(Instruction* instr) {instrs.push_back(instr);}    
-    const vector<Instruction*>& get_instrs() {return instrs;}
-    const vector<MemLocation>& get_output_locs() {return output_locs;}
+    ExecutionGraph(const vector<Instruction*>& instrs, size_t n_args, size_t n_locs)
+    : instrs_(instrs), n_args_(n_args), n_locs_(n_locs) {}
     ~ExecutionGraph();
+    const vector<Instruction*>& instrs() const {return instrs_;}
+    size_t n_args() const {return n_args_;}
+    size_t n_locs() const {return n_locs_;}
 private:
-    int n_args_;
-    vector<MemLocation> locs;
-    vector<MemLocation> output_locs;
-    vector<Instruction*> instrs;
+    vector<Instruction*> instrs_; // owns, will delete
+    size_t n_args_;
+    size_t n_locs_;
 };
 
 class Interpreter {
 public:
     // called by external code
-    virtual cgt_tuple* run(cgt_tuple*)=0;
+    virtual cgtTuple * run(cgtTuple *)=0;
     // called by instructions:
-    virtual cgt_object* get(MemLocation)=0;
-    virtual void set(MemLocation, cgt_object*)=0;
-    virtual cgt_object* getarg(int)=0;
+    virtual cgtObject * get(MemLocation)=0;
+    virtual void set(MemLocation, cgtObject *)=0;
+    virtual cgtObject * getarg(int)=0;
+    virtual ~Interpreter() {}
 };
 
-Interpreter* create_interpreter(ExecutionGraph*);
-
+// pass by value because of cython
+Interpreter* create_interpreter(ExecutionGraph*, vector<MemLocation> output_locs);
 
 class LoadArgument : public Instruction  {
 public:
@@ -89,35 +85,45 @@ private:
 
 class Alloc : public Instruction {
 public:
-    Alloc(cgt_dtype dtype, vector<MemLocation> readlocs, MemLocation writeloc)
+    Alloc(cgtDtype dtype, vector<MemLocation> readlocs, MemLocation writeloc)
     : dtype(dtype), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
 private:
-    cgt_dtype dtype;
+    cgtDtype dtype;
     vector<MemLocation> readlocs;
     MemLocation writeloc;
 };
 
-class InPlace : public Instruction  {
+class BuildTup : public Instruction {
 public:
-    InPlace(vector<MemLocation> readlocs, MemLocation writeloc, InPlaceFun closure)
+    BuildTup(vector<MemLocation> readlocs, MemLocation writeloc)
+    : readlocs(readlocs), writeloc(writeloc) {}
+    void fire(Interpreter*);
+private:
+    vector<MemLocation> readlocs;
+    MemLocation writeloc;
+};
+
+class ReturnByRef : public Instruction  {
+public:
+    ReturnByRef(vector<MemLocation> readlocs, MemLocation writeloc, ByRefFunCl closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    InPlaceFun closure;
+    ByRefFunCl closure;
 };
 
-class ValReturning : public Instruction  {
+class ReturnByVal : public Instruction  {
 public:
-    ValReturning(vector<MemLocation> readlocs, MemLocation writeloc, ValRetFun closure)
+    ReturnByVal(vector<MemLocation> readlocs, MemLocation writeloc, ByValFunCl closure)
     : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    ValRetFun closure;
+    ByValFunCl closure;
 };
 
 

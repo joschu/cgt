@@ -1,15 +1,19 @@
 import cgt
+from cgt import core
 import numpy as np
 import unittest
 import numpy.random as nr
 
+
+DISPLAY = False
+
+
 PROB2RESULT = {}
 
-def gradients_affine(f, xs):
+def gradients_affine(f, xs, h=1e-1):
     grads = [np.zeros_like(x) for x in xs]
     xs = map(np.copy, xs)
     yorig = f(*xs)
-    h=0.1
     for (x,g) in zip(xs, grads):
         for i in xrange(x.size):
             xiorig = x.flat[i]
@@ -23,7 +27,7 @@ def tensor_like(x):
     return cgt.tensor(x.dtype, x.ndim)
 
 def broadcast(opname,x,y,bcpat):
-    return cgt.broadcast(opname, x, y, bcpat) if isinstance(x, cgt.Node) else eval("x %s y"%opname)
+    return cgt.broadcast(opname, x, y, bcpat) if isinstance(x, core.Node) else eval("x %s y"%opname)
 
 def check_affine(f, *nu_inputs):
     types = ",".join(["{%s,%s}"%(x.dtype, x.ndim) for x in nu_inputs])
@@ -34,26 +38,29 @@ def check_affine(f, *nu_inputs):
 
     sy_result = f(*sy_inputs)
 
-    print("Function:")
-    cgt.print_tree([sy_result])
+    def maybeprint(msg):
+        if DISPLAY: print msg
 
-    f_cgt = cgt.make_function(sy_inputs, sy_result)
+    maybeprint("Function:")
+    if DISPLAY: cgt.print_tree([sy_result])
+
+    f_cgt = cgt.function1(sy_inputs, sy_result)
     sy_grads = cgt.grad(sy_result, sy_inputs)
-    gradf_cgt = cgt.make_function(sy_inputs, sy_grads)
+    gradf_cgt = cgt.function(sy_inputs, sy_grads)
 
-    sy_result_simple = cgt.simplify([sy_result])
-    sy_grads_simple = cgt.simplify(sy_grads)
+    sy_result_simple = core.simplify([sy_result])
+    sy_grads_simple = core.simplify(sy_grads)
 
-    print "Gradient:"
-    cgt.print_tree(sy_grads)
+    maybeprint("Gradient:")
+    if DISPLAY: cgt.print_tree(sy_grads)
 
-    print "Gradient after simplification:"
-    cgt.print_tree(sy_grads_simple)
+    maybeprint("Gradient after simplification:")
+    if DISPLAY: cgt.print_tree(sy_grads_simple)
 
     out_true = f(*nu_inputs)
     out_cgt = f_cgt(*nu_inputs)
 
-    grads_true = gradients_affine(f_cgt, nu_inputs)
+    grads_true = gradients_affine(f_cgt, nu_inputs, h=1e-4 if "max" in f.__name__ else 1e-1)
     grads_cgt = gradf_cgt(*nu_inputs)
 
     np.testing.assert_allclose(out_cgt, out_true, rtol=1e-5)
@@ -61,20 +68,19 @@ def check_affine(f, *nu_inputs):
     for (g_cgt, g_true) in zip(grads_cgt, grads_true):
         np.testing.assert_allclose(g_cgt, g_true,rtol=1e-5)
 
-    result_count = cgt.count_nodes(sy_result_simple)
-    grad_count = cgt.count_nodes(sy_grads_simple)
-    print "Result before: %i. after: %i"%(cgt.count_nodes([sy_result]), result_count)
-    print "Grad before: %i. after: %i"%(cgt.count_nodes(sy_grads), grad_count)
+    result_count = core.count_nodes(sy_result_simple)
+    grad_count = core.count_nodes(sy_grads_simple)
+    maybeprint("Result before: %i. after: %i"%(core.count_nodes([sy_result]), result_count))
+    maybeprint("Grad before: %i. after: %i"%(core.count_nodes(sy_grads), grad_count))
 
     PROB2RESULT[f.__name__] = {}    
     PROB2RESULT[f.__name__]["fn"] = result_count
     PROB2RESULT[f.__name__]["grad"] = grad_count
 
-    # add_log_entry(f,nu_inputs, sy_inputs, Var[sy_result],sy_grads)
 
 def type_dispatch(name):
     def newfn(*args):
-        if isinstance(args[0], cgt.Node):
+        if isinstance(args[0], core.Node):
             return cgt.__dict__[name](*args)
         else:
             return np.__dict__[name](*args)
@@ -232,11 +238,17 @@ class AffineTestCase(unittest.TestCase):
         # TODO: examples with constants
         # TODO: examples that mix scalar and matrix types
 
-        from thirdparty.tabulate import tabulate
-        print tabulate([[key,val["fn"],val["grad"]] for (key,val) in sorted(PROB2RESULT.items())],headers=["funcname","fncount","gradcount"])
+        if DISPLAY:
+            from thirdparty.tabulate import tabulate
+            print tabulate([[key,val["fn"],val["grad"]] for (key,val) in sorted(PROB2RESULT.items())],headers=["funcname","fncount","gradcount"])
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-v","--verbose",action="store_true")
+    args = parser.parse_args()
+    if args.verbose: DISPLAY = True
     case = AffineTestCase()
     case.setUp()
     case.runTest()

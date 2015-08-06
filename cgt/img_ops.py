@@ -1,5 +1,5 @@
 import cgt
-from cgt import Op, Result, Tensor, size, shape, ceil_divide
+from cgt.core import Op, Result, TensorType, size, shape, ceil_divide
 import ctypes
 
 # Maybe we shouldn't have special CuDNN ops, we should just have the same
@@ -33,7 +33,7 @@ void %(funcname)s(void* cldata, cgt_array** io) {
         w = ceil_divide(size(X,3)  - size(W, 3) + 1, self.sh)
         return [size(X,0), size(W,0), h, w]
     def typ_apply(self, _inputs):
-        return Tensor(cgt.floatX, 4)
+        return TensorType(cgt.floatX, 4)
     def pullback(self, inputs, output, gout):
         X,W,b = inputs
         # pass in an extra first argument to make output shape computation simpler
@@ -58,7 +58,7 @@ void %(funcname)s(void* cldata, cgt_array** io) {
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, _inputs):
-        return Tensor(cgt.floatX, 4)
+        return TensorType(cgt.floatX, 4)
 
 class CudnnConvBackwardFilter(Op):
     def __init__(self, ph, pw, sv, sh):
@@ -79,7 +79,7 @@ void %(funcname)s(void* cldata, cgt_array** io) {
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, _inputs):
-        return Tensor(cgt.floatX, 4)
+        return TensorType(cgt.floatX, 4)
 
 class CudnnConvBackwardBias(Op):
     def __init__(self, ph, pw, sv, sh):
@@ -98,7 +98,7 @@ void %(funcname)s(void* cldata, cgt_array** io) {
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, _inputs):
-        return Tensor(cgt.floatX, 4)
+        return TensorType(cgt.floatX, 4)
 
 # def pool(x_ncuv, rows_in, cols_in, poolshp, pool_type='max'):
 #     if rows_in % poolshp[0] != 0 or cols_in % poolshp[0] != 0:
@@ -148,7 +148,7 @@ def pool(kind, x, stride, kernel, pad):
     return Result(Pool(kind,stride,kernel,pad), [x])
 
 def lrn(x, alpha, beta, local_size):
-    s = cgt.Result(CudaLRNScaling(alpha, local_size), [x])
+    s = Result(CudaLRNScaling(alpha, local_size), [x])
     return s/cgt.power(s, -beta)
 
 # XXX needs params
@@ -174,4 +174,4 @@ void %(funcname)s(void* cldata, cgt_array** io) {
     def shp_apply(self, inputs):
         return shape(inputs[0])
     def typ_apply(self, _inputs):
-        return Tensor(cgt.floatX, 4)
+        return TensorType(cgt.floatX, 4)

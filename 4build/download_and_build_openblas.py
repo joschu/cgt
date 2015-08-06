@@ -20,4 +20,4 @@ if not osp.exists("openblas.tar.gz"):
 cap("mkdir -p {unpack_dir} && tar -xvf {fname} --directory {unpack_dir}  --strip-components=1".format(
     fname=fname,unpack_dir=unpack_dir))
 os.chdir(unpack_dir)
-cap("make -j ONLY_CBLAS=1")
+cap("make -j ONLY_CBLAS=1 NO_LAPACK=1 NO_LAPACKE=1")

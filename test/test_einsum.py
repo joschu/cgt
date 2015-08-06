@@ -20,7 +20,7 @@ class EinsumTestCase(unittest.TestCase):
             xval = nr.randn(*(sizes[c] for c in xperm))
             yval = nr.randn(*(sizes[c] for c in yperm))
             np.testing.assert_allclose(
-                cgt.numeric_eval(z, {x : xval, y : yval}),
+                cgt.numeric_eval1(z, {x : xval, y : yval}),
                 np.einsum(desc, xval, yval))
 
 

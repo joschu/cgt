@@ -1,298 +1,294 @@
-from core import *
+from cgt.core import *
 from collections import defaultdict
-import os
-import os.path as osp
-from StringIO import StringIO
+from time import time
+
+
+def function(inputs, outputs, dbg = None, updates=None):
+    assert isinstance(inputs, list), "Inputs must be a list"
+    assert all(isinstance(el, Node) for el in inputs), "Invalid input: should all be symbolic variables"
+    assert isinstance(outputs, list), "Outputs must be a list. For a single output use function1"
+    assert all(isinstance(el, Node) for el in inputs), "Invalid output: should all be symbolic variables"
+    if updates is None: updates = []
+    else: assert all(isinstance(before, Data) for (before,_) in updates), "rhs of updates must be Data instances"
+
+    if dbg: raise Todo("debug functionality is broken")
+    
+    outputs = [make_tuple(*x) if isinstance(x, tuple) else x for x in outputs]
+
+    interp = compilation_pipeline(inputs, outputs, updates)
+    return interp
+
+def function1(inputs, output, dbg=None, updates=None):
+    f_output_list = function(inputs, [output], dbg = dbg, updates=updates)
+    return lambda *args : f_output_list(*args)[0]
+
+
 # ================================================================
 # Execution
 # ================================================================
 
-
-def _get_cgt_src_root():
-    return osp.dirname(osp.dirname(osp.realpath(__file__)))
-
-_CONFIG = None
-def load_config():
-    global _CONFIG
-    if _CONFIG is not None:
-        return _CONFIG
-
-    from configobj import ConfigObj
-    from validate import Validator
-    rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
-    specfilename = osp.join(_get_cgt_src_root(), "cgtrc_spec.ini")
-    _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)
-    val = Validator()
-    test = _CONFIG.validate(val,preserve_errors=True)
-    if test is not True:
-        for (k,v) in test.items():
-            if v is not True:
-                utils.error("%s: %s in %s"%(k,v.message,rcfileloc))
-        raise ValueError
-    envflags = os.getenv("CGT_FLAGS")
-    if envflags:
-        pairs = envflags.split(",")
-        for pair in pairs:
-            lhs,rhs = pair.split("=")
-            assert lhs in _CONFIG
-            _CONFIG[lhs] = rhs
-    return _CONFIG
+def determine_devices(nodes):
+    return {} # TODO
 
 
-_COMPILE_CONFIG = None
-def get_compile_info():
-    global _COMPILE_CONFIG
-    if _COMPILE_CONFIG is None:
+def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
 
-        config = load_config()
-
-        import cycgt2 as cycgt #pylint: disable=F0401
-        CGT_BUILD_ROOT = osp.dirname(osp.dirname(osp.realpath(cycgt.__file__)))
-
-        cmake_info = {}
-        with open(osp.join(CGT_BUILD_ROOT,"build_info.txt")) as fh:
-            lines = fh.readlines()
-        for line in lines:
-            if ":=" not in line: print "skipping",line
-            lhs,rhs = line.split(":=")
-            lhs = lhs.strip()
-            rhs = rhs.strip()
-            cmake_info[lhs] = rhs
-
-        CUDA_ROOT = cmake_info["CUDA_ROOT"]
-        CGT_ENABLE_CUDA = cmake_info["CGT_ENABLE_CUDA"] in ["1","ON"]
-        DEFINITIONS = "-DENABLE_CUDA" if CGT_ENABLE_CUDA else ""
-
-
-        _COMPILE_CONFIG = dict(        
-            OPENBLAS_INCLUDE_DIR = osp.join(CGT_BUILD_ROOT,"OpenBLAS"),
-            CGT_INCLUDE_DIR = cmake_info["CGT_INCLUDE_DIR"],
-            CGT_LIBRARY_DIR = osp.join(CGT_BUILD_ROOT,"lib"),
-            CUDA_LIBRARY_DIR = osp.join(CUDA_ROOT,"lib"),
-            CUDA_INCLUDE_DIR = osp.join(CUDA_ROOT,"include"), 
-            CUDA_LIBRARIES = cmake_info["CUDA_LIBRARIES"], 
-            DEFINITIONS = DEFINITIONS,  
-            CUDA_ROOT = CUDA_ROOT,
-            CACHE_ROOT = osp.expanduser(config["cache_dir"]),
-            CGT_ENABLE_CUDA = CGT_ENABLE_CUDA
-            # CGT_LIBRARY = cmake_info["CGT_LIBRARY"],
-        )
-    return _COMPILE_CONFIG
-
-def cap(cmd):
-    print "\x1b[32m%s\x1b[0m"%cmd
-    subprocess.check_call(cmd,shell=True)
-
-def compile_file(fname, libpath, extra_link_flags = ""):
-    info = get_compile_info()
-    includes = "-I%(CGT_INCLUDE_DIR)s -I%(CUDA_INCLUDE_DIR)s -I%(OPENBLAS_INCLUDE_DIR)s"%info    
-    d = dict(cacheroot = info["CACHE_ROOT"], srcpath = fname, includes = includes, defines = info["DEFINITIONS"], libname = osp.basename(libpath), libpath = libpath, cgtlibdir = info["CGT_LIBRARY_DIR"], extralink=extra_link_flags)            
-    if fname.endswith(".cu"):
-        if not info["CGT_ENABLE_CUDA"]:
-            raise RuntimeError("Trying to compile a CUDA function but CUDA is disabled in your build. Rebuild with CGT_ENABLE_CUDA=ON")
-        d.update(cudalibs = info["CUDA_LIBRARIES"], cudaroot = info["CUDA_ROOT"], cudalibdir = info["CUDA_LIBRARY_DIR"])
-
-    if sys.platform == "darwin":
-        if fname.endswith(".cc"):
-            cap(r'''
-cd %(cacheroot)s && \
-c++ -fPIC -O3 -DNDEBUG %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
-            '''%d)
-        # TODO set up way to switch to -O0 -g
-        elif fname.endswith(".cu"):
-            cap(r'''
-cd %(cacheroot)s && \
-nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -fPIC -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
-            '''%d)
-                # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
-
+    op = node.op
+    parents = node.parents
+    parent_devices = [node2dev[par] for par in parents]
+    if isinstance(op,Transport):
+        assert parent_devices[0].devtype==op.src
+        devtype = op.targ   
+    elif any(pardev.devtype == "gpu" for pardev in parent_devices):
+        devtype = "gpu"
     else:
-        if fname.endswith(".cc"):
-            cap('''
-c++ -fPIC -O3 -DNDEBUG %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
-            '''%d)
-        elif fname.endswith(".cu"):
-            cap(r'''
-cd %(cacheroot)s && 
-nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler -fPIC -Xcompiler -O3 -Xcompiler -DNDEBUG %(includes)s %(defines)s && \
-c++  -fPIC -O3 -DNDEBUG -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(cudalibs)s -Wl,-rpath,%(cudaroot)s
-            '''%d
-            )
-
-ctypes2str = {
-    ctypes.c_int : "int",
-    ctypes.c_long : "long",
-    ctypes.c_void_p : "void*",
-    ctypes.c_double : "double",
-    ctypes.c_float : "float"
-}
-
-# def get_impl(node, devtype):
-
-#     # TODO: includes should be in cache, as well as info about definitions like
-#     # CGT_ENABLE_CUDA
-
-#     compile_info = get_compile_info()    
-#     if devtype == "gpu" and not compile_info["CGT_ENABLE_CUDA"]:
-#         raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
-
-#     code_raw = (node.op.c_code if devtype=="cpu" else node.op.cuda_code)(node.parents)
-#     if devtype == "cpu":
-#         includes = ["cgt_common.h","stdint.h","stddef.h"] + node.op.c_extra_includes
-#     else:
-#         includes = ["cgt_common.h","cgt_cuda.h"] + node.op.cuda_extra_includes
-
-#     struct_code = StringIO()
-#     vals = []
-#     fields = []
-#     triples = node.op.get_closure(node.parents)
-#     if triples is None:
-#         closure = ctypes.c_void_p(0)
-#     else:
-#         struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
-#         for (fieldname,fieldtype,val) in triples:
-#             vals.append(val)
-#             struct_code.write(ctypes2str[fieldtype])
-#             struct_code.write(" ")
-#             struct_code.write(fieldname)
-#             struct_code.write(";\n")
-#             fields.append((fieldname,fieldtype))
-#         struct_code.write("} CGT_FUNCNAME_closure;\n")
-
-#         class S(ctypes.Structure):
-#             _fields_ = fields
-#         closure = S(*vals)
+        devtype = "cpu"
+    if devtype == "gpu":
+        try:
+            get_impl(node, "gpu")
+        except MethodNotDefined:
+            print "couldn't get gpu func for ", node
+            devtype = "cpu"
 
 
-#     h = hashlib.md5(code_raw).hexdigest()[:10]
-#     funcname = devtype + node.op.__class__.__name__ + h
-#     ci = get_compile_info()
-#     CACHE_ROOT = ci["CACHE_ROOT"]
-#     libpath = osp.join(CACHE_ROOT, funcname + ".so")
-
-#     if not osp.exists(libpath):
-#         s = StringIO()        
-#         if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
-#         print "compiling %(libpath)s for node %(node)s"%locals()
-#         ext = "cc" if devtype == "cpu" else "cu"
-#         srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
-#         # write c code to tmp file
-#         s = StringIO()
-#         for filename in includes:
-#             s.write('#include "%s"\n'%filename)
-#         s.write(struct_code.getvalue().replace("CGT_FUNCNAME",funcname))
-#         code = code_raw.replace("CGT_FUNCNAME",funcname)
-#         s.write(code)
-#         with open(srcpath,"w") as fh:
-#             fh.write(s.getvalue())
-
-#         compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags = node.op.c_extra_link_flags)
-
-#     return (libpath,funcname,closure)
+    # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
+    idx = 0 if idx is None else idx
+    machine = "default" if machine is None else machine
+    return Device(machine, devtype, idx)
 
 
-# def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
-
-#     op = node.op
-#     parents = node.parents
-#     parent_devices = [node2dev[par] for par in parents]
-#     if isinstance(op,Transport):
-#         assert parent_devices[0].devtype==op.src
-#         devtype = op.targ   
-#     elif any(pardev.devtype == "gpu" for pardev in parent_devices):
-#         devtype = "gpu"
-#     else:
-#         devtype = "cpu"
-#     if devtype == "gpu":
-#         try:
-#             get_impl(node, "gpu")
-#         except exceptions.MethodNotDefined:
-#             print "couldn't get gpu func for ", node
-#             devtype = "cpu"
-
-
-#     # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
-#     idx = 0 if idx is None else idx
-#     machine = "default" if machine is None else machine
-#     return Device(machine, devtype, idx)
-
-
-# def assign_devices(outputs, devfn=None):
-#     # First assign each node to a device
-#     node2dev={}
-#     for node in topsorted(outputs):        
-#         maybedev = None if devfn is None else devfn(node)
-#         if maybedev: 
-#             node2dev[node] = maybedev
-#         elif node.is_argument():
-#             node2dev[node] = Device(devtype="cpu")
-#         elif node.is_data():
-#             node2dev[node] = node.get_device()
-#         else:
-#             node2dev[node] = determine_device(node, node2dev)
-
-#     # Now make a new computation graph with 
-#     replace = {}
-#     newnode2dev = {}
-#     for node in topsorted(outputs):
-#         parents = node.parents
-#         dev = node2dev[node]
-#         if node.is_input():
-#             replace[node] = node
-#         else:
-#             newparents = []
-#             for par in parents:
-#                 if node2dev[par] == dev:
-#                     newparents.append(replace[par])
-#                 else:
-#                     newparents.append(transport(replace[par], node2dev[par], dev))
-#                     newnode2dev[newparents[-1]] = dev
-#             replace[node] = Result(node.op, newparents, typ=node.get_type())
-#         newnode2dev[replace[node]] = dev
-
-#     return [replace[node] for node in outputs], newnode2dev
-
-def make_function(inputs, outputs, dbg = None, fixed_sizes=False, backend=None):
-    config = load_config()
-    backend = backend or config["backend"]
-
-    if isinstance(outputs, tuple):
-        outputs = tuplify(outputs)
-    elif isinstance(outputs, list):
-        outputs = map(tuplify, outputs)
-
-    single = isinstance(outputs, Node)
-    if single: outputs = [outputs]
-
-    if dbg: 
-        if backend == "python":            
-            outputs = dbg.nodes + outputs
+def assign_devices(outputs, devfn=None):
+    # First assign each node to a device
+    node2dev={}
+    for node in topsorted(outputs):        
+        maybedev = None if devfn is None else devfn(node)
+        if maybedev: 
+            node2dev[node] = maybedev
+        elif node.is_argument():
+            node2dev[node] = Device(devtype="cpu")
+        elif node.is_data():
+            node2dev[node] = node.get_device()
         else:
-            utils.warn("Debugging nodes can currently only be used with the python backend, but %s was selected. Ignoring"%backend)
+            node2dev[node] = determine_device(node, node2dev)
 
+    # Now make a new computation graph with 
+    replace = {}
+    newnode2dev = {}
+    for node in topsorted(outputs):
+        parents = node.parents
+        dev = node2dev[node]
+        if node.is_input():
+            replace[node] = node
+        else:
+            newparents = []
+            for par in parents:
+                if node2dev[par] == dev:
+                    newparents.append(replace[par])
+                else:
+                    newparents.append(transport(replace[par], node2dev[par], dev))
+                    newnode2dev[newparents[-1]] = dev
+            replace[node] = Result(node.op, newparents, typ=node.get_type())
+        newnode2dev[replace[node]] = dev
+
+    return [replace[node] for node in outputs], newnode2dev
+
+
+def is_tensor(x):
+    return isinstance(x.typ, TensorType)
+def is_tuple(x):
+    return isinstance(x.typ, TupleType)
+
+def make_interpreter(inputs, outputs, eg, node2memloc):
+    assert isinstance(eg, ExecutionGraph)
+    input_types = [input.get_type() for input in inputs]
+    output_types = [output.get_type() for output in outputs]
+    output_locs = [node2memloc[node] for node in outputs]
+
+    backend = load_config()["backend"]
     if backend == "python":
-        outputs = simplify(outputs)
-        eg = make_execution_graph(inputs, outputs)
-        oplib = OpLibrary()
-        vm = SequentialInterpreter(eg, oplib)
-        def fn(*invals):
-            out = vm(invals)
-            if dbg and len(dbg.nodes)>0: out = out[len(dbg.nodes):]
-            if single: out = out[0]
-            return out
-        return fn
+        oplib = OpLibrary() # XXX
+        return SequentialInterpreter(eg, oplib, output_locs, input_types)
     elif backend == "cython":
-        raise OopsThisCodeIsBrokenException
-        if fixed_sizes: fn = FixedSizeFunc(inputs, outputs)
-        else: fn = VarSizeFunc(inputs, outputs)
-        if single: return lambda *invals : fn(*invals)[0]
-        else: return fn        
+        import cycgt2
+        return cycgt2.CppInterpreterWrapper(eg, input_types, output_locs)
     else:
         raise NotImplementedError("invalid backend %s"%backend)
-    return fn
+
+def topsorted_shapes_first(outputs, node2shape):
+    # Almost identical to topsorted(...) function
+    # But we also need to visit the shape elements of an in-place node
+    # before visiting that node
+    marks = {}
+    out = []
+    stack = [] 
+    for x in outputs:
+        stack.append((x,0))
+        while stack:
+            (i,jidx) = stack.pop()
+            if jidx == 0:
+                m = marks.get(i,0)
+                if m == 0:
+                    marks[i] = 1
+                elif m == 1:
+                    raise ValueError("not a dag")
+                else:
+                    continue
+            ps = i.parents
+            ###### Changed part ######
+            if i.ndim > 0 and not i.is_input() and i.op.call_type=="inplace":
+                if i in node2shape:
+                    shpels = node2shape[i]
+                else:
+                    utils.warn("odd...")
+                    shpels = i.op.shp_apply(i.parents)
+                ps = ps + shpels
+            elif is_tuple(i):
+                for arrshp in node2shape[i]:
+                    ps = ps + arrshp
+            ##########################
+            if jidx == len(ps):
+                marks[i] = 2
+                out.append(i)
+            else:
+                stack.append((i,jidx+1))
+                j = ps[jidx]
+                stack.append((j,0))
+    return out
+
+def determine_memowner(nodes_sorted, updates, node2dev):
+    # TODO use node2loc
+
+    # First determine how many "child" nodes each node has
+    node2child = defaultdict(list)
+    for node in nodes_sorted:
+        for parent in node.parents:
+            node2child[parent].append(node)
+
+    # Now traverse graph again and see where we can use the same memory
+    node2memowner = {} # mapping node x -> the node that owns its memory
+    
+    # For updates, memlocation(RHS) = memlocation(LHS)
+    after2before = {after:before for (before,after) in updates}
+
+    enable_inplace_opt = load_config()["enable_inplace_opt"]
+
+    for node in nodes_sorted:
+
+        base = node # by default, 
+        if node.is_argument():
+            pass
+        elif node.op.writes_to_input >= 0:
+            base = node2memowner[node.parents[node.op.writes_to_input]]
+        elif node in after2before:
+            base = after2before[node]
+        elif enable_inplace_opt and node.op.call_type == "inplace" \
+            and node.op.inplace_alias_ok:
+            nodeshape = node.op.shp_apply(node.parents)
+            for parent in node.parents:
+                if (len(node2child[parent])==1
+                        and nodeshape==shape(parent) # XXX not a very robust way to check
+                        and node.dtype == parent.dtype
+                        and is_data_mutable(parent)):
+                    base = parent
+                    break
+        # TODO: add optimization for in-place incrementing
+        node2memowner[node] = base
+
+    return node2memowner
+
+class MemCounter(object):
+    """
+    returns `MemLocation`s with indices 0,1,...
+    `count` member indicates how many have been returned thus far
+    """
+    def __init__(self):
+        self.count=0
+    def new_memloc(self):
+        out = MemLocation(self.count)
+        self.count += 1
+        return out
+
+
+def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memowner, node2dev):
+    instrs = []
+    counter = MemCounter()
+    node2memloc = {}
+
+    for node in nodes_sorted:
+        if node.is_argument():
+            write_loc = counter.new_memloc()
+            node2memloc[node] = write_loc
+            i = inputs.index(node)
+            instrs.append(LoadArgument(i, write_loc))
+        else:
+            read_locs = [node2memloc[p] for p in node.parents]
+            if node.op.call_type == "inplace":
+                if node2memowner[node] == node:
+                    if is_tensor(node): # just make one memory location for output
+                        nodeshape = node2shape[node] if node.ndim > 0 else []
+                        shape_locs = [node2memloc[shpel] for shpel in nodeshape]
+                        # XXX can probably get rid of condition
+                        write_loc = counter.new_memloc()                    
+                        instrs.append(Alloc(node.dtype, shape_locs, write_loc))
+                    else: # if it's a tuple, we need to allocate all of the components, then build tuple
+                        nodeshape = node2shape[node]
+                        assert isinstance(nodeshape, tuple)
+                        arr_locs = []
+                        for (arrshp, arrtyp) in utils.safezip(nodeshape, node.get_type()):
+                            arr_loc = counter.new_memloc()
+                            shape_locs = [node2memloc[shpel] for shpel in arrshp]
+                            instrs.append(Alloc(arrtyp.dtype, shape_locs, arr_loc))
+                            arr_locs.append(arr_loc)
+                        write_loc = counter.new_memloc()   
+                        instrs.append(BuildTup(node.get_type(), arr_locs, write_loc))
+
+                else:
+                    write_loc = node2memloc[node2memowner[node]]
+                instrs.append(ReturnByRef(node, read_locs, write_loc))
+            else:
+                assert node.op.call_type == "valret"
+                write_loc = counter.new_memloc()
+                instrs.append(ReturnByVal(node, read_locs, write_loc))
+        node2memloc[node] = write_loc
+    return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
+
+
+def compilation_pipeline(inputs, outputs, updates):
+    """
+    Compiles the expression graph into an execution graph. 
+    """
+    # Phase 1: simplification and analysis of expression graph
+    # ------------------------------------------------------
+    # Add add update targets to outputs
+    outputs_updatetargs = outputs + [after for (_before, after) in updates]
+    # Do simplification + analysis pass on expression graph
+    outputs_updatetargs_simple, analysis = \
+        simplify_and_analyze(outputs_updatetargs) if load_config()["enable_simplification"] \
+        else (outputs_updatetargs, analyze(outputs_updatetargs))
+    # Determine location and device of nodes
+    node2dev = determine_devices(outputs_updatetargs_simple)
+
+    # Phase 2: build execution graph
+    # ------------------------------------------------------
+    # Sort nodes so that shape elements appear before a given node
+    nodes_sorted = topsorted_shapes_first(outputs_updatetargs_simple, analysis["node2shape"])
+    # For each node, figure out if its output should be written to a previous node's memory
+    # (memowner : "memory owner")
+    updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
+    updatesrcs = [before for (before, _) in updates]
+    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple), node2dev)
+    # Find the outputs we want to return
+    outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
+    # Generate execution graph
+    eg, node2memloc = create_execution_graph(inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev)
+
+    # Phase 3: create C or Python interpreter for graph
+    # ------------------------------------------------------
+    interp = make_interpreter(inputs, outputs_simple, eg, node2memloc)
+
+    # Done!
+    return interp
+
 
 
 ################################################################
@@ -303,8 +299,8 @@ def numeric_eval(outputs, arg2val):
     """
     Evaluate outputs numerically. arg2val is a dictionary mapping arguments to numerical values
     """
-    single = isinstance(outputs, Node)
-    if single: outputs = [outputs]
+    assert isinstance(outputs, list)
+    assert isinstance(arg2val, dict)
 
     nodes = list(topsorted(outputs))
 
@@ -320,11 +316,10 @@ def numeric_eval(outputs, arg2val):
         # assert node.get_ndim() == np.array(node2val[node]).ndim
     numeric_outputs = [node2val[node] for node in outputs]
 
-    if single:
-        return numeric_outputs[0]
-    else:
-        return numeric_outputs
+    return numeric_outputs
 
+def numeric_eval1(output, arg2val):
+    return numeric_eval([output], arg2val)[0]
 
 ################################################################
 ### Execution graph 
@@ -478,31 +473,15 @@ MemInfo = namedtuple("MemInfo",["loc","access"])
 MEM_OVERWRITE = "overwrite"
 MEM_INCREMENT = "increment"
 
-class ExecutionGraph:
-    def __init__(self, n_args):
+class ExecutionGraph(object):
+    def __init__(self, instrs, n_args, n_locs):
+        self.instrs = instrs
         self.n_args = n_args
-        self.locs = []
-        self.instrs = []
-        self.output_locs = []
-        self.cur_idx = 0
-    def new_loc(self):
-        loc = MemLocation(self.cur_idx)
-        self.cur_idx += 1
-        self.locs.append(loc)
-        return loc
-    def add_instr(self, instr):
-        self.instrs.append(instr)
-    def set_outputs(self, locs):
-        self.output_locs = locs
-    def n_locs(self):
-        return self.cur_idx
+        self.n_locs = n_locs
     def to_json(self):
-        import json
-        return json.dumps({
+        return {
             "instrs" : _list_to_json(self.instrs),
-            "output_locs" : _list_to_json(self.output_locs),
-            "n_mem" : self.cur_idx
-        }, indent=4, sort_keys=True)
+        }
 
 class MemLocation(object):
     def __init__(self, idx):
@@ -525,20 +504,102 @@ class Interpreter(object):
     def apply_valret(self, node, reads):
         raise NotImplementedError
 
+def as_valid_arg(x):
+    if isinstance(x, tuple):
+        return tuple(as_valid_arg(el) for el in x)
+    else:
+        return as_valid_array(x)
+
+class _Profiler(object):
+    def __init__(self):
+        self.instr2stats = {}
+        self.on = False
+        self.t_total = 0.0
+    def start(self): self.on = True
+    def stop(self): self.on = False
+    def update(self, instr, elapsed):
+        (prevcount, prevtime) = self.instr2stats.get(instr, (0,0.0))
+        self.instr2stats[instr] = (prevcount+1, prevtime+elapsed)
+        self.t_total += elapsed
+    def print_stats(self):
+        op2stats = {}
+        # Collapse by Op, rather than instruction
+        for (instr,(count,time)) in self.instr2stats.iteritems():
+            opkey = str(instr) # XXX
+            (prevcount, prevtime) = op2stats.get(opkey, (0, 0.0))
+            op2stats[opkey] = (prevcount+count, prevtime+time)
+
+        print "Total time elapsed: %.3g seconds"%self.t_total
+        _print_heading("By instruction")
+        _print_stats(self.instr2stats, self.t_total)
+        _print_heading("By Op")
+        _print_stats(op2stats, self.t_total)
+    def clear_stats(self):
+        self.instr2stats = {}
+        self.t_total = 0.0
+
+profiler = _Profiler()
+
+def _print_heading(heading):
+    heading = "  " + heading + "  "
+    width = 60
+    assert len(heading) < width-10
+    print
+    print "*"*width
+    padleft = (width-len(heading))//2
+    padright = width-len(heading)-padleft
+    print "*"*padleft + heading + "*"*padright
+    print "*"*width
+
+def _print_stats(key2stats, t_total):
+    rows = []
+    for (key, (count,time)) in key2stats.iteritems():
+        rows.append([str(key), count, time, time/t_total])
+    rows = sorted(rows, key=lambda row: row[2], reverse=True)
+    cumsum = 0
+    for row in rows:
+        cumsum += row[3]
+        row.append(cumsum)
+    from thirdparty.tabulate import tabulate
+    print tabulate(rows, headers=["Instruction","Count","Time","Frac","Frac cumsum"])
+
+def _copy(x):
+    if isinstance(x, np.ndarray): return x.copy()
+    elif isinstance(x, tuple): return tuple(el.copy() for el in x)
+    elif np.isscalar(x): return x # xxx is this case ok?
+    else: raise NotImplementedError
+
+
+def typecheck_args(numargs, types):
+    assert len(numargs)==len(types), "wrong number of arguments. got %i, expected %i"%(len(numargs),len(types))
+    for (numarg,typ) in zip(numargs,types):
+        if isinstance(typ, TensorType):
+            assert numarg.dtype==typ.dtype and numarg.ndim==typ.ndim
+    
 class SequentialInterpreter(Interpreter):
     """
-    Executes an execution graph
+    Runs an execution graph
     """
-    def __init__(self, eg, oplib):
+    def __init__(self, eg, oplib, output_locs, input_types, copy_outputs=True):
         self.eg = eg
         self.oplib = oplib
-        self.storage = [None for _ in xrange(self.eg.n_locs())]
+        self.input_types = input_types
+        self.output_locs = output_locs
+        self.storage = [None for _ in xrange(self.eg.n_locs)]
         self.args = None
-    def __call__(self, args):
-        self.args = args
+        self.copy_outputs = copy_outputs
+    def __call__(self, *args):
+        self.args = tuple(as_valid_arg(arg) for arg in args)
+        typecheck_args(self.args, self.input_types)
         for instr in self.eg.instrs:
+            if profiler.on: tstart = time()
             instr.fire(self)
-        return [self.get(loc) for loc in self.eg.output_locs]
+            if profiler.on: profiler.update(instr, time()-tstart)
+        outputs = [self.get(loc) for loc in self.output_locs]
+        if self.copy_outputs: outputs = map(_copy, outputs)
+        return outputs
+        # need to copy because otherwise we might mess up the data when we call func again
+        # todo: add option that prevents this behavior
     def get(self, mem):
         return self.storage[mem.index]
     def set(self, mem, val):
@@ -550,75 +611,7 @@ class SequentialInterpreter(Interpreter):
     def apply_valret(self, node, reads):
         return self.oplib.apply_valret(node, reads)
 
-def make_execution_graph(inputs, outputs):
-    G = ExecutionGraph(len(inputs))
-    nodes = list(topsorted(outputs))
-    node2mem = {}
-
-    node2child = defaultdict(list)
-    for node in nodes:
-        for parent in node.parents:
-            node2child[parent].append(node)
-
-    analysis = analyze(outputs)
-    node2shape = analysis["node2shape"]
-
-    tupnode2shpnode = {}
-    # XXX won't work if we have nested tuples. or will it?
-
-    augoutputs = []
-    for node in nodes:
-        shp = node2shape[node]
-        if isinstance(shp, list):
-            augoutputs.extend(shp)
-        else:
-            newnode = make_tuple(*shp)
-            tupnode2shpnode[node] = newnode
-            augoutputs.append(newnode)
-    augoutputs.extend(outputs)
-
-    nodes2 = topsorted(augoutputs)
-    # XXX this only works because of details of topsort implementation
-    # in general we're not guaranteed that the shape components will be computed before the nodes
-
-    # TODO: incremental versions of stuff
-    for node in nodes2:        
-        if node.is_argument():
-            write_loc = G.new_loc()
-            node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
-            i = inputs.index(node)
-            G.add_instr(LoadArgument(i, write_loc))
-        else:
-            read_locs = [node2mem[parent].loc for parent in node.parents]
-            if node.op.call_type == "inplace":
-                needs_alloc=True
-                if node.op.writes_to_input >= 0:
-                    write_loc = node2mem[node.parents[node.op.writes_to_input]].loc
-                    needs_alloc=False
-                else:
-                    nodeshape = node.op.shp_apply(node.parents)
-                    for parent in node.parents:
-                        if len(node2child[parent])==1 and nodeshape==shape(parent) and node.dtype == parent.dtype and _is_data_mutable(parent):
-                            write_loc = node2mem[parent].loc
-                            needs_alloc = False
-                            break                          
-                if needs_alloc:
-                    write_loc = G.new_loc()
-                    if isinstance(node.typ, Tensor):
-                        shape_locs = [node2mem[shpel].loc for shpel in node2shape[node]] if node.ndim>0 else []
-                        G.add_instr(Alloc(node.dtype, shape_locs, write_loc))
-                    else:
-                        shpnode = tupnode2shpnode[node]
-                        G.add_instr(AllocTup(node.get_type(), node2mem[shpnode].loc, write_loc))
-                G.add_instr(InPlace(node, read_locs, write_loc))
-            else:                
-                write_loc = G.new_loc()
-                G.add_instr(ValReturning(node, read_locs, write_loc))
-        node2mem[node] = MemInfo(write_loc, MEM_OVERWRITE)
-    G.set_outputs([node2mem[node].loc for node in outputs])
-    return G
-
-def _is_data_mutable(node):
+def is_data_mutable(node):
     if isinstance(node, Result):
         return not isinstance(node.op, Constant) 
     elif isinstance(node, Input):
@@ -641,6 +634,8 @@ class LoadArgument(Instr):
         self.write_loc = write_loc
     def fire(self, interp):
         interp.set(self.write_loc, interp.getarg(self.ind))
+    def __repr__(self):
+        return "LoadArg:%i"%self.ind
     def to_json(self):
         return {"type" : "LoadArgument", "write_loc" : self.write_loc.to_json(), "ind" : self.ind}
 
@@ -651,22 +646,27 @@ class Alloc(Instr):
         self.write_loc = write_loc
     def fire(self, interp):
         shp = tuple(interp.get(mem) for mem in self.read_locs)
-        interp.set(self.write_loc, np.zeros(shp, self.dtype))
+        prevarr = interp.get(self.write_loc)
+        if prevarr is None or prevarr.shape != shp: 
+            interp.set(self.write_loc, np.ones(shp, self.dtype))
+    def __repr__(self):
+        return "Alloc:%s"%self.dtype
     def to_json(self):
         return {"type" : "Alloc", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json()}
 
-class AllocTup(Instr):
-    def __init__(self, typ, read_loc, write_loc):
+class BuildTup(Instr):
+    def __init__(self, typ, read_locs, write_loc):
         self.typ = typ
-        self.read_loc = read_loc
+        self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
-        shp = interp.get(self.read_loc)
-        interp.set(self.write_loc, alloc_from_shp(shp, self.typ))
+        interp.set(self.write_loc, tuple(interp.get(loc) for loc in self.read_locs))
+    def __repr__(self):
+        return "BuildTup:%s"%self.typ
     def to_json(self):
-        return {"type" : "AllocTup"} # XXX
+        return {"type" : "BuildTup"} # XXX
 
-class InPlace(Instr):
+class ReturnByRef(Instr):
     def __init__(self, node, read_locs, write_loc):
         self.node = node # XXX shouldn't need to store node here.
         self.read_locs = read_locs
@@ -675,15 +675,19 @@ class InPlace(Instr):
         interp.apply_inplace(self.node,
             [interp.get(mem) for mem in self.read_locs],
             interp.get(self.write_loc))
+    def __repr__(self):
+        return "ReturnByRef:%s"%self.node.op.get_name()
     def to_json(self):
-        return {"type" : "InPlace", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
+        return {"type" : "ReturnByRef", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
 
-class ValReturning(Instr):
+class ReturnByVal(Instr):
     def __init__(self, node, read_locs, write_loc):
         self.node = node
         self.read_locs = read_locs
         self.write_loc = write_loc
     def fire(self, interp):
         interp.set(self.write_loc, interp.apply_valret(self.node, [interp.get(mem) for mem in self.read_locs]))
+    def __repr__(self):
+        return "ByVal:%s"%self.node.op.get_name()
     def to_json(self):
-        return {"type" : "ValReturning", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
+        return {"type" : "ReturnByVal", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}

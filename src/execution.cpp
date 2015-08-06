@@ -4,43 +4,42 @@
 namespace cgt {
 
 template <typename T>
-T idx(cgt_array* x, size_t a) {
+T idx(cgtArray * x, size_t a) {
     return ((T*)x->data)[a];
 }
 
-ExecutionGraph::~ExecutionGraph() {}
+ExecutionGraph::~ExecutionGraph() {
+    for (auto instr : instrs_) delete instr;
+}
 
 class SequentialInterpreter : public Interpreter {
 public:
-    SequentialInterpreter(ExecutionGraph* eg) : 
-        eg(eg),
-        storage(eg->n_mem_locs()),
-        args(NULL)
-    {
-    }
+    SequentialInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs) 
+    : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL) {}
 
-    cgt_object* get(MemLocation m) {
-        return storage[m.index].get();
+    cgtObject * get(MemLocation m) {
+        return storage_[m.index].get();
     }
-    void set(MemLocation m, cgt_object* val) {
-        storage[m.index] = val;
+    void set(MemLocation m, cgtObject * val) {
+        storage_[m.index] = val;
     }
-    cgt_object* getarg(int argind) {
-        cgt_assert(argind < args->len);        
-        return args->members[argind].get();
+    cgtObject * getarg(int argind) {
+        cgt_assert(argind < args_->len);        
+        return args_->members[argind].get();
     }
-    cgt_tuple* run(cgt_tuple* newargs) {
+    cgtTuple * run(cgtTuple * newargs) {
+        args_ = newargs;
         cgt_assert(newargs != NULL);
-        cgt_assert(newargs->len == eg->n_args());
-        args = newargs;
-        for (Instruction* instr : eg->get_instrs()) {
+        cgt_assert(newargs->len == eg_->n_args());
+        for (Instruction* instr : eg_->instrs()) {
             instr->fire(this);
         }
-        args = NULL;
-        cgt_tuple* out = new cgt_tuple(eg->n_outputs());
-        for (int i=0; i < eg->n_outputs(); ++i) {
-            int index = eg->get_output_locs()[i].index;
-            out->setitem(i, get(eg->get_output_locs()[i]));
+        args_ = NULL;
+        size_t n_outputs = output_locs_.size();
+        cgtTuple * out = new cgtTuple(n_outputs);
+        for (int i=0; i < n_outputs; ++i) {
+            int index = output_locs_[i].index;
+            out->setitem(i, get(output_locs_[i]));
         }
         return out;
         // todo actually do something with outputs
@@ -48,44 +47,64 @@ public:
     ~SequentialInterpreter() {
     }
 private:
-    ExecutionGraph* eg;
-    vector<IRC<cgt_object>> storage;
-    cgt_tuple* args;
+    ExecutionGraph* eg_;
+    vector<MemLocation> output_locs_;
+    vector<IRC<cgtObject>> storage_;
+    cgtTuple * args_;
 };
 
-Interpreter* create_interpreter(ExecutionGraph* eg) {
-    return new SequentialInterpreter(eg);
+Interpreter* create_interpreter(ExecutionGraph* eg, vector<MemLocation> output_locs) {
+    return new SequentialInterpreter(eg, output_locs);
 }
 
 void LoadArgument::fire(Interpreter* interp) {
     interp->set(writeloc, interp->getarg(ind));
 }
 
+bool array_equal(int n, size_t* x, size_t* y) {
+    bool out = true;
+    for (int i=0; i < n; ++i) out = out && (x[i]==y[i]);
+    return out;
+}
+
 void Alloc::fire(Interpreter* interp) {
     int ndim = readlocs.size();
     size_t shape[ndim];
     for (int i=0; i < readlocs.size(); ++i) {
-        cgt_array* sizeval = (cgt_array*)interp->get(readlocs[i]);
+        cgtArray * sizeval = (cgtArray *)interp->get(readlocs[i]);
         cgt_assert(sizeval->dtype == cgt_i8);
         shape[i] = idx<size_t>(sizeval, 0); 
     }
-    interp->set(writeloc, new cgt_array(ndim, shape, dtype, cgt_cpu));
+
+    cgtArray* cur = static_cast<cgtArray*>(interp->get(writeloc));
+    if (!(cur && array_equal(ndim, cur->shape, shape))) {
+        interp->set(writeloc, new cgtArray(ndim, shape, dtype, cgtCPU));        
+    }
+
 }
 
-void InPlace::fire(Interpreter* interp) {
-    int n_inputs = readlocs.size();
-    cgt_object* args[n_inputs+1];
-    for (int i=0; i < n_inputs; ++i) {
-        args[i] = interp->get(readlocs[i]);
+void BuildTup::fire(Interpreter* interp) {
+    cgtTuple * out = new cgtTuple(readlocs.size());
+    for (int i=0; i < readlocs.size(); ++i) {
+        out->setitem(i, interp->get(readlocs[i]));
     }
-    args[n_inputs] = interp->get(writeloc);
-    closure(args);
+    interp->set(writeloc, out);
+}
+
+void ReturnByRef::fire(Interpreter* interp) {
+    int n_inputs = readlocs.size();
+    cgtObject * reads[n_inputs];
+    for (int i=0; i < n_inputs; ++i) {
+        reads[i] = interp->get(readlocs[i]);
+    }
+    cgtObject * write = interp->get(writeloc);
+    closure(reads, write);
 }
 
 // TODO actually allocate tuple
-void ValReturning::fire(Interpreter* interp) {
+void ReturnByVal::fire(Interpreter* interp) {
     int n_inputs = readlocs.size();
-    vector<cgt_object*> args(n_inputs);
+    vector<cgtObject *> args(n_inputs);
     for (int i = 0; i < n_inputs; ++i) {
         args[i] = interp->get(readlocs[i]);
     }    

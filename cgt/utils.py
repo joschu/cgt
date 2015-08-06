@@ -37,6 +37,11 @@ def safezip(x,y):
     assert len(x) == len(y)
     return zip(x,y)
 
+def safezip3(x,y,z):
+    assert len(x) == len(y) == len(z)
+    return zip(x,y,z)
+
+
 def allsame(xs):
     out = True
     if len(xs)>0:

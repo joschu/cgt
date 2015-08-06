@@ -1,4 +1,4 @@
-from core import *
+from . import core, utils
 import sys
 
 # ================================================================
@@ -12,7 +12,7 @@ def print_tree(outputs, o=sys.stdout, nodefn=None):
     nodefn(node, o)
     So you can print more attributes of the node
     """
-    if isinstance(outputs, Node):
+    if isinstance(outputs, core.Node):
         outputs = [outputs]
     node2name = {}
     expands = []
@@ -56,7 +56,7 @@ def _get_expr(node, node2s):
         return node2s[node]
     else:
         if node.is_input():
-            name = node2s[node] = "@%i"%len(node2s)
+            name = node2s[node] = node.get_name() or "@%i"%len(node2s)
             return name
         else:
             parent_exprs = [_get_expr(parent, node2s) 
@@ -68,13 +68,25 @@ def print_text(outputs, o=sys.stdout):
     Print computation graph in single-statement assignment form,
     inspired by LLVM IR. (needs work)
     """
-    if isinstance(outputs, Node):
+    if isinstance(outputs, core.Node):
         outputs = [outputs]
     node2name = {}
-    for node in topsorted(outputs):
-        thisname = node2name[node] = "@%i"%len(node2name)
+    for node in core.topsorted(outputs):
+        thisname = node2name[node] = (node.get_name() if node.is_input() else "") + "@%i"%len(node2name)
         if node.is_input():
-            o.write("Input: %s\n"%thisname)
+            o.write("%s <- input\n"%thisname)
         else:
-            o.write("%s = %s %s\n"%(thisname, node.get_name(), " ".join(node2name[parent]
+            o.write("%s = %s %s\n"%(thisname, node.op.get_name(), " ".join(node2name[parent]
                 for parent in node.parents)))
+
+def as_dot(nodes):
+    if isinstance(nodes, core.Node):
+        nodes = [nodes]
+    from graphviz import Digraph
+    g = Digraph()
+    for n in core.topsorted(nodes):
+        g.node(str(id(n)), str(n))
+        for p in n.parents:
+            g.edge(str(id(n)), str(id(p)))
+    return g
+

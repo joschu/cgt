@@ -1,5 +1,6 @@
 import numpy as np
-import cgt,nn
+import cgt
+from cgt import nn, core
 import unittest
 
 
@@ -24,11 +25,11 @@ class FlatvecTestCase(unittest.TestCase):
 
         err = cgt.sum(cgt.square(ypred - y_n))
         g = cgt.grad(err, [w_k, b])
-        g = cgt.simplify(g)
+        g = core.simplify(g)
 
         pars = [w_k, b]
         flatx = nn.setup_contiguous_storage(pars)
-        f = cgt.make_function([], [err,cgt.flatcat(g)])
+        f = cgt.function([], [err,cgt.flatcat(g)])
 
 
 if __name__ == "__main__":

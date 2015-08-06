@@ -20,42 +20,44 @@
 //===----------------------------------------------------------------------===//
 
 
-#include <atomic>
 #include <memory>
-#include <cassert>
+
 
   template <class T>
-  class IntrusiveRefCntPtr;
+  class IRC;
 
   template <typename T> struct IntrusiveRefCntPtrInfo {
     static void retain(T *obj) { obj->Retain(); }
     static void release(T *obj) { obj->Release(); }
   };
 
-//===----------------------------------------------------------------------===//
-/// RefCountedBase - A generic base class for objects that wish to
-///  have their lifetimes managed using reference counts. Classes
-///  subclass RefCountedBase to obtain such functionality, and are
-///  typically handled with IntrusiveRefCntPtr "smart pointers" (see below)
-///  which automatically handle the management of reference counts.
-///  Objects that subclass RefCountedBase should not be allocated on
-///  the stack, as invoking "delete" (which is called when the
-///  reference count hits 0) on such objects is an error.
-//===----------------------------------------------------------------------===//
-  template <class Derived>
-  class RefCountedBase {
-    mutable unsigned ref_cnt;
 
-  public:
-    RefCountedBase() : ref_cnt(0) {}
-    RefCountedBase(const RefCountedBase &) : ref_cnt(0) {}
+// JDS: rolled this into cgt_object so we don't need template inheritance business
+  
+// //===----------------------------------------------------------------------===//
+// /// RefCountedBase - A generic base class for objects that wish to
+// ///  have their lifetimes managed using reference counts. Classes
+// ///  subclass RefCountedBase to obtain such functionality, and are
+// ///  typically handled with IntrusiveRefCntPtr "smart pointers" (see below)
+// ///  which automatically handle the management of reference counts.
+// ///  Objects that subclass RefCountedBase should not be allocated on
+// ///  the stack, as invoking "delete" (which is called when the
+// ///  reference count hits 0) on such objects is an error.
+// //===----------------------------------------------------------------------===//
+//   template <class Derived>
+//   class RefCountedBase {
+//     mutable unsigned ref_cnt;
 
-    void Retain() const { ++ref_cnt; }
-    void Release() const {
-      assert (ref_cnt > 0 && "Reference count is already zero.");
-      if (--ref_cnt == 0) delete static_cast<const Derived*>(this);
-    }
-  };
+//   public:
+//     RefCountedBase() : ref_cnt(0) {}
+//     RefCountedBase(const RefCountedBase &) : ref_cnt(0) {}
+
+//     void Retain() const { ++ref_cnt; }
+//     void Release() const {
+//       assert (ref_cnt > 0 && "Reference count is already zero.");
+//       if (--ref_cnt == 0) delete static_cast<const Derived*>(this);
+//     }
+//   };
 
 //===----------------------------------------------------------------------===//
 /// IntrusiveRefCntPtr - A template class that implements a "smart pointer"
@@ -75,43 +77,43 @@
 ///  automatically.
 //===----------------------------------------------------------------------===//
   template <typename T>
-  class IntrusiveRefCntPtr {
+  class IRC {
     T* Obj;
 
   public:
     typedef T element_type;
 
-    explicit IntrusiveRefCntPtr() : Obj(nullptr) {}
+    explicit IRC() : Obj(nullptr) {}
 
-    IntrusiveRefCntPtr(T* obj) : Obj(obj) {
+    IRC(T* obj) : Obj(obj) {
       retain();
     }
 
-    IntrusiveRefCntPtr(const IntrusiveRefCntPtr& S) : Obj(S.Obj) {
+    IRC(const IRC & S) : Obj(S.Obj) {
       retain();
     }
 
-    IntrusiveRefCntPtr(IntrusiveRefCntPtr&& S) : Obj(S.Obj) {
+    IRC(IRC && S) : Obj(S.Obj) {
       S.Obj = nullptr;
     }
 
     template <class X>
-    IntrusiveRefCntPtr(IntrusiveRefCntPtr<X>&& S) : Obj(S.get()) {
+    IRC(IRC<X>&& S) : Obj(S.get()) {
       S.Obj = 0;
     }
 
     template <class X>
-    IntrusiveRefCntPtr(const IntrusiveRefCntPtr<X>& S)
+    IRC(const IRC<X>& S)
       : Obj(S.get()) {
       retain();
     }
 
-    IntrusiveRefCntPtr& operator=(IntrusiveRefCntPtr S) {
+    IRC & operator=(IRC S) {
       swap(S);
       return *this;
     }
 
-    ~IntrusiveRefCntPtr() { release(); }
+    ~IRC() { release(); }
 
     T& operator*() const { return *Obj; }
 
@@ -121,7 +123,7 @@
 
     operator bool() const { return Obj; }
 
-    void swap(IntrusiveRefCntPtr& other) {
+    void swap(IRC & other) {
       T* tmp = other.Obj;
       other.Obj = Obj;
       Obj = tmp;
@@ -141,32 +143,32 @@
     void release() { if (Obj) IntrusiveRefCntPtrInfo<T>::release(Obj); }
 
     template <typename X>
-    friend class IntrusiveRefCntPtr;
+    friend class IRC;
   };
 
   template<class T, class U>
-  inline bool operator==(const IntrusiveRefCntPtr<T>& A,
-                         const IntrusiveRefCntPtr<U>& B)
+  inline bool operator==(const IRC<T>& A,
+                         const IRC<U>& B)
   {
     return A.get() == B.get();
   }
 
   template<class T, class U>
-  inline bool operator!=(const IntrusiveRefCntPtr<T>& A,
-                         const IntrusiveRefCntPtr<U>& B)
+  inline bool operator!=(const IRC<T>& A,
+                         const IRC<U>& B)
   {
     return A.get() != B.get();
   }
 
   template<class T, class U>
-  inline bool operator==(const IntrusiveRefCntPtr<T>& A,
+  inline bool operator==(const IRC<T>& A,
                          U* B)
   {
     return A.get() == B;
   }
 
   template<class T, class U>
-  inline bool operator!=(const IntrusiveRefCntPtr<T>& A,
+  inline bool operator!=(const IRC<T>& A,
                          U* B)
   {
     return A.get() != B;
@@ -174,35 +176,34 @@
 
   template<class T, class U>
   inline bool operator==(T* A,
-                         const IntrusiveRefCntPtr<U>& B)
+                         const IRC<U>& B)
   {
     return A == B.get();
   }
 
   template<class T, class U>
   inline bool operator!=(T* A,
-                         const IntrusiveRefCntPtr<U>& B)
+                         const IRC<U>& B)
   {
     return A != B.get();
   }
 
   template <class T>
-  bool operator==(std::nullptr_t A, const IntrusiveRefCntPtr<T> &B) {
+  bool operator==(std::nullptr_t A, const IRC<T> &B) {
     return !B;
   }
 
   template <class T>
-  bool operator==(const IntrusiveRefCntPtr<T> &A, std::nullptr_t B) {
+  bool operator==(const IRC<T> &A, std::nullptr_t B) {
     return B == A;
   }
 
   template <class T>
-  bool operator!=(std::nullptr_t A, const IntrusiveRefCntPtr<T> &B) {
+  bool operator!=(std::nullptr_t A, const IRC<T> &B) {
     return !(A == B);
   }
 
   template <class T>
-  bool operator!=(const IntrusiveRefCntPtr<T> &A, std::nullptr_t B) {
+  bool operator!=(const IRC<T> &A, std::nullptr_t B) {
     return !(A == B);
   }
-

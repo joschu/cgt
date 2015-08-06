@@ -10,28 +10,46 @@
 // ================================================================
 // Object alloc/dealloc 
 // ================================================================
- 
 
-cgt_array::cgt_array(int ndim, size_t* inshape, cgt_dtype dtype, cgt_devtype devtype)
-: cgt_object(cgt_arraytype), ndim(ndim), dtype(dtype), devtype(devtype), ownsdata(true)
-{
-    shape = new size_t[ndim];
-    for (int i=0; i < ndim; ++i) shape[i] = inshape[i];
-    data = malloc(cgt_nbytes(this));
+cgtArray::cgtArray(int ndim, size_t *inshape, cgtDtype dtype, cgtDevtype devtype)
+    : cgtObject(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype),
+      devtype(devtype), ownsdata(true) {
+  shape = new size_t[ndim];
+  for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
+  size_t nbytes = cgt_nbytes(this);
+  data = cgt_alloc(devtype, nbytes);
 }
 
-cgt_array::~cgt_array() {
-    delete[] shape;
-    if (ownsdata) free(data);
+cgtArray::cgtArray(int ndim, size_t *inshape, cgtDtype dtype, cgtDevtype devtype,
+    void* fromdata, bool copy)
+    : cgtObject(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype), devtype(devtype) {
+  shape = new size_t[ndim];
+  for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
+  cgt_assert(fromdata != NULL);
+  if (copy) {
+    size_t nbytes = cgt_nbytes(this);
+    data = cgt_alloc(devtype, nbytes);
+    ownsdata = true;
+    cgt_memcpy(devtype, cgtCPU, data, fromdata, nbytes);
+  }
+  else {
+    data = fromdata;
+    ownsdata = false;
+  }
 }
 
-cgt_tuple::cgt_tuple(size_t len) 
-: cgt_object(cgt_tupletype), len(len) {
-    members = new IRC<cgt_object>[len];
+cgtArray::~cgtArray() {
+  delete[] shape;
+  if (ownsdata) free(data);
 }
 
-cgt_tuple::~cgt_tuple() {
-    delete[] members;
+cgtTuple::cgtTuple(size_t len)
+    : cgtObject(ObjectKind::TupleKind), len(len) {
+  members = new IRC<cgtObject>[len];
+}
+
+cgtTuple::~cgtTuple() {
+  delete[] members;
 }
 
 
@@ -39,61 +57,61 @@ cgt_tuple::~cgt_tuple() {
 // Error handling 
 // ================================================================
 
- void cgt_abort() {
-    abort();    
- }
+void cgt_abort() {
+  abort();
+}
 
-cgt_status cgt_global_status = cgt_ok;
-char cgt_global_errmsg[1000];
+cgtStatus cgtGlobalStatus = cgtStatusOK;
+char cgtGlobalErrorMsg[1000];
+
 
 // ================================================================
 // Memory management 
 // ================================================================
- 
 
-void* cgt_alloc(char devtype, size_t size) {
-    if (devtype == cgt_cpu) {
-        return malloc(size);
-    }
-    else {
-        #ifdef CGT_ENABLE_CUDA
+void *cgt_alloc(char devtype, size_t size) {
+  if (devtype == cgtCPU) {
+    return malloc(size);
+  }
+  else {
+#ifdef CGT_ENABLE_CUDA
         void* out;
         CUDA_CHECK(cudaMalloc(&out, size));
         return out;
-        #else
-        cgt_assert(0 && "CUDA disabled");
-        #endif
-    }
+#else
+    cgt_assert(0 && "CUDA disabled");
+#endif
+  }
 }
 
-void cgt_free(char devtype, void* ptr) {
-    if (devtype == cgt_cpu) {
-        free(ptr);
-    }
-    else {
-        #ifdef CGT_ENABLE_CUDA
+void cgt_free(char devtype, void *ptr) {
+  if (devtype == cgtCPU) {
+    free(ptr);
+  }
+  else {
+#ifdef CGT_ENABLE_CUDA
         CUDA_CHECK(cudaFree(ptr));
-        #else
-        cgt_assert(0 && "CUDA disabled");
-        #endif
-    }
+#else
+    cgt_assert(0 && "CUDA disabled");
+#endif
+  }
 }
 
-void cgt_memcpy(char dest_type, char src_type, void* dest_ptr, void* src_ptr, size_t nbytes) {
-    if (src_type == cgt_cpu && dest_type == cgt_cpu) {
-        memcpy(dest_ptr, src_ptr, nbytes);
-    }
-    else {
-        #ifdef CGT_ENABLE_CUDA
+void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, size_t nbytes) {
+  if (src_type == cgtCPU && dest_type == cgtCPU) {
+    memcpy(dest_ptr, src_ptr, nbytes);
+  }
+  else {
+#ifdef CGT_ENABLE_CUDA
         enum cudaMemcpyKind kind;
-        if       (src_type == cgt_cpu && dest_type == cgt_gpu) kind = cudaMemcpyHostToDevice;
-        else if  (src_type == cgt_gpu && dest_type == cgt_cpu) kind = cudaMemcpyDeviceToHost;
-        else if  (src_type == cgt_gpu && dest_type == cgt_gpu) kind = cudaMemcpyDeviceToDevice;
+        if       (src_type == cgtCPU && dest_type == cgtGPU) kind = cudaMemcpyHostToDevice;
+        else if  (src_type == cgtGPU && dest_type == cgtCPU) kind = cudaMemcpyDeviceToHost;
+        else if  (src_type == cgtGPU && dest_type == cgtGPU) kind = cudaMemcpyDeviceToDevice;
         else cgt_assert(0 && "invalid src/dest types");
         CUDA_CHECK(cudaMemcpy(dest_ptr, src_ptr, nbytes, kind));
         #else
-        cgt_assert(0 && "CUDA disabled");
-        #endif
-    }
+    cgt_assert(0 && "CUDA disabled");
+#endif
+  }
 }
 
