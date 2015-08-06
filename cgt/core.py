@@ -311,10 +311,9 @@ class PyImpl(OpImpl):
         return False
 
 class CImpl(OpImpl):
-    def __init__(self, code, closure=None, includes=None, link_flags=""):
+    def __init__(self, code, includes=None, link_flags=""):
         OpImpl.__init__(self, [code, includes, link_flags])
         self.code = code
-        self.closure = closure
         self.includes = [] if includes is None else includes
         self.link_flags = link_flags
     def is_py(self):
@@ -376,32 +375,17 @@ class Op(object):
         Get a human-readable description of the Op, including its attributes
         """
         return type(self).__name__.lower()
-    # def py_apply_inplace(self, reads, write):
-    #     """
-    #     Apply python implementation of op to numeric inputs and outputs in-place
-    #     """
-    #     raise MethodNotDefined
-    # def py_apply_valret(self, reads):
-    #     """
-    #     Apply and return value.
-    #     """
-    #     raise MethodNotDefined
-    # def get_closure(self, _inputs):
-    #     """
-    #     XXX writeme
-    #     """
-    #     return None
-    # def c_code(self, inputs):
-    #     """
-    #     Return C code implementing this function, with the name of the function replaced by CGT_FUNCNAME.
-    #     """
-    #     raise MethodNotDefined
-    # def cuda_code(self, inputs):
-    #     """
-    #     See c_code
-    #     This code will be compiled with nvcc
-    #     """
-    #     raise MethodNotDefined
+    def get_py_impl(self):
+        raise MethodNotDefined
+    def get_c_impl(self, inputs):
+        raise MethodNotDefined
+    def get_cuda_impl(self, inputs):
+        raise MethodNotDefined
+    def get_closure(self, _inputs):
+        """
+        XXX writeme
+        """
+        return None
     def get_replacement(self, _newparents, _analysis):
         """
         Return the name of this node
@@ -424,13 +408,6 @@ class Op(object):
 
     def __repr__(self):
         return self.get_name()
-
-    def get_py_impl(self):
-        raise MethodNotDefined
-    def get_c_impl(self, inputs):
-        raise MethodNotDefined
-    def get_cuda_impl(self, inputs):
-        raise MethodNotDefined
 
 
 def as_node(val_or_node):
@@ -515,9 +492,10 @@ class Argument(Input):
 class GetData(Op):
     call_type="valret"
     def __init__(self, datanode):
-        self.datanode = datanode        
-    def py_apply_valret(self, reads):
-        return self.datanode.get_value()
+        self.datanode = datanode
+    def get_py_impl(self):
+        def f(reads): return self.datanode.get_value()
+        return PyImpl(valret_func=f)
 
 
 class Data(Input):
@@ -726,11 +704,13 @@ class Constant(Op):
         ("shape",ctypes.c_void_p,shapeptr),
         ("dtype",ctypes.c_byte,self.value.dtype.num),
         ("data",ctypes.c_void_p,self.value.ctypes.data)]
-    def c_code(self, *args):
-        if self.call_type == "valret": return self.c_code_valret(*args)
-        elif self.call_type == "inplace": return self.c_code_inplace(*args)
+    def get_c_impl(self, *args):
+        code = None
+        if self.call_type == "valret": code = self._c_code_valret(*args)
+        elif self.call_type == "inplace": code = self._c_code_inplace(*args)
         else: raise ValueError
-    def c_code_inplace(self, inputs):
+        return CImpl(code=code)
+    def _c_code_inplace(self, inputs):
         if isinstance(self.value, tuple):
             raise MethodNotDefined
         return r"""
@@ -738,7 +718,7 @@ extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads, cgt
     cgt_memcpy(cgtCPU, cgtCPU, write->data, cldata->data, cgt_nbytes(write));
 }
 """
-    def c_code_valret(self, inputs):
+    def _c_code_valret(self, inputs):
         return r"""
 extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
         auto out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
@@ -2286,5 +2266,5 @@ def load_config():
 
 from .api import *
 from .api_autogen import *
-from . import exceptions, utils
+from . import utils
 import cgt

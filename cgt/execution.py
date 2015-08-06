@@ -29,68 +29,68 @@ def function1(inputs, output, dbg=None, updates=None):
 # ================================================================
 
 def determine_devices(nodes):
-    return {n: "cpu" for n in nodes} # XXX HACK
+    return {}
 
 
-def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
-    op = node.op
-    parents = node.parents
-    parent_devices = [node2dev[par] for par in parents]
-    if isinstance(op,Transport):
-        assert parent_devices[0].devtype==op.src
-        devtype = op.targ   
-    elif any(pardev.devtype == "gpu" for pardev in parent_devices):
-        devtype = "gpu"
-    else:
-        devtype = "cpu"
-    # if devtype == "gpu":
-    #     try:
-    #         get_impl(node, "gpu")
-    #     except MethodNotDefined:
-    #         print "couldn't get gpu func for ", node
-    #         devtype = "cpu"
+# def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
+#     op = node.op
+#     parents = node.parents
+#     parent_devices = [node2dev[par] for par in parents]
+#     if isinstance(op,Transport):
+#         assert parent_devices[0].devtype==op.src
+#         devtype = op.targ   
+#     elif any(pardev.devtype == "gpu" for pardev in parent_devices):
+#         devtype = "gpu"
+#     else:
+#         devtype = "cpu"
+#     if devtype == "gpu":
+#         try:
+#             get_impl(node, "gpu")
+#         except MethodNotDefined:
+#             print "couldn't get gpu func for ", node
+#             devtype = "cpu"
 
 
-    # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
-    idx = 0 if idx is None else idx
-    machine = "default" if machine is None else machine
-    return Device(machine, devtype, idx)
+#     # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
+#     idx = 0 if idx is None else idx
+#     machine = "default" if machine is None else machine
+#     return Device(machine, devtype, idx)
 
 
-def assign_devices(outputs, devfn=None):
-    # First assign each node to a device
-    node2dev={}
-    for node in topsorted(outputs):        
-        maybedev = None if devfn is None else devfn(node)
-        if maybedev: 
-            node2dev[node] = maybedev
-        elif node.is_argument():
-            node2dev[node] = Device(devtype="cpu")
-        elif node.is_data():
-            node2dev[node] = node.get_device()
-        else:
-            node2dev[node] = determine_device(node, node2dev)
+# def assign_devices(outputs, devfn=None):
+#     # First assign each node to a device
+#     node2dev={}
+#     for node in topsorted(outputs):        
+#         maybedev = None if devfn is None else devfn(node)
+#         if maybedev: 
+#             node2dev[node] = maybedev
+#         elif node.is_argument():
+#             node2dev[node] = Device(devtype="cpu")
+#         elif node.is_data():
+#             node2dev[node] = node.get_device()
+#         else:
+#             node2dev[node] = determine_device(node, node2dev)
 
-    # Now make a new computation graph with 
-    replace = {}
-    newnode2dev = {}
-    for node in topsorted(outputs):
-        parents = node.parents
-        dev = node2dev[node]
-        if node.is_input():
-            replace[node] = node
-        else:
-            newparents = []
-            for par in parents:
-                if node2dev[par] == dev:
-                    newparents.append(replace[par])
-                else:
-                    newparents.append(transport(replace[par], node2dev[par], dev))
-                    newnode2dev[newparents[-1]] = dev
-            replace[node] = Result(node.op, newparents, typ=node.get_type())
-        newnode2dev[replace[node]] = dev
+#     # Now make a new computation graph with 
+#     replace = {}
+#     newnode2dev = {}
+#     for node in topsorted(outputs):
+#         parents = node.parents
+#         dev = node2dev[node]
+#         if node.is_input():
+#             replace[node] = node
+#         else:
+#             newparents = []
+#             for par in parents:
+#                 if node2dev[par] == dev:
+#                     newparents.append(replace[par])
+#                 else:
+#                     newparents.append(transport(replace[par], node2dev[par], dev))
+#                     newnode2dev[newparents[-1]] = dev
+#             replace[node] = Result(node.op, newparents, typ=node.get_type())
+#         newnode2dev[replace[node]] = dev
 
-    return [replace[node] for node in outputs], newnode2dev
+#     return [replace[node] for node in outputs], newnode2dev
 
 
 def is_tensor(x):
@@ -109,8 +109,9 @@ def make_interpreter(inputs, outputs, eg, node2memloc, node2dev):
         oplib = impls.OpLibrary(force_python_impl=True)
         return SequentialInterpreter(eg, oplib, output_locs, input_types)
     elif backend == "cython":
+        oplib = impls.OpLibrary(force_python_impl=False)
         import cycgt2
-        return cycgt2.CppInterpreterWrapper(eg, input_types, output_locs)
+        return cycgt2.CppInterpreterWrapper(eg, oplib, input_types, output_locs)
     else:
         raise NotImplementedError("invalid backend %s"%backend)
 
