@@ -714,7 +714,7 @@ class ConstantTensor(Constant):
         return str(id(self))
     def get_closure(self, _):
         if isinstance(self.value, tuple): raise MethodNotDefined
-        assert isinstance(self.value, np.narray)
+        assert isinstance(self.value, np.ndarray)
         shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
         shit.append(self.value)
         return [
@@ -965,6 +965,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     }
 }
 """%dict(cdtype0=np2c[inputs[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
+        return CImpl(code, includes=["math.h"], link_flags="-lm")
     def cuda_code(self, inputs):
         raise RuntimeError # move this to get_cuda_impl
         info = self.info

@@ -170,6 +170,7 @@ class OpLibrary(object):
                     impl = node.op.get_cuda_impl(node.parents)
                 except MethodNotDefined:
                     raise RuntimeError('Op %s has no CUDA implementation, but GPU mode is requested' % repr(node.op))
+                assert impl is not None
                 return impl
 
             assert devtype == "cpu"
@@ -181,6 +182,7 @@ class OpLibrary(object):
                 else:
                     print "Op %s has no C implementation, falling back to Python" % repr(node.op)
             else:
+                assert impl is not None
                 return impl
 
         if disallow_python_impl:
@@ -189,6 +191,7 @@ class OpLibrary(object):
             impl = node.op.get_py_impl()
         except MethodNotDefined:
             raise RuntimeError("Op %s has no Python implementation" % repr(node.op))
+        assert impl is not None
         return impl
 
 
