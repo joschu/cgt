@@ -14,8 +14,8 @@ def get_compile_info():
 
         config = core.load_config()
 
-        import cycgt2 as cycgt #pylint: disable=F0401
-        CGT_BUILD_ROOT = osp.dirname(osp.dirname(osp.realpath(cycgt.__file__)))
+        import cycgt2 #pylint: disable=F0401
+        CGT_BUILD_ROOT = osp.dirname(osp.dirname(osp.realpath(cycgt2.__file__)))
 
         cmake_info = {}
         with open(osp.join(CGT_BUILD_ROOT,"build_info.txt")) as fh:
