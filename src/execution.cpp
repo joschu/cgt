@@ -38,7 +38,7 @@ public:
         size_t n_outputs = output_locs_.size();
         cgtTuple * out = new cgtTuple(n_outputs);
         for (int i=0; i < n_outputs; ++i) {
-            int index = output_locs_[i].index;
+            int index = output_locs_[i].index; // XXX what is this used for?
             out->setitem(i, get(output_locs_[i]));
         }
         return out;
@@ -61,24 +61,18 @@ void LoadArgument::fire(Interpreter* interp) {
     interp->set(writeloc, interp->getarg(ind));
 }
 
-bool array_equal(int n, size_t* x, size_t* y) {
-    bool out = true;
-    for (int i=0; i < n; ++i) out = out && (x[i]==y[i]);
-    return out;
-}
-
 void Alloc::fire(Interpreter* interp) {
     int ndim = readlocs.size();
-    size_t shape[ndim];
-    for (int i=0; i < readlocs.size(); ++i) {
+    SizeList shape(ndim);
+    for (int i=0; i < ndim; ++i) {
         cgtArray * sizeval = (cgtArray *)interp->get(readlocs[i]);
         cgt_assert(sizeval->dtype == cgt_i8);
         shape[i] = idx<size_t>(sizeval, 0); 
     }
 
     cgtArray* cur = static_cast<cgtArray*>(interp->get(writeloc));
-    if (!(cur && array_equal(ndim, cur->shape, shape))) {
-        interp->set(writeloc, new cgtArray(ndim, shape, dtype, cgtCPU));        
+    if (!(cur && (cur->shape == shape))) {
+        interp->set(writeloc, new cgtArray(shape, dtype, cgtCPU));
     }
 
 }

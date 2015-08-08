@@ -3,6 +3,7 @@ from cpython.ref cimport PyObject
 cimport numpy as cnp
 cimport cpython
 from libc.stdlib cimport abort
+from libcpp.vector cimport vector
 
 import numpy as np
 import ctypes
@@ -35,16 +36,22 @@ cdef extern from "cgt_common.h":
         cgtCPU
         cgtGPU
 
+    ctypedef vector[size_t] SizeList
+    SizeList make_size_list(size_t len, const size_t* data)
+
     cppclass cgtArray(cgtObject):
-        cgtArray(int, size_t*, cgtDtype, cgtDevtype)
-        cgtArray(int, size_t*, cgtDtype, cgtDevtype, void* fromdata, bint copy)
-        int ndim
-        cgtDtype dtype
-        cgtDevtype devtype
-        size_t* shape
-        void* data
-        size_t stride
-        bint ownsdata    
+        cgtArray(const SizeList&, cgtDtype, cgtDevtype)
+        cgtArray(const SizeList&, cgtDtype, cgtDevtype, void* fromdata, bint copy)
+
+        const SizeList shape
+        const size_t size
+        const size_t nbytes
+        const int ndim
+
+        const cgtDtype dtype
+        const cgtDevtype devtype
+        const bint ownsdata
+        void *data
 
     cppclass cgtTuple(cgtObject):
         cgtTuple(size_t)
@@ -69,10 +76,6 @@ cdef extern from "cgt_common.h":
         cgt_c32
         cgt_O
 
-    size_t cgt_size(const cgtArray* a)
-    int cgt_itemsize(cgtDtype dtype)
-    size_t cgt_nbytes(const cgtArray* a)
-
     bint cgt_is_array(cgtObject*)
     bint cgt_is_tuple(cgtObject*)
 
@@ -86,14 +89,13 @@ cdef extern from "cgt_common.h":
 
 ctypedef cnp.Py_intptr_t npy_intp_t
 
-
 cdef object cgt2py_object(cgtObject* o):
     if cgt_is_array(o): return cgt2py_array(<cgtArray*>o)
     elif cgt_is_tuple(o): return cgt2py_tuple(<cgtTuple*>o)
     else: raise RuntimeError("cgt object seems to be invalid")
 
 cdef object cgt2py_array(cgtArray* a):
-    cdef cnp.ndarray nparr = cnp.PyArray_SimpleNew(a.ndim, <npy_intp_t*>a.shape, a.dtype) # XXX DANGEROUS CAST
+    cdef cnp.ndarray nparr = cnp.PyArray_SimpleNew(a.ndim, <npy_intp_t*>a.shape.data(), a.dtype) # XXX DANGEROUS CAST
     cgt_memcpy(cgtCPU, a.devtype, cnp.PyArray_DATA(nparr), a.data, cnp.PyArray_NBYTES(nparr))
     return nparr
 
@@ -120,13 +122,15 @@ cdef cgtObject* py2cgt_object(object o) except *:
         return py2cgt_array(o, cgtCPU)
 
 cdef cgtArray* py2cgt_array(cnp.ndarray arr, cgtDevtype devtype):
-    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, devtype)
-    if not arr.flags.c_contiguous: arr = arr.copy()
-    cgt_memcpy(out.devtype, cgtCPU, out.data, cnp.PyArray_DATA(arr), cgt_nbytes(out))
+    cdef SizeList shape = make_size_list(arr.ndim, <size_t*>arr.shape)
+    cdef cgtArray* out = new cgtArray(shape, arr.dtype.num, devtype)
+    if not arr.flags.c_contiguous: arr = np.ascontiguousarray(arr)
+    cgt_memcpy(out.devtype, cgtCPU, out.data, cnp.PyArray_DATA(arr), out.nbytes)
     return out
 
 cdef cgtArray* py2cgt_arrayview(cnp.ndarray arr):
-    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, cgtCPU, cnp.PyArray_DATA(arr), False)
+    cdef SizeList shape = make_size_list(arr.ndim, <size_t*>arr.shape)
+    cdef cgtArray* out = new cgtArray(shape, arr.dtype.num, cgtCPU, cnp.PyArray_DATA(arr), False)
     assert arr.flags.c_contiguous
     return out
 
@@ -308,14 +312,14 @@ cdef void _pyfunc_inplace(void* cldata, cgtObject** reads, cgtObject* write):
     cdef cgtArray* a
     if cgt_is_array(write):
         npout = <cnp.ndarray>pywrite
-        cgt_memcpy(cgtCPU, cgtCPU, (<cgtArray*>write).data, npout.data, cgt_nbytes(<cgtArray*>write))
+        cgt_memcpy(cgtCPU, cgtCPU, (<cgtArray*>write).data, npout.data, (<cgtArray*>write).nbytes)
     else:
         tup = <cgtTuple*> write
         for i in xrange(tup.size()):
             npout = <cnp.ndarray>pywrite[i]
             a = <cgtArray*>tup.getitem(i)
             assert cgt_is_array(a)
-            cgt_memcpy(cgtCPU, cgtCPU, a.data, npout.data, cgt_nbytes(a))
+            cgt_memcpy(cgtCPU, cgtCPU, a.data, npout.data, a.nbytes)
 
 
 cdef cgtObject* _pyfunc_valret(void* cldata, cgtObject** args):
@@ -407,7 +411,7 @@ cdef ExecutionGraph* make_cpp_execution_graph(pyeg, oplib) except *:
 cdef class CppArrayWrapper:
     cdef cgtArray* arr
     def to_numpy(self):
-        return cnp.PyArray_SimpleNewFromData(self.arr.ndim, <cnp.npy_intp*>self.arr.shape, self.arr.dtype, self.arr.data)
+        return cnp.PyArray_SimpleNewFromData(self.arr.ndim, <cnp.npy_intp*>self.arr.shape.data(), self.arr.dtype, self.arr.data)
     @staticmethod
     def from_numpy(cnp.ndarray nparr, object pydevtype="cpu"):
         cdef cgtDevtype devtype = devtype_fromstr(pydevtype)
@@ -457,5 +461,4 @@ cdef class CppInterpreterWrapper:
         cdef cgtTuple* ret = self.interp.run(cargs)
         del cargs
         return list(cgt2py_object(ret))
-
 

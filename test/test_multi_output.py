@@ -48,7 +48,7 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtTuple* write) {
     float* x = static_cast<float*>(reads[0]->data);
     float* y = static_cast<float*>(static_cast<cgtArray*>(write->getitem(0))->data);
     float* z = static_cast<float*>(static_cast<cgtArray*>(write->getitem(1))->data);
-    for (int i=0; i < cgt_size(reads[0]); ++i) {
+    for (int i=0; i < reads[0]->size; ++i) {
         y[i] = sinf(x[i]);
         z[i] = cosf(x[i]);    
     }

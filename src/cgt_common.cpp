@@ -3,6 +3,7 @@
 #include "memory.h"
 #include "stdio.h"
 #include "cgt_common.h"
+
 #ifdef CGT_ENABLE_CUDA
 #include "cgt_cuda.h"
 #endif
@@ -11,36 +12,62 @@
 // Object alloc/dealloc 
 // ================================================================
 
-cgtArray::cgtArray(int ndim, size_t *inshape, cgtDtype dtype, cgtDevtype devtype)
-    : cgtObject(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype),
-      devtype(devtype), ownsdata(true) {
-  shape = new size_t[ndim];
-  for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
-  size_t nbytes = cgt_nbytes(this);
+template<typename T>
+static T prod(const std::vector<T>& l) {
+  T out = T(1);
+  for (const T &x : l) {
+    out *= x;
+  }
+  return out;
+}
+
+static inline SizeList get_strides(const SizeList& shape) {
+  int ndim = shape.size();
+  SizeList strides(ndim);
+  if (ndim > 0) {
+    strides[ndim - 1] = 1;
+  }
+  for (int i = ndim - 2; i >= 0; --i) {
+    strides[i] = strides[i + 1] * shape[i + 1];
+  }
+  return strides;
+}
+
+cgtArray::cgtArray(const SizeList& shape_, cgtDtype dtype_, cgtDevtype devtype_)
+    : cgtObject(ObjectKind::ArrayKind),
+      shape(shape_),
+      size(prod(shape_)),
+      nbytes(prod(shape_) * cgt_itemsize(dtype_)),
+      ndim(shape_.size()),
+      strides(get_strides(shape_)),
+      dtype(dtype_),
+      devtype(devtype_),
+      ownsdata(true) {
   data = cgt_alloc(devtype, nbytes);
 }
 
-cgtArray::cgtArray(int ndim, size_t *inshape, cgtDtype dtype, cgtDevtype devtype,
+cgtArray::cgtArray(const SizeList& shape_, cgtDtype dtype_, cgtDevtype devtype_,
     void* fromdata, bool copy)
-    : cgtObject(ObjectKind::ArrayKind), ndim(ndim), dtype(dtype), devtype(devtype) {
-  shape = new size_t[ndim];
-  for (int i = 0; i < ndim; ++i) shape[i] = inshape[i];
+    : cgtObject(ObjectKind::ArrayKind),
+      shape(shape_),
+      size(prod(shape_)),
+      nbytes(prod(shape_) * cgt_itemsize(dtype_)),
+      ndim(shape_.size()),
+      strides(get_strides(shape_)),
+      dtype(dtype_),
+      devtype(devtype_),
+      ownsdata(copy) {
   cgt_assert(fromdata != NULL);
   if (copy) {
-    size_t nbytes = cgt_nbytes(this);
     data = cgt_alloc(devtype, nbytes);
-    ownsdata = true;
     cgt_memcpy(devtype, cgtCPU, data, fromdata, nbytes);
-  }
-  else {
+  } else {
     data = fromdata;
-    ownsdata = false;
   }
 }
 
 cgtArray::~cgtArray() {
-  delete[] shape;
-  if (ownsdata) free(data);
+  if (ownsdata) cgt_free(devtype, data);
 }
 
 cgtTuple::cgtTuple(size_t len)

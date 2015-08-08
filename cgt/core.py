@@ -731,7 +731,7 @@ class ConstantTensor(Constant):
             raise MethodNotDefined
         return r"""
 extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads, cgtArray* write) {
-    cgt_memcpy(cgtCPU, cgtCPU, write->data, cldata->data, cgt_nbytes(write));
+    cgt_memcpy(cgtCPU, cgtCPU, write->data, cldata->data, write->nbytes);
 }
 """
     def _c_code_valret(self, inputs):
@@ -955,7 +955,7 @@ class ElwiseUnary(Op):
 static inline %(cdtype1)s scalar_CGT_FUNCNAME(%(cdtype0)s x) {return %(cexpr)s;}
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray* read = reads[0];
-    int s = cgt_size(read);
+    int s = read->size;
     %(cdtype0)s* readdata = (%(cdtype0)s*)read->data;
     %(cdtype1)s* writedata = (%(cdtype1)s*)write->data;
     for (int i=0; i < s; ++i) {
@@ -977,7 +977,7 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype)s* in, %(cdty
 }
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray* read = reads[0];
-    size_t n = cgt_size(read);
+    size_t n = read->size;
     int num_blocks, num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
     CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype)s*)read->data, (%(cdtype)s*)write->data);
@@ -1083,11 +1083,11 @@ class ElwiseBinary(Op):
         code = r"""
 static inline %(cdtype2)s scalar_CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
-    int s = cgt_size(reads[%(ind4shape)s]);
+    int s = reads[%(ind4shape)s]->size;
     %(cdtype0)s* in0 = (%(cdtype0)s*)reads[0]->data;
     %(cdtype1)s* in1 = (%(cdtype1)s*)reads[1]->data;
     %(cdtype2)s* out = (%(cdtype2)s*)write->data;
-    cgt_check(cgt_size(write) == s, "Shape error in elementwise binary operation. You might be missing a call to cgt.broadcast(...)");
+    cgt_check(write->size == s, "Shape error in elementwise binary operation. You might be missing a call to cgt.broadcast(...)");
     for (int i=0; i < s; ++i) {
         out[i] = scalar_CGT_FUNCNAME(in0[%(index0)s], in1[%(index1)s]);
     }
@@ -1110,7 +1110,7 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype0)s* x, %(cdty
   }
 }
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
-    size_t n = cgt_size(reads[1]);
+    size_t n = reads[1]->size;
     int num_blocks,num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
     TODO
@@ -1166,7 +1166,7 @@ class Size(Op):
 extern "C" cgtArray* CGT_FUNCNAME(void* cl0, cgtArray** reads) {
 CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
     cgtArray* in = reads[0];
-    cgtArray* out = new cgtArray(0, NULL, cgt_i8, cgtCPU);
+    cgtArray* out = new cgtArray(SizeList(), cgt_i8, cgtCPU);
     ((long*)out->data)[0] = in->shape[cl->ax];
     return out;
 }"""
@@ -1193,9 +1193,9 @@ class Reshape(Op):
         code = r"""
 extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
     cgtArray* in = reads[0];
-    size_t* newshape = new size_t[cldata->ndim];    
+    SizeList newshape(cldata->ndim);
     for (int i=0; i < cldata->ndim; ++i) newshape[i] = static_cast<size_t*>(reads[i+1]->data)[0];
-    cgtArray* out = new cgtArray(cldata->ndim, newshape, in->dtype, in->devtype, in->data, false);
+    cgtArray* out = new cgtArray(newshape, in->dtype, in->devtype, in->data, false);
     return out;
 }
 """
@@ -1294,21 +1294,17 @@ class Transpose(Op):
         d = {}
         d["openloops"] = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         d["closeloops"] = "}"*x.ndim
-        d["outidxexpr"] = " + ".join(["i%i * outstrides[%i]"%(i,i) for i in xrange(x.ndim)])        
-        d["inidxexpr"] = " + ".join(["i%i * instrides[%i]"%(i,ax) for (i,ax) in enumerate(self.axes)])        
+        d["outidxexpr"] = " + ".join(["i%i * write->strides[%i]"%(i,i) for i in xrange(x.ndim)])        
+        d["inidxexpr"] = " + ".join(["i%i * read->strides[%i]"%(i,ax) for (i,ax) in enumerate(self.axes)])        
         d["cdtype"] = np2c[x.dtype]
         code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read = reads[0];
     %(cdtype)s* indata = (%(cdtype)s*)read->data, *outdata = (%(cdtype)s*)write->data;
-    size_t instrides[read->ndim];
-    cgt_get_strides(read, instrides);
-    size_t outstrides[write->ndim];
-    cgt_get_strides(write, outstrides);
     %(openloops)s
         outdata[%(outidxexpr)s] = indata[%(inidxexpr)s];
     %(closeloops)s
-        }"""%d
+}"""%d
         return CImpl(code)
 
 class Transport(Op):
@@ -1329,7 +1325,7 @@ class Transport(Op):
     def get_c_impl(self, _inputs):
         code = """
 void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgt_memcpy(write->devtype, reads[0]->devtype, write->data, reads[0]->data, cgt_nbytes(reads[0]));    
+    cgt_memcpy(write->devtype, reads[0]->devtype, write->data, reads[0]->data, reads[0]->nbytes);    
 }
 """
         return CImpl(code)
@@ -1404,17 +1400,13 @@ class Sum(Op):
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         outdims = [i for i in xrange(x.ndim) if i not in self.axes]
-        inidxexpr = " + ".join(["i%(ax)s * instrides[%(ax)s]"%dict(ax=ax) for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join(["i%(ax)s * outstrides[%(ax)s]"%dict(ax=ax) for ax in outdims])\
+        inidxexpr = " + ".join(["i%(ax)s * read->strides[%(ax)s]"%dict(ax=ax) for ax in xrange(x.ndim)])
+        outidxexpr = " + ".join(["i%(ax)s * write->strides[%(ax)s]"%dict(ax=ax) for ax in outdims])\
             if len(outdims)>0 else "0"
         code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read=reads[0];
-    size_t instrides[read->ndim];
-    cgt_get_strides(read, instrides);
-    size_t outstrides[write->ndim];
-    cgt_get_strides(write, outstrides);
-    memset(write->data, 0, cgt_nbytes(write));
+    memset(write->data, 0, write->nbytes);
     %(openloops)s
         ((%(cdtype)s*)write->data)[%(outidxexpr)s] += ((%(cdtype)s*)read->data)[%(inidxexpr)s];
     %(closeloops)s
@@ -1509,18 +1501,14 @@ class GetSli(Op):
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
-        inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*instrides[%i]"%ax for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join(["i%i"%ax + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
+        inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*in->strides[%i]"%ax for ax in xrange(x.ndim)])
+        outidxexpr = " + ".join(["i%i"%ax + "*write->strides[%i]"%ax for ax in xrange(x.ndim)])
         code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0];
     long start = ((long*)reads[1]->data)[0];
     //long stop = ((long*)reads[2]->data)[0];
     long step = ((long*)reads[3]->data)[0];
-    size_t instrides[in->ndim];
-    cgt_get_strides(in, instrides);
-    size_t outstrides[write->ndim];
-    cgt_get_strides(write, outstrides);
     %(openloops)s
         ((%(cdtype)s*)write->data)[%(outidxexpr)s] = ((%(cdtype)s*)in->data)[%(inidxexpr)s];
     %(closeloops)s
@@ -1556,20 +1544,16 @@ class IncSli(Op):
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
-        incidxexpr =  " + ".join(["i%i"%ax + "*incstrides[%i]"%ax for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*outstrides[%i]"%ax for ax in xrange(x.ndim)])
+        incidxexpr =  " + ".join(["i%i"%ax + "*inc->strides[%i]"%ax for ax in xrange(x.ndim)])
+        outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*out->strides[%i]"%ax for ax in xrange(x.ndim)])
         code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0], *inc = reads[4], *out=write;
     long start = ((long*)reads[1]->data)[0];
     //long stop = ((long*)reads[2]->data)[0];
     long step = ((long*)reads[3]->data)[0];
-    cgt_assert(cgt_size(in)==cgt_size(out));
-    size_t outstrides[in->ndim];
-    cgt_get_strides(out, outstrides);
-    size_t incstrides[inc->ndim];
-    cgt_get_strides(inc, incstrides);
-    if (out->data != in->data) cgt_memcpy(cgtCPU, cgtCPU, out, in, cgt_nbytes(out));
+    cgt_assert(in->size == out->size);
+    if (out->data != in->data) cgt_memcpy(cgtCPU, cgtCPU, out, in, out->nbytes);
     %(openloops)s
         ((%(cdtype)s*)out->data)[%(outidxexpr)s] += ((%(cdtype)s*)inc->data)[%(incidxexpr)s];
     %(closeloops)s

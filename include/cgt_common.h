@@ -4,6 +4,7 @@
 #include "stdbool.h"
 #include "IRC.h"
 #include <cassert>
+#include <vector>
 
 // ================================================================
 // Basic structs and enums
@@ -46,17 +47,26 @@ private:
   mutable unsigned ref_cnt;
 };
 
+typedef std::vector<size_t> SizeList;
+inline SizeList make_size_list(size_t len, const size_t* data) {
+  return SizeList(data, data+len);
+}
 class cgtArray : public cgtObject {
 public:
-  cgtArray(int ndim, size_t *shape, cgtDtype, cgtDevtype);
-  cgtArray(int ndim, size_t *shape, cgtDtype, cgtDevtype, void* fromdata, bool copy);
+  cgtArray(const SizeList& shape, cgtDtype, cgtDevtype);
+  cgtArray(const SizeList& shape, cgtDtype, cgtDevtype, void* fromdata, bool copy);
   ~cgtArray();
-  int ndim;
-  cgtDtype dtype;
-  cgtDevtype devtype;
-  size_t *shape;
+
+  const SizeList shape;
+  const size_t size;
+  const size_t nbytes;
+  const int ndim;
+  const SizeList strides;
+
+  const cgtDtype dtype;
+  const cgtDevtype devtype;
+  const bool ownsdata;
   void *data;
-  bool ownsdata;
 };
 
 class cgtTuple : public cgtObject {
@@ -132,16 +142,6 @@ static inline void clear_error() {
 static inline bool cgt_is_array(cgtObject *o) { return o->kind == cgtObject::ArrayKind; }
 static inline bool cgt_is_tuple(cgtObject *o) { return o->kind == cgtObject::TupleKind; }
 
-static inline size_t cgt_size(const cgtArray *a) {
-  size_t out = 1;
-  for (size_t i = 0; i < a->ndim; ++i) out *= a->shape[i];
-  return out;
-}
-
-static inline void cgt_get_strides(const cgtArray *a, size_t *strides) {
-  if (a->ndim > 0) strides[a->ndim - 1] = 1;
-  for (int i = a->ndim - 2; i >= 0; --i) strides[i] = strides[i + 1] * a->shape[i + 1];
-}
 
 static inline int cgt_itemsize(cgtDtype dtype) {
   switch (dtype) {
@@ -170,10 +170,7 @@ static inline int cgt_itemsize(cgtDtype dtype) {
     case cgt_O:
       return 8;
   }
-}
-
-static inline size_t cgt_nbytes(const cgtArray *a) {
-  return cgt_size(a) * cgt_itemsize(a->dtype);
+  assert(0 && "invalid dtype");
 }
 
 void *cgt_alloc(char devtype, size_t size);
