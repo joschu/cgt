@@ -275,18 +275,6 @@ def num_components(node):
 
 
 class OpImpl(object):
-    def __init__(self, hashfields):
-        self._hashfields = hashfields
-
-    def hash(self):
-        """
-        Used to determine whether an impl needs to be compiled.
-        The hash is determined by self._hashfields.
-        """
-        assert self._hashfields is not None
-        s = "\0".join(repr(field) for field in self._hashfields)
-        return hashlib.md5(s).hexdigest()
-
     def is_py(self):
         raise NotImplementedError
     def is_c(self):
@@ -297,7 +285,6 @@ class OpImpl(object):
 class PyImpl(OpImpl):
     def __init__(self, inplace_func=None, valret_func=None):
         assert (inplace_func is None) != (valret_func is None)
-        OpImpl.__init__(self, [id(inplace_func), id(valret_func)])
         self.inplace_func = inplace_func
         self.valret_func = valret_func
     def is_py(self):
@@ -309,7 +296,6 @@ class PyImpl(OpImpl):
 
 class CImpl(OpImpl):
     def __init__(self, code, includes=None, link_flags=""):
-        OpImpl.__init__(self, [code, includes, link_flags])
         self.code = code
         self.includes = [] if includes is None else includes
         self.link_flags = link_flags

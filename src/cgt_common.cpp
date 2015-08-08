@@ -100,8 +100,7 @@ void cgt_free(char devtype, void *ptr) {
 void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, size_t nbytes) {
   if (src_type == cgtCPU && dest_type == cgtCPU) {
     memcpy(dest_ptr, src_ptr, nbytes);
-  }
-  else {
+  } else {
 #ifdef CGT_ENABLE_CUDA
         enum cudaMemcpyKind kind;
         if       (src_type == cgtCPU && dest_type == cgtGPU) kind = cudaMemcpyHostToDevice;

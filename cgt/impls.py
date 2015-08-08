@@ -47,49 +47,70 @@ def get_compile_info():
         )
     return _COMPILE_CONFIG
 
+def _make_compile_command(fname, libpath, extra_link_flags):
+    info = get_compile_info()
+    includes = "-I%(CGT_INCLUDE_DIR)s -I%(CUDA_INCLUDE_DIR)s -I%(OPENBLAS_INCLUDE_DIR)s"%info    
+    d = dict(
+        cacheroot=info["CACHE_ROOT"],
+        srcpath=fname,
+        includes=includes,
+        defines=info["DEFINITIONS"],
+        libname=osp.basename(libpath),
+        libpath=libpath,
+        cgtlibdir=info["CGT_LIBRARY_DIR"],
+        extralink=extra_link_flags,
+        cflags="-fPIC -O3 -DNDEBUG -ffast-math")
+    if fname.endswith(".cu"):
+        if not info["CGT_ENABLE_CUDA"]:
+            raise RuntimeError("Trying to compile a CUDA function but CUDA is disabled in your build. Rebuild with CGT_ENABLE_CUDA=ON")
+        d.update(cudalibs=info["CUDA_LIBRARIES"], cudaroot=info["CUDA_ROOT"], cudalibdir=info["CUDA_LIBRARY_DIR"])
+
+    cmd = None
+    if sys.platform == "darwin":
+        if fname.endswith(".cpp"):
+            cmd = r'''
+cd %(cacheroot)s && \
+c++ %(cflags)s %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ %(cflags)s %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
+            '''%d
+        elif fname.endswith(".cu"):
+            cmd = r'''
+cd %(cacheroot)s && \
+nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(defines)s && \
+c++ %(cflags)s -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
+            '''%d
+                # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
+    else:
+        if fname.endswith(".cpp"):
+            cmd = '''
+c++ %(cflags)s %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ %(cflags)s -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
+            '''%d
+        elif fname.endswith(".cu"):
+            cmd = r'''
+cd %(cacheroot)s && 
+nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler -fPIC -Xcompiler -O3 -Xcompiler -DNDEBUG %(includes)s %(defines)s && \
+c++  %(cflags)s -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(cudalibs)s -Wl,-rpath,%(cudaroot)s
+            '''%d
+
+    assert cmd is not None
+    return cmd
+
+
 def cap(cmd):
     print "\x1b[32m%s\x1b[0m"%cmd
     subprocess.check_call(cmd,shell=True)
 
-def compile_file(fname, libpath, extra_link_flags = ""):
-    info = get_compile_info()
-    includes = "-I%(CGT_INCLUDE_DIR)s -I%(CUDA_INCLUDE_DIR)s -I%(OPENBLAS_INCLUDE_DIR)s"%info    
-    d = dict(cacheroot = info["CACHE_ROOT"], srcpath = fname, includes = includes, defines = info["DEFINITIONS"], libname = osp.basename(libpath), libpath = libpath, cgtlibdir = info["CGT_LIBRARY_DIR"], extralink=extra_link_flags)            
-    if fname.endswith(".cu"):
-        if not info["CGT_ENABLE_CUDA"]:
-            raise RuntimeError("Trying to compile a CUDA function but CUDA is disabled in your build. Rebuild with CGT_ENABLE_CUDA=ON")
-        d.update(cudalibs = info["CUDA_LIBRARIES"], cudaroot = info["CUDA_ROOT"], cudalibdir = info["CUDA_LIBRARY_DIR"])
 
-    if sys.platform == "darwin":
-        if fname.endswith(".cpp"):
-            cap(r'''
-cd %(cacheroot)s && \
-c++ -fPIC -O3 -DNDEBUG -ffast-math %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -ffast-math %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
-            '''%d)
-        elif fname.endswith(".cu"):
-            cap(r'''
-cd %(cacheroot)s && \
-nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -ffast-math -fPIC -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
-            '''%d)
-                # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
+_Binary = namedtuple('Binary', ['pyimpl', 'c_libpath', 'c_funcname'])
+def Binary(impl, c_libpath=None, c_funcname=None):
+    if impl.is_py():
+        return _Binary(impl, None, None)
+    assert not (impl.is_c() or impl.is_cuda()) or (c_libpath is not None and c_funcname is not None)
+    return _Binary(None, c_libpath, c_funcname)
 
-    else:
-        if fname.endswith(".cpp"):
-            cap('''
-c++ -fPIC -O3 -DNDEBUG -ffast-math %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ -fPIC -O3 -DNDEBUG -ffast-math -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
-            '''%d)
-        elif fname.endswith(".cu"):
-            cap(r'''
-cd %(cacheroot)s && 
-nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler -fPIC -Xcompiler -O3 -Xcompiler -DNDEBUG %(includes)s %(defines)s && \
-c++  -fPIC -O3 -DNDEBUG -ffast-math -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(cudalibs)s -Wl,-rpath,%(cudaroot)s
-            '''%d
-            )
 
-ctypes2str = {
+_ctypes2str = {
     ctypes.c_byte : "uint8_t",
     ctypes.c_bool : "bool",
     ctypes.c_char : "char",
@@ -100,21 +121,13 @@ ctypes2str = {
     ctypes.c_float : "float"
 }
 
-_Binary = namedtuple('Binary', ['pyimpl', 'c_libpath', 'c_funcname'])
-def Binary(impl, c_libpath=None, c_funcname=None):
-    if impl.is_py():
-        return _Binary(impl, None, None)
-    assert not (impl.is_c() or impl.is_cuda()) or (c_libpath is not None and c_funcname is not None)
-    return _Binary(None, c_libpath, c_funcname)
-
-
 def _build_struct_code(triples):
     if triples is None:
         return ""
     struct_code = StringIO()
     struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
     for (fieldname,fieldtype,val) in triples:
-        struct_code.write(ctypes2str[fieldtype])
+        struct_code.write(_ctypes2str[fieldtype])
         struct_code.write(" ")
         struct_code.write(fieldname)
         struct_code.write(";\n")
@@ -135,14 +148,76 @@ def _build_closure(triples):
     return closure
 
 
+class CTranslationUnit(object):
+    """All the input that goes into building a binary for an Op"""
+
+    def __init__(self, impl_code, struct_code, includes, link_flags):
+        self.impl_code = impl_code
+        self.struct_code = struct_code
+        self.includes = includes
+        self.link_flags = link_flags
+
+    def generate_code(self, funcname):
+        s = StringIO()
+        for filename in self.includes:
+            s.write('#include "%s"\n'%filename)
+        s.write(self.struct_code.replace("CGT_FUNCNAME", funcname))
+        s.write(self.impl_code.replace("CGT_FUNCNAME", funcname))
+        return s.getvalue()
+
+    def hash(self):
+        # TODO: also the command used to build the binary
+        d = {
+            'impl_code': self.impl_code,
+            'struct_code': self.struct_code,
+            'includes': self.includes, # TODO: make this depend on content/timesteps of the headers
+            'link_flags': self.link_flags,
+            # TODO: also include compiler flags
+        }
+        return hashlib.md5(repr(d)).hexdigest()
+
+    def compile(self, funcname, srcpath, libpath):
+        """Runs the compiler, placing code in srcpath and the output in libpath"""
+        with open(srcpath,"w") as fh:
+            fh.write(self.generate_code(funcname))
+        cap(_make_compile_command(srcpath, libpath, self.link_flags))
+
+
+def _compile_impl(node, impl):
+    if impl.is_py():
+        # A Python "binary" is just the function provided in the
+        # Op implementation
+        return Binary(impl)
+
+    if impl.is_c() or impl.is_cuda():
+        common_includes = ["cgt_common.h","stdint.h","stddef.h"] if impl.is_c() else ["cgt_common.h","cgt_cuda.h"]
+        includes = common_includes + impl.includes
+        struct_code = _build_struct_code(node.op.get_closure(node.parents))
+        ctu = CTranslationUnit(impl.code, struct_code, includes, impl.link_flags)
+
+        funcname = "%s_%s_%s" % ("cpu" if impl.is_c() else "gpu", node.op.__class__.__name__, ctu.hash())
+        CACHE_ROOT = get_compile_info()["CACHE_ROOT"]
+        if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
+        libpath = osp.join(CACHE_ROOT, funcname + ".so")
+
+        if not osp.exists(libpath):
+            ext = "cpp" if impl.is_c() else "cu"
+            srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
+            print "Compiling %s to %s for node %s" % (srcpath, libpath, repr(node))
+            ctu.compile(funcname, srcpath, libpath)
+
+        return Binary(impl, c_libpath=libpath, c_funcname=funcname)
+
+    raise NotImplementedError
+
+
 class OpLibrary(object):
     """
     Stores compiled Op implementations. Performs just-in-time compiling.
     """
 
     def __init__(self, force_python_impl=False):
-        self.node2implhash = {} # maps node -> (impl hash, closure)
-        self.implhash2binary = {}
+        self.node2binary = {}
         self.force_python_impl = force_python_impl
 
     def num_impls_compiled(self):
@@ -194,68 +269,14 @@ class OpLibrary(object):
         assert impl is not None
         return impl
 
-
-    @staticmethod
-    def _compile_impl(node, impl):
-        if impl.is_py():
-            # A Python "binary" is just the function provided in the
-            # Op implementation
-            return Binary(impl)
-
-        if impl.is_c() or impl.is_cuda():
-            common_includes = ["cgt_common.h","stdint.h","stddef.h"] if impl.is_c() else ["cgt_common.h","cgt_cuda.h"]
-            includes = common_includes + impl.includes
-
-            struct_code = _build_struct_code(node.op.get_closure(node.parents))
-
-            devtype = "cpu" if impl.is_c() else "gpu"
-            funcname = "%s_%s_%s" % (devtype, node.op.__class__.__name__, impl.hash())
-            ci = get_compile_info()
-            CACHE_ROOT = ci["CACHE_ROOT"]
-            libpath = osp.join(CACHE_ROOT, funcname + ".so")
-
-            if not osp.exists(libpath):
-                s = StringIO()
-                if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
-                ext = "cpp" if impl.is_c() else "cu"
-                srcpath = osp.join(CACHE_ROOT, funcname + "." + ext)
-                # write c code to tmp file
-                s = StringIO()
-                for filename in includes:
-                    s.write('#include "%s"\n'%filename)
-                s.write(struct_code.replace("CGT_FUNCNAME",funcname))
-                code = impl.code.replace("CGT_FUNCNAME",funcname)
-                s.write(code)
-                with open(srcpath,"w") as fh:
-                    fh.write(s.getvalue())
-                print "compiling %(srcpath)s to %(libpath)s for node %(node)s"%locals()
-                compile_file(srcpath, osp.splitext(srcpath)[0]+".so", extra_link_flags=impl.link_flags)
-
-            return Binary(impl, c_libpath=libpath, c_funcname=funcname)
-
-        raise NotImplementedError
-
     def fetch_binary(self, node, devtype=None):
         """
         Gets the binary for node's Op, compiling its Impl if necessary.
-        Assumes that if get_*_impl() is called on node.op twice,
-        then the two Impls have the same hashes.
         """
-        # If node has never been seen, check if its impl has been compiled,
-        # and compile if necessary
-        if node not in self.node2implhash:
+        if node not in self.node2binary:
             impl = self._get_op_impl(node, devtype)
-            ihash = self.node2implhash[node] = impl.hash()
-            if ihash in self.implhash2binary:
-                # Already compiled
-                return self.implhash2binary[ihash]
-            # Compile and store
-            binary = self.implhash2binary[ihash] = self._compile_impl(node, impl)
-            return binary
-        # We saw the node before, just return its compiled impl directly
-        ihash = self.node2implhash[node]
-        assert ihash in self.implhash2binary
-        return self.implhash2binary[ihash]
+            self.node2binary[node] = _compile_impl(node, impl)
+        return self.node2binary[node]
 
     def fetch_closure(self, node):
         # TODO: cache these
