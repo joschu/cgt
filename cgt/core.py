@@ -548,7 +548,7 @@ class Data(Input):
         shp = self._value.shape
         return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
-        return self.value if self.use_numpy else self._value.to_numpy()
+        return self._value if self.use_numpy else self._value.to_numpy()
 
     # TODO: remove external accesses to .value
 
@@ -2316,3 +2316,7 @@ def load_config():
                 _CONFIG[lhs] = rhs
     return _CONFIG
 
+def modify_config(**kws):
+    load_config()
+    for (name,val) in kws.iteritems():
+        _CONFIG[name] = val
