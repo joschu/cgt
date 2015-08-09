@@ -12,62 +12,38 @@
 // Object alloc/dealloc 
 // ================================================================
 
-template<typename T>
-static T prod(const std::vector<T>& l) {
-  T out = T(1);
-  for (const T &x : l) {
-    out *= x;
-  }
-  return out;
-}
-
-static inline SizeList get_strides(const SizeList& shape) {
-  int ndim = shape.size();
-  SizeList strides(ndim);
-  if (ndim > 0) {
-    strides[ndim - 1] = 1;
-  }
-  for (int i = ndim - 2; i >= 0; --i) {
-    strides[i] = strides[i + 1] * shape[i + 1];
-  }
-  return strides;
-}
-
-cgtArray::cgtArray(const SizeList& shape_, cgtDtype dtype_, cgtDevtype devtype_)
+cgtArray::cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype devtype)
     : cgtObject(ObjectKind::ArrayKind),
-      shape(shape_),
-      size(prod(shape_)),
-      nbytes(prod(shape_) * cgt_itemsize(dtype_)),
-      ndim(shape_.size()),
-      strides(get_strides(shape_)),
-      dtype(dtype_),
-      devtype(devtype_),
-      ownsdata(true) {
-  data = cgt_alloc(devtype, nbytes);
+      ndim_(ndim),
+      dtype_(dtype),
+      devtype_(devtype),
+      ownsdata_(true) {
+  shape_ = new size_t[ndim];
+  memcpy(const_cast<size_t*>(shape_), shape, ndim * sizeof(size_t));
+  data_ = cgt_alloc(devtype_, nbytes());
 }
 
-cgtArray::cgtArray(const SizeList& shape_, cgtDtype dtype_, cgtDevtype devtype_,
-    void* fromdata, bool copy)
+cgtArray::cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype devtype, void* fromdata, bool copy)
     : cgtObject(ObjectKind::ArrayKind),
-      shape(shape_),
-      size(prod(shape_)),
-      nbytes(prod(shape_) * cgt_itemsize(dtype_)),
-      ndim(shape_.size()),
-      strides(get_strides(shape_)),
-      dtype(dtype_),
-      devtype(devtype_),
-      ownsdata(copy) {
+      ndim_(ndim),
+      shape_(shape),
+      dtype_(dtype),
+      devtype_(devtype),
+      ownsdata_(copy) {
   cgt_assert(fromdata != NULL);
+  shape_ = new size_t[ndim];
+  memcpy(const_cast<size_t*>(shape_), shape, ndim * sizeof(size_t));
   if (copy) {
-    data = cgt_alloc(devtype, nbytes);
-    cgt_memcpy(devtype, cgtCPU, data, fromdata, nbytes);
+    data_ = cgt_alloc(devtype, nbytes());
+    cgt_memcpy(devtype, cgtCPU, data_, fromdata, nbytes());
   } else {
-    data = fromdata;
+    data_ = fromdata;
   }
 }
 
 cgtArray::~cgtArray() {
-  if (ownsdata) cgt_free(devtype, data);
+  delete[] shape_;
+  if (ownsdata_) cgt_free(devtype_, data_);
 }
 
 cgtTuple::cgtTuple(size_t len)
@@ -102,9 +78,9 @@ void *cgt_alloc(char devtype, size_t size) {
   }
   else {
 #ifdef CGT_ENABLE_CUDA
-        void* out;
-        CUDA_CHECK(cudaMalloc(&out, size));
-        return out;
+    void* out;
+    CUDA_CHECK(cudaMalloc(&out, size));
+    return out;
 #else
     cgt_assert(0 && "CUDA disabled");
 #endif
@@ -117,7 +93,7 @@ void cgt_free(char devtype, void *ptr) {
   }
   else {
 #ifdef CGT_ENABLE_CUDA
-        CUDA_CHECK(cudaFree(ptr));
+    CUDA_CHECK(cudaFree(ptr));
 #else
     cgt_assert(0 && "CUDA disabled");
 #endif
@@ -129,13 +105,13 @@ void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, si
     memcpy(dest_ptr, src_ptr, nbytes);
   } else {
 #ifdef CGT_ENABLE_CUDA
-        enum cudaMemcpyKind kind;
-        if       (src_type == cgtCPU && dest_type == cgtGPU) kind = cudaMemcpyHostToDevice;
-        else if  (src_type == cgtGPU && dest_type == cgtCPU) kind = cudaMemcpyDeviceToHost;
-        else if  (src_type == cgtGPU && dest_type == cgtGPU) kind = cudaMemcpyDeviceToDevice;
-        else cgt_assert(0 && "invalid src/dest types");
-        CUDA_CHECK(cudaMemcpy(dest_ptr, src_ptr, nbytes, kind));
-        #else
+    enum cudaMemcpyKind kind;
+    if       (src_type == cgtCPU && dest_type == cgtGPU) kind = cudaMemcpyHostToDevice;
+    else if  (src_type == cgtGPU && dest_type == cgtCPU) kind = cudaMemcpyDeviceToHost;
+    else if  (src_type == cgtGPU && dest_type == cgtGPU) kind = cudaMemcpyDeviceToDevice;
+    else cgt_assert(0 && "invalid src/dest types");
+    CUDA_CHECK(cudaMemcpy(dest_ptr, src_ptr, nbytes, kind));
+#else
     cgt_assert(0 && "CUDA disabled");
 #endif
   }

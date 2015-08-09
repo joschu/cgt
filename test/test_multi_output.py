@@ -21,9 +21,9 @@ class SinCos(core.Op):
 #     def get_c_impl(self, inputs):
 #         code = """
 # void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-#     float* x = io[0]->data;
-#     float* y = io[1]->data;
-#     float* z = io[2]->data;
+#     float* x = io[0]->data();
+#     float* y = io[1]->data();
+#     float* z = io[2]->data();
 #     y[0] = sinf(x[0]);
 #     z[0] = cosf(x[0]);
 # }"""
@@ -45,10 +45,10 @@ class SinCos2(core.Op):
     def get_c_impl(self, inputs):
         code = """
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtTuple* write) {
-    float* x = static_cast<float*>(reads[0]->data);
-    float* y = static_cast<float*>(static_cast<cgtArray*>(write->getitem(0))->data);
-    float* z = static_cast<float*>(static_cast<cgtArray*>(write->getitem(1))->data);
-    for (int i=0; i < reads[0]->size; ++i) {
+    float* x = static_cast<float*>(reads[0]->data());
+    float* y = static_cast<float*>(static_cast<cgtArray*>(write->getitem(0))->data());
+    float* z = static_cast<float*>(static_cast<cgtArray*>(write->getitem(1))->data());
+    for (int i=0; i < reads[0]->size(); ++i) {
         y[i] = sinf(x[i]);
         z[i] = cosf(x[i]);    
     }

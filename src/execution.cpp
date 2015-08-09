@@ -2,12 +2,13 @@
 #include <cstdio>
 #include <queue>
 #include <set>
+#include <vector>
 
 namespace cgt {
 
 template <typename T>
 T idx(cgtArray * x, size_t a) {
-    return ((T*)x->data)[a];
+    return ((T*)x->data())[a];
 }
 
 ExecutionGraph::~ExecutionGraph() {
@@ -17,7 +18,7 @@ ExecutionGraph::~ExecutionGraph() {
 class SequentialInterpreter : public Interpreter {
 public:
     SequentialInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs) 
-    : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL) {}
+    : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL) { }
 
     cgtObject * get(MemLocation m) {
         return storage_[m.index].get();
@@ -34,6 +35,7 @@ public:
         cgt_assert(newargs != NULL);
         cgt_assert(newargs->len == eg_->n_args());
         for (Instruction* instr : eg_->instrs()) {
+            // printf("Firing %s\n", instr->repr().c_str());
             instr->fire(this);
         }
         args_ = NULL;
@@ -137,10 +139,12 @@ private:
 };
 
 Interpreter* create_interpreter(ExecutionGraph* eg, vector<MemLocation> output_locs, bool parallel) {
-    if (parallel)
+    if (parallel) {
         return new ParallelInterpreter(eg, output_locs);
-    else
+    }
+    else{
         return new SequentialInterpreter(eg, output_locs);
+    }
 }
 
 void LoadArgument::fire(Interpreter* interp) {
@@ -149,18 +153,17 @@ void LoadArgument::fire(Interpreter* interp) {
 
 void Alloc::fire(Interpreter* interp) {
     int ndim = readlocs.size();
-    SizeList shape(ndim);
+    std::vector<size_t> shape(ndim);
     for (int i=0; i < ndim; ++i) {
         cgtArray * sizeval = (cgtArray *)interp->get(readlocs[i]);
-        cgt_assert(sizeval->dtype == cgt_i8);
+        cgt_assert(sizeval->dtype() == cgt_i8);
         shape[i] = idx<size_t>(sizeval, 0); 
     }
 
     cgtArray* cur = static_cast<cgtArray*>(interp->get(writeloc));
-    if (!(cur && (cur->shape == shape))) {
-        interp->set(writeloc, new cgtArray(shape, dtype, cgtCPU));
+    if (!(cur && cur->ndim() == ndim && std::equal(shape.begin(), shape.end(), cur->shape()))) {
+        interp->set(writeloc, new cgtArray(ndim, shape.data(), dtype, cgtCPU));
     }
-
 }
 
 void BuildTup::fire(Interpreter* interp) {

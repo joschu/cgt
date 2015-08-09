@@ -4,7 +4,6 @@
 #include "stdbool.h"
 #include "IRC.h"
 #include <cassert>
-#include <vector>
 
 // ================================================================
 // Basic structs and enums
@@ -25,6 +24,36 @@ typedef enum cgtDtype {
   cgt_O = 17
 } cgtDtype;
 // print np.dtype('i1').num # etc
+
+static inline int cgt_itemsize(cgtDtype dtype) {
+  switch (dtype) {
+    case cgt_i1:
+      return 1;
+    case cgt_i2:
+      return 2;
+    case cgt_i4:
+      return 4;
+    case cgt_i8:
+      return 8;
+    case cgt_f2:
+      return 2;
+    case cgt_f4:
+      return 4;
+    case cgt_f8:
+      return 8;
+    case cgt_f16:
+      return 16;
+    case cgt_c8:
+      return 8;
+    case cgt_c16:
+      return 16;
+    case cgt_c32:
+      return 32;
+    case cgt_O:
+      return 8;
+  }
+  assert(0 && "invalid dtype");
+}
 
 typedef enum cgtDevtype {
   cgtCPU,
@@ -47,26 +76,45 @@ private:
   mutable unsigned ref_cnt;
 };
 
-typedef std::vector<size_t> SizeList;
-inline SizeList make_size_list(size_t len, const size_t* data) {
-  return SizeList(data, data+len);
-}
 class cgtArray : public cgtObject {
 public:
-  cgtArray(const SizeList& shape, cgtDtype, cgtDevtype);
-  cgtArray(const SizeList& shape, cgtDtype, cgtDevtype, void* fromdata, bool copy);
+  cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype devtype);
+  cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype devtype, void* fromdata, bool copy);
   ~cgtArray();
 
-  const SizeList shape;
-  const size_t size;
-  const size_t nbytes;
-  const int ndim;
-  const SizeList strides;
+  size_t ndim() const { return ndim_; }
+  const size_t* shape() const { return shape_; }
+  size_t size() const {
+    size_t s = 1;
+    for (size_t i = 0; i < ndim_; ++i) {
+      s *= shape_[i];
+    }
+    return s;
+  }
+  size_t nbytes() const { return size() * cgt_itemsize(dtype_); }
+  size_t stride(size_t i) const {
+    if (ndim_ == 0) {
+      return 0;
+    }
+    assert(0 <= i && i < ndim_ && ndim_ >= 1);
+    size_t s = 1;
+    for (size_t j = i; j < ndim_ - 1; ++j) { // note that (ndim_-1) >= 0, which is important because ndim_ is unsigned
+      s *= shape_[j + 1];
+    }
+    return s;
+  }
+  cgtDtype dtype() const { return dtype_; }
+  cgtDevtype devtype() const { return devtype_; }
+  bool ownsdata() const { return ownsdata_; }
+  void* data() { return data_; }
 
-  const cgtDtype dtype;
-  const cgtDevtype devtype;
-  const bool ownsdata;
-  void *data;
+private:
+  const size_t ndim_;
+  const size_t* shape_;
+  const cgtDtype dtype_;
+  const cgtDevtype devtype_;
+  const bool ownsdata_;
+  void* data_;
 };
 
 class cgtTuple : public cgtObject {
@@ -141,37 +189,6 @@ static inline void clear_error() {
 
 static inline bool cgt_is_array(cgtObject *o) { return o->kind == cgtObject::ArrayKind; }
 static inline bool cgt_is_tuple(cgtObject *o) { return o->kind == cgtObject::TupleKind; }
-
-
-static inline int cgt_itemsize(cgtDtype dtype) {
-  switch (dtype) {
-    case cgt_i1:
-      return 1;
-    case cgt_i2:
-      return 2;
-    case cgt_i4:
-      return 4;
-    case cgt_i8:
-      return 8;
-    case cgt_f2:
-      return 2;
-    case cgt_f4:
-      return 4;
-    case cgt_f8:
-      return 8;
-    case cgt_f16:
-      return 16;
-    case cgt_c8:
-      return 8;
-    case cgt_c16:
-      return 16;
-    case cgt_c32:
-      return 32;
-    case cgt_O:
-      return 8;
-  }
-  assert(0 && "invalid dtype");
-}
 
 void *cgt_alloc(char devtype, size_t size);
 void cgt_free(char devtype, void *ptr);

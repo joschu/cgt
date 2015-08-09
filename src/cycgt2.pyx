@@ -1,8 +1,8 @@
-from libcpp.vector cimport vector
 from cpython.ref cimport PyObject
 cimport numpy as cnp
 cimport cpython
 from libc.stdlib cimport abort
+from libcpp.string cimport string
 from libcpp.vector cimport vector
 
 import numpy as np
@@ -36,22 +36,18 @@ cdef extern from "cgt_common.h":
         cgtCPU
         cgtGPU
 
-    ctypedef vector[size_t] SizeList
-    SizeList make_size_list(size_t len, const size_t* data)
-
     cppclass cgtArray(cgtObject):
-        cgtArray(const SizeList&, cgtDtype, cgtDevtype)
-        cgtArray(const SizeList&, cgtDtype, cgtDevtype, void* fromdata, bint copy)
-
-        const SizeList shape
-        const size_t size
-        const size_t nbytes
-        const int ndim
-
-        const cgtDtype dtype
-        const cgtDevtype devtype
-        const bint ownsdata
-        void *data
+        cgtArray(size_t, const size_t*, cgtDtype, cgtDevtype)
+        cgtArray(size_t, const size_t*, cgtDtype, cgtDevtype, void* fromdata, bint copy)
+        size_t ndim() const
+        const size_t* shape() const
+        size_t size()
+        size_t nbytes() const
+        size_t stride(size_t)
+        cgtDtype dtype() const
+        cgtDevtype devtype() const
+        bint ownsdata() const
+        void* data()
 
     cppclass cgtTuple(cgtObject):
         cgtTuple(size_t)
@@ -95,8 +91,8 @@ cdef object cgt2py_object(cgtObject* o):
     else: raise RuntimeError("cgt object seems to be invalid")
 
 cdef object cgt2py_array(cgtArray* a):
-    cdef cnp.ndarray nparr = cnp.PyArray_SimpleNew(a.ndim, <npy_intp_t*>a.shape.data(), a.dtype) # XXX DANGEROUS CAST
-    cgt_memcpy(cgtCPU, a.devtype, cnp.PyArray_DATA(nparr), a.data, cnp.PyArray_NBYTES(nparr))
+    cdef cnp.ndarray nparr = cnp.PyArray_SimpleNew(a.ndim(), <npy_intp_t*>a.shape(), a.dtype()) # XXX DANGEROUS CAST
+    cgt_memcpy(cgtCPU, a.devtype(), cnp.PyArray_DATA(nparr), a.data(), cnp.PyArray_NBYTES(nparr))
     return nparr
 
 cdef object cgt2py_tuple(cgtTuple* t):
@@ -122,15 +118,13 @@ cdef cgtObject* py2cgt_object(object o) except *:
         return py2cgt_array(o, cgtCPU)
 
 cdef cgtArray* py2cgt_array(cnp.ndarray arr, cgtDevtype devtype):
-    cdef SizeList shape = make_size_list(arr.ndim, <size_t*>arr.shape)
-    cdef cgtArray* out = new cgtArray(shape, arr.dtype.num, devtype)
+    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, devtype)
     if not arr.flags.c_contiguous: arr = np.ascontiguousarray(arr)
-    cgt_memcpy(out.devtype, cgtCPU, out.data, cnp.PyArray_DATA(arr), out.nbytes)
+    cgt_memcpy(out.devtype(), cgtCPU, out.data(), cnp.PyArray_DATA(arr), out.nbytes())
     return out
 
 cdef cgtArray* py2cgt_arrayview(cnp.ndarray arr):
-    cdef SizeList shape = make_size_list(arr.ndim, <size_t*>arr.shape)
-    cdef cgtArray* out = new cgtArray(shape, arr.dtype.num, cgtCPU, cnp.PyArray_DATA(arr), False)
+    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, cgtCPU, cnp.PyArray_DATA(arr), False)
     assert arr.flags.c_contiguous
     return out
 
@@ -274,20 +268,20 @@ cdef extern from "execution.h" namespace "cgt":
         ExecutionGraph(vector[Instruction*], int, int)        
         int n_args()
     cppclass LoadArgument(Instruction):
-        LoadArgument(int, MemLocation)
+        LoadArgument(string, int, MemLocation)
     cppclass Alloc(Instruction):
-        Alloc(cgtDtype, vector[MemLocation], MemLocation)
+        Alloc(string, cgtDtype, vector[MemLocation], MemLocation)
     cppclass BuildTup(Instruction):
-        BuildTup(vector[MemLocation], MemLocation)
+        BuildTup(string, vector[MemLocation], MemLocation)
     cppclass ReturnByRef(Instruction):
-        ReturnByRef(vector[MemLocation], MemLocation, ByRefFunCl)
+        ReturnByRef(const string&, vector[MemLocation], MemLocation, ByRefFunCl)
     cppclass ReturnByVal(Instruction):
-        ReturnByVal(vector[MemLocation], MemLocation, ByValFunCl)
+        ReturnByVal(const string&, vector[MemLocation], MemLocation, ByValFunCl)
 
     cppclass Interpreter:
         cgtTuple* run(cgtTuple*)
 
-    Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation], parallel)
+    Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation], bint)
 
 cdef vector[size_t] _tovectorlong(object xs):
     cdef vector[size_t] out = vector[size_t]()
@@ -312,14 +306,14 @@ cdef void _pyfunc_inplace(void* cldata, cgtObject** reads, cgtObject* write):
     cdef cgtArray* a
     if cgt_is_array(write):
         npout = <cnp.ndarray>pywrite
-        cgt_memcpy(cgtCPU, cgtCPU, (<cgtArray*>write).data, npout.data, (<cgtArray*>write).nbytes)
+        cgt_memcpy(cgtCPU, cgtCPU, (<cgtArray*>write).data(), npout.data, (<cgtArray*>write).nbytes())
     else:
         tup = <cgtTuple*> write
         for i in xrange(tup.size()):
             npout = <cnp.ndarray>pywrite[i]
             a = <cgtArray*>tup.getitem(i)
             assert cgt_is_array(a)
-            cgt_memcpy(cgtCPU, cgtCPU, a.data, npout.data, a.nbytes)
+            cgt_memcpy(cgtCPU, cgtCPU, a.data(), npout.data, a.nbytes())
 
 
 cdef cgtObject* _pyfunc_valret(void* cldata, cgtObject** args):
@@ -384,15 +378,15 @@ cdef Instruction* _tocppinstr(object oplib, object pyinstr) except *:
     t = type(pyinstr)
     cdef Instruction* out
     if t == execution.LoadArgument:
-        out = new LoadArgument(pyinstr.ind, _tocppmem(pyinstr.write_loc))
+        out = new LoadArgument(repr(pyinstr), pyinstr.ind, _tocppmem(pyinstr.write_loc))
     elif t == execution.Alloc:
-        out = new Alloc(dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
+        out = new Alloc(repr(pyinstr), dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
     elif t == execution.BuildTup:
-        out = new BuildTup(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
+        out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
     elif t == execution.ReturnByRef:
-        out = new ReturnByRef(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(oplib, pyinstr.node))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(oplib, pyinstr.node))
     elif t == execution.ReturnByVal:
-        out = new ReturnByVal(_tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(oplib, pyinstr.node))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(oplib, pyinstr.node))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out
@@ -411,7 +405,7 @@ cdef ExecutionGraph* make_cpp_execution_graph(pyeg, oplib) except *:
 cdef class CppArrayWrapper:
     cdef cgtArray* arr
     def to_numpy(self):
-        return cnp.PyArray_SimpleNewFromData(self.arr.ndim, <cnp.npy_intp*>self.arr.shape.data(), self.arr.dtype, self.arr.data)
+        return cnp.PyArray_SimpleNewFromData(self.arr.ndim(), <cnp.npy_intp*>self.arr.shape(), self.arr.dtype(), self.arr.data())
     @staticmethod
     def from_numpy(cnp.ndarray nparr, object pydevtype="cpu"):
         cdef cgtDevtype devtype = devtype_fromstr(pydevtype)
@@ -420,13 +414,13 @@ cdef class CppArrayWrapper:
         return out
     @property
     def ndim(self):
-        return self.arr.ndim
+        return self.arr.ndim()
     @property
     def shape(self):
-        return [self.arr.shape[i] for i in xrange(self.arr.ndim)]
+        return [self.arr.shape()[i] for i in range(self.arr.ndim())]
     @property
     def dtype(self):
-        return dtype_tostr(self.arr.dtype)
+        return dtype_tostr(self.arr.dtype())
     def get_pointer(self):
         return <size_t>self.arr
     def __dealloc__(self):
@@ -450,7 +444,7 @@ cdef class CppInterpreterWrapper:
     def __dealloc__(self):
         if self.interp != NULL: del self.interp
         if self.eg != NULL: del self.eg
-    def __call__(self, *pyargs):        
+    def __call__(self, *pyargs):
         pyargs = tuple(execution.as_valid_arg(arg) for arg in pyargs)
         execution.typecheck_args(pyargs, self.input_types)
 

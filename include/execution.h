@@ -2,6 +2,7 @@
 #include "cgt_common.h"
 #include <vector>
 #include <thread>
+#include <string>
 
 namespace cgt {
 using std::vector;
@@ -42,6 +43,7 @@ class Interpreter;
 
 class Instruction {
 public:
+    Instruction(const std::string& repr) : repr_(repr) { }
     virtual void fire(Interpreter*)=0;
     virtual ~Instruction() {};
     const vector<MemLocation>& get_readlocs() const {
@@ -50,9 +52,11 @@ public:
     const MemLocation& get_writeloc() const {
         return writeloc;
     }
+    const std::string& repr() const { return repr_; }
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
+    std::string repr_;
 };
 
 class ExecutionGraph {
@@ -86,7 +90,7 @@ Interpreter* create_interpreter(ExecutionGraph*, vector<MemLocation> output_locs
 
 class LoadArgument : public Instruction  {
 public:
-    LoadArgument(int ind, MemLocation writeloc) : ind(ind), writeloc(writeloc) {}
+    LoadArgument(const std::string& repr, int ind, MemLocation writeloc) : Instruction(repr), ind(ind), writeloc(writeloc) {}
     void fire(Interpreter*);
 private:
     int ind;
@@ -96,8 +100,8 @@ private:
 
 class Alloc : public Instruction {
 public:
-    Alloc(cgtDtype dtype, vector<MemLocation> readlocs, MemLocation writeloc)
-    : dtype(dtype), readlocs(readlocs), writeloc(writeloc) {}
+    Alloc(const std::string& repr, cgtDtype dtype, vector<MemLocation> readlocs, MemLocation writeloc)
+    : Instruction(repr), dtype(dtype), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
 private:
     cgtDtype dtype;
@@ -107,8 +111,8 @@ private:
 
 class BuildTup : public Instruction {
 public:
-    BuildTup(vector<MemLocation> readlocs, MemLocation writeloc)
-    : readlocs(readlocs), writeloc(writeloc) {}
+    BuildTup(const std::string& repr, vector<MemLocation> readlocs, MemLocation writeloc)
+    : Instruction(repr), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
@@ -117,8 +121,8 @@ private:
 
 class ReturnByRef : public Instruction  {
 public:
-    ReturnByRef(vector<MemLocation> readlocs, MemLocation writeloc, ByRefFunCl closure)
-    : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
+    ReturnByRef(const std::string& repr, vector<MemLocation> readlocs, MemLocation writeloc, ByRefFunCl closure)
+    : Instruction(repr), readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
@@ -128,8 +132,8 @@ private:
 
 class ReturnByVal : public Instruction  {
 public:
-    ReturnByVal(vector<MemLocation> readlocs, MemLocation writeloc, ByValFunCl closure)
-    : readlocs(readlocs), writeloc(writeloc), closure(closure) {}
+    ReturnByVal(const std::string& repr, vector<MemLocation> readlocs, MemLocation writeloc, ByValFunCl closure)
+    : Instruction(repr), readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
 private:
     vector<MemLocation> readlocs;
