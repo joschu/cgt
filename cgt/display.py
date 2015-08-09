@@ -85,13 +85,13 @@ def as_dot(nodes):
     from graphviz import Digraph
     g = Digraph()
     for n in core.topsorted(nodes):
-        g.node(str(id(n)), str(n))
-        for p in n.parents:
-            g.edge(str(id(n)), str(id(p)))
+        g.node(str(id(n)), _node_name(n))
+        for (i,p) in enumerate(n.parents):
+            g.edge(str(id(n)), str(id(p)),taillabel=str(i))
     return g
 
 def _node_name(node):
     if node.is_input():
         return node.name
     else:
-        return ""
+        return str(node.op)

@@ -92,10 +92,10 @@ You can run our suite of unit tests to verify your installation. In the source d
 
     python test/run_all_tests.py
 
-Tour of the API
-===============
+Tutorial
+========
 
-.. notebook:: ../examples/api_tour.ipynb
+.. notebook:: ../examples/tutorial.ipynb
 
 
 Tour of the Internals

@@ -30,9 +30,9 @@ class Dtype: #pylint: disable=W0232
         else:
             raise ValueError("Invalid dtype %s"%dt)
 
-def as_valid_array(x):
+def as_valid_array(x, dtype=None):
     x = np.asarray(x)
-    x = x.astype(Dtype.canon(x.dtype))
+    x = x.astype(Dtype.canon(x.dtype) if dtype is None else dtype)
     return x
 
 def as_valid_tuple(x):
@@ -452,7 +452,7 @@ class Result(Node):
         for p in self.parents: hashobj.update(node2hash[p])
         return hashobj.hexdigest()
     def __repr__(self):
-        return "Result{%s,id=%i}"%(str(self.op),id(self))
+        return "Result{%s}"%(str(self.op))
 
 class Input(Node):
     """
@@ -489,7 +489,7 @@ class Argument(Input):
     def is_argument(self):
         return True
     def __repr__(self):
-        return "Argument{%s,name='%s',id=%s}"%(self.typ,self.name,id(self))
+        return "Argument{%s,name='%s'}"%(self.typ,self.name)
     def get_fixed_shape(self):
         return self.fixed_shape
 
@@ -541,7 +541,7 @@ class Data(Input):
     def is_data(self):
         return True
     def __repr__(self):
-        return "Data{%s,name='%s',id=%s}"%(self.typ,self.name,id(self))
+        return "Data{%s,name='%s'}"%(self.typ,self.name)
     def get_device(self):
         return self.device
     def get_fixed_shape(self):

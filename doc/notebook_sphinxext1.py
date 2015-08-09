@@ -137,7 +137,10 @@ def nb_to_html(nb_path):
         }
         </style>""")
     import re
-    body = re.sub(r'<div class="prompt input_prompt">\S+</div>','',body)
+    # bad way to do it
+    body = re.sub(r'<div class="prompt input_prompt">.*</div>','',body)
+    body = re.sub(r'<div class="prompt output_prompt">.*</div>','',body)
+
     lines.append(body)
     lines.append('</div>')
     return '\n'.join(lines)
@@ -147,7 +150,7 @@ def evaluate_notebook(nb_path, dest_path=None, skip_exceptions=False):
     # Always use --pylab so figures appear inline
     # perhaps this is questionable?
     import subprocess
-    if os.path.getmtime(nb_path) > os.path.getmtime(dest_path):
+    if not os.path.exists(dest_path) or os.path.getmtime(nb_path) > os.path.getmtime(dest_path):
         subprocess.check_call("runipy %s %s"%(nb_path,dest_path),shell=True)
     # nb_runner = NotebookRunner(nb_in=nb_path, pylab=True)
     # nb_runner.run_notebook(skip_exceptions=skip_exceptions)

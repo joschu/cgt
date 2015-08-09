@@ -8,24 +8,35 @@ import multiprocessing
 from multiprocessing.pool import ThreadPool
 
 
-def function(inputs, outputs, dbg = None, updates=None):
+def function(inputs, outputs, dbg=None, updates=None, givens=None):
     assert isinstance(inputs, list), "Inputs must be a list"
-    assert all(isinstance(el, Node) for el in inputs), "Invalid input: should all be symbolic variables"
-    assert isinstance(outputs, list), "Outputs must be a list. For a single output use function1"
-    assert all(isinstance(el, Node) for el in inputs), "Invalid output: should all be symbolic variables"
-    if updates is None: updates = []
-    else: assert all(isinstance(before, Data) for (before,_) in updates), "rhs of updates must be Data instances"
+    assert all(isinstance(el, Node) for el in inputs), "Invalid input: should be a list of nodes"
+
+    if isinstance(outputs, list): 
+        assert all(isinstance(el, Node) for el in inputs), "Invalid output: should all be symbolic variables"
+        return function_listout(inputs, outputs, dbg, updates, givens)
+    elif isinstance(outputs, Node):         
+        f_listout = function_listout(inputs, [outputs], dbg, updates, givens)
+        return lambda *args : f_listout(*args)[0]
+    else:
+        raise ValueError("Expected `outputs` to be a Node or a list of Nodes. Got an object of type %s"%type(outputs))
+
+def function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
+    if updates is None:  updates = []
+    else: assert (isinstance(updates, list) and 
+                all(isinstance(a,tuple) and len(a)==2 
+                    and isinstance(a[0],Node) and isinstance(a[1],Node) 
+                    for a in updates)), "updates should be a list of pairs (before, after)"
+    if givens is None: givens = []
+    else: assert all(isinstance(before, Data) for (before,_) in updates), "lhs of updates must be Data instances"
 
     if dbg: raise Todo("debug functionality is broken")
     
     outputs = [cgt.make_tuple(*x) if isinstance(x, tuple) else x for x in outputs]
-
-    interp = run_compilation_pipeline(inputs, outputs, updates)
+    
+    interp = run_compilation_pipeline(inputs, outputs, updates, givens)
     return interp
 
-def function1(inputs, output, dbg=None, updates=None):
-    f_output_list = function(inputs, [output], dbg = dbg, updates=updates)
-    return lambda *args : f_output_list(*args)[0]
 
 
 # ================================================================
@@ -265,7 +276,7 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
     return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
 
 
-def run_compilation_pipeline(inputs, outputs, updates):
+def run_compilation_pipeline(inputs, outputs, updates, givens):
     """
     Compiles the expression graph into an execution graph. 
     """
@@ -273,6 +284,7 @@ def run_compilation_pipeline(inputs, outputs, updates):
     # ------------------------------------------------------
     # Add add update targets to outputs
     outputs_updatetargs = outputs + [after for (_before, after) in updates]
+    outputs_updatetargs = clone(outputs_updatetargs, dict(givens))
     # Do simplification + analysis pass on expression graph
     outputs_updatetargs_simple, analysis = \
         simplify_and_analyze(outputs_updatetargs) if load_config()["enable_simplification"] \
@@ -456,8 +468,8 @@ class SequentialInterpreter(Interpreter):
         self.args = None
         self.copy_outputs = copy_outputs
     def __call__(self, *args):
-        self.args = tuple(as_valid_arg(arg) for arg in args)
-        typecheck_args(self.args, self.input_types)
+        assert len(args) == len(self.input_types), "Wrong number of inputs provided"
+        self.args = tuple(as_valid_array(arg, intype) for (arg, intype) in zip(args, self.input_types))
         for instr in self.eg.instrs:
             if profiler.on: tstart = time.time()
             instr.fire(self)
