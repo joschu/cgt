@@ -147,7 +147,8 @@ def evaluate_notebook(nb_path, dest_path=None, skip_exceptions=False):
     # Always use --pylab so figures appear inline
     # perhaps this is questionable?
     import subprocess
-    subprocess.check_call("runipy %s %s"%(nb_path,dest_path),shell=True)
+    if os.path.getmtime(nb_path) > os.path.getmtime(dest_path):
+        subprocess.check_call("runipy %s %s"%(nb_path,dest_path),shell=True)
     # nb_runner = NotebookRunner(nb_in=nb_path, pylab=True)
     # nb_runner.run_notebook(skip_exceptions=skip_exceptions)
     # if dest_path is None:
