@@ -190,7 +190,6 @@ static inline void clear_error() {
 static inline bool cgt_is_array(cgtObject *o) { return o->kind == cgtObject::ArrayKind; }
 static inline bool cgt_is_tuple(cgtObject *o) { return o->kind == cgtObject::TupleKind; }
 
-void *cgt_alloc(char devtype, size_t size);
-void cgt_free(char devtype, void *ptr);
-void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, size_t nbytes);
-
+void *cgt_alloc(cgtDevtype devtype, size_t size);
+void cgt_free(cgtDevtype devtype, void *ptr);
+void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void *dest_ptr, void *src_ptr, size_t nbytes);

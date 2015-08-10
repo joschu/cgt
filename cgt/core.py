@@ -1173,7 +1173,6 @@ CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
         return CImpl(code)
 
 class Reshape(Op):
-    gpu_uses_c = True
     call_type = "valret"
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
@@ -1307,24 +1306,20 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
 }"""%d
         return CImpl(code)
 
-class Transport(Op):
-    gpu_uses_c = True
-    def __init__(self, src, targ):
-        assert isinstance(src, Device)
-        self.src = src
-        self.targ = targ
+class TransportToOutputDevice(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
-    def get_numeric_py(self):
-        raise RuntimeError # move to get_*_impl
-        def fn(x):
-            return x
-        return fn
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
+    def get_py_impl(self):
+        raise RuntimeError("Only CPU supported in Python mode. No Transport ops should exist.")
     def get_c_impl(self, _inputs):
+        # This C code should only be run if the input and output devices differ.
+        # There should never be any no-op transports.
         code = """
 void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgt_assert(write->devtype != reads[0]->devtype);
+    cgt_assert(write->data() != reads[0]->data());
     cgt_memcpy(write->devtype, reads[0]->devtype, write->data(), reads[0]->data(), reads[0]->nbytes());
 }
 """

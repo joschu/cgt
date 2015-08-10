@@ -268,15 +268,15 @@ cdef extern from "execution.h" namespace "cgt":
         ExecutionGraph(vector[Instruction*], int, int)        
         int n_args()
     cppclass LoadArgument(Instruction):
-        LoadArgument(string, int, MemLocation)
+        LoadArgument(const string&, int, const MemLocation&)
     cppclass Alloc(Instruction):
-        Alloc(string, cgtDtype, vector[MemLocation], MemLocation)
+        Alloc(const string&, cgtDtype, vector[MemLocation], const MemLocation&)
     cppclass BuildTup(Instruction):
-        BuildTup(string, vector[MemLocation], MemLocation)
+        BuildTup(const string&, vector[MemLocation], const MemLocation&)
     cppclass ReturnByRef(Instruction):
-        ReturnByRef(const string&, vector[MemLocation], MemLocation, ByRefFunCl)
+        ReturnByRef(const string&, vector[MemLocation], const MemLocation&, ByRefFunCl)
     cppclass ReturnByVal(Instruction):
-        ReturnByVal(const string&, vector[MemLocation], MemLocation, ByValFunCl)
+        ReturnByVal(const string&, vector[MemLocation], const MemLocation&, ByValFunCl)
 
     cppclass Interpreter:
         cgtTuple* run(cgtTuple*)
@@ -386,7 +386,7 @@ cdef Instruction* _tocppinstr(object oplib, object pyinstr) except *:
     elif t == execution.ReturnByRef:
         out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(oplib, pyinstr.node))
     elif t == execution.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(oplib, pyinstr.node))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2valretclosure(oplib, pyinstr.node))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out
@@ -455,4 +455,3 @@ cdef class CppInterpreterWrapper:
         cdef cgtTuple* ret = self.interp.run(cargs)
         del cargs
         return list(cgt2py_object(ret))
-

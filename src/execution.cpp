@@ -20,10 +20,10 @@ public:
     SequentialInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs) 
     : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL) { }
 
-    cgtObject * get(MemLocation m) {
+    cgtObject * get(const MemLocation& m) {
         return storage_[m.index].get();
     }
-    void set(MemLocation m, cgtObject * val) {
+    void set(const MemLocation& m, cgtObject * val) {
         storage_[m.index] = val;
     }
     cgtObject * getarg(int argind) {
@@ -64,10 +64,10 @@ public:
 
     }
 
-    cgtObject * get(MemLocation m) {
+    cgtObject * get(const MemLocation& m) {
         return storage_[m.index].get();
     }
-    void set(MemLocation m, cgtObject * val) {
+    void set(const MemLocation& m, cgtObject * val) {
         storage_[m.index] = val;
     }
     cgtObject * getarg(int argind) {
@@ -120,7 +120,7 @@ public:
     bool ready_to_fire(int instr_ind) {
         Instruction* instr = eg_->instrs()[instr_ind];
         bool read_rdy = true;
-        for (MemLocation loc : instr->get_readlocs())
+        for (const MemLocation& loc : instr->get_readlocs())
             if (write_queue_[loc.index].size() > 0)
                 read_rdy = false;
         bool write_rdy = write_queue_[instr->get_writeloc().index].front() == instr_ind;

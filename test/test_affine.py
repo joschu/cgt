@@ -44,7 +44,7 @@ def check_affine(f, *nu_inputs):
     maybeprint("Function:")
     if DISPLAY: cgt.print_tree([sy_result])
 
-    f_cgt = cgt.function1(sy_inputs, sy_result)
+    f_cgt = cgt.function(sy_inputs, sy_result)
     sy_grads = cgt.grad(sy_result, sy_inputs)
     gradf_cgt = cgt.function(sy_inputs, sy_grads)
 

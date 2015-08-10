@@ -372,8 +372,8 @@ def sum(x, axis=None, keepdims=False): #pylint: disable=W0622
         out = _dropdims(out, axes)
     return out
 
-def transport(x, src, targ):
-    return core.Result(core.Transport(src, targ), [x])
+def transport(x):
+    return core.Result(core.Transport(), [x])
 
 def transpose(arr, axes=None):
     if axes is None: 

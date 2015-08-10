@@ -4,8 +4,8 @@ import unittest
 class TupleTestCase(unittest.TestCase):
     def runTest(self):
         cgt.set_precision("double")
-        f1 = cgt.function1([], ())
-        assert f1() == ()
+        f1 = cgt.function([], [()])
+        assert f1() == [()]
 
         x = cgt.vector()
         xval = np.random.randn(1)

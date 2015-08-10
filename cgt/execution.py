@@ -113,7 +113,7 @@ def is_tensor(x):
 def is_tuple(x):
     return isinstance(x.typ, TupleType)
 
-def create_interpreter(inputs, outputs, eg, node2memloc, node2dev):
+def create_interpreter(inputs, outputs, eg, node2memloc):
     assert isinstance(eg, ExecutionGraph)
     input_types = [input.get_type() for input in inputs]
     output_types = [output.get_type() for output in outputs]
@@ -308,7 +308,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------
-    interp = create_interpreter(inputs, outputs_simple, eg, node2memloc, node2dev)
+    interp = create_interpreter(inputs, outputs_simple, eg, node2memloc)
 
     # Done!
     return interp
@@ -575,7 +575,6 @@ class Instr(object):
 class LoadArgument(Instr):
     def __init__(self, ind, write_loc):
         self.ind = ind
-        self.read_locs = []
         self.write_loc = write_loc
     def fire(self, interp):
         interp.set(self.write_loc, interp.getarg(self.ind))

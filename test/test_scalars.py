@@ -34,7 +34,7 @@ class ScalarTestCase(unittest.TestCase):
             inputvars = vars[0:n_in]
             inputvals = vals[0:n_in]
             out = core.Result(op, inputvars)
-            f = cgt.function1(inputvars, out)
+            f = cgt.function(inputvars, out)
             try:
                 grads = cgt.grad(out, inputvars)
             except core.NonDifferentiable:

@@ -72,7 +72,7 @@ char cgtGlobalErrorMsg[1000];
 // Memory management 
 // ================================================================
 
-void *cgt_alloc(char devtype, size_t size) {
+void *cgt_alloc(cgtDevtype devtype, size_t size) {
   if (devtype == cgtCPU) {
     return malloc(size);
   }
@@ -87,7 +87,7 @@ void *cgt_alloc(char devtype, size_t size) {
   }
 }
 
-void cgt_free(char devtype, void *ptr) {
+void cgt_free(cgtDevtype devtype, void *ptr) {
   if (devtype == cgtCPU) {
     free(ptr);
   }
@@ -100,7 +100,7 @@ void cgt_free(char devtype, void *ptr) {
   }
 }
 
-void cgt_memcpy(char dest_type, char src_type, void *dest_ptr, void *src_ptr, size_t nbytes) {
+void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void *dest_ptr, void *src_ptr, size_t nbytes) {
   if (src_type == cgtCPU && dest_type == cgtCPU) {
     memcpy(dest_ptr, src_ptr, nbytes);
   } else {
