@@ -306,6 +306,11 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     # Generate execution graph
     eg, node2memloc = create_execution_graph(inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev)
 
+    # Print execution graph
+    print 'begin'
+    print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
+    print 'end'
+
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------
     interp = create_interpreter(inputs, outputs_simple, eg, node2memloc)
@@ -366,8 +371,11 @@ class MemLocation(object):
     def __init__(self, idx):
         assert isinstance(idx, int)
         self.index = idx
+        #TODO: type and device
     def to_json(self):
         return self.index
+    def __repr__(self):
+        return "%%%i" % self.index
 
 class Interpreter(object):
     def __call__(self, args):
@@ -579,7 +587,7 @@ class LoadArgument(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, interp.getarg(self.ind))
     def __repr__(self):
-        return "LoadArg:%i"%self.ind
+        return "%%%i = LoadArg ind:%i" % (self.write_loc.index, self.ind)
     def to_json(self):
         return {"type" : "LoadArgument", "write_loc" : self.write_loc.to_json(), "ind" : self.ind}
 
@@ -594,7 +602,7 @@ class Alloc(Instr):
         if prevarr is None or prevarr.shape != shp: 
             interp.set(self.write_loc, np.ones(shp, self.dtype))
     def __repr__(self):
-        return "Alloc:%s"%self.dtype
+        return "%%%i = Alloc shp:%s dtype:%s" % (self.write_loc.index, "["+", ".join("%%%i"%loc.index for loc in self.read_locs)+"]", self.dtype)
     def to_json(self):
         return {"type" : "Alloc", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json()}
 
@@ -606,7 +614,7 @@ class BuildTup(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, tuple(interp.get(loc) for loc in self.read_locs))
     def __repr__(self):
-        return "BuildTup:%s"%self.typ
+        return "%%%i = BuildTup:%s" % (self.write_loc.index, self.typ)
     def to_json(self):
         return {"type" : "BuildTup"} # XXX
 
@@ -620,7 +628,7 @@ class ReturnByRef(Instr):
             [interp.get(mem) for mem in self.read_locs],
             interp.get(self.write_loc))
     def __repr__(self):
-        return "ReturnByRef:%s"%self.node.op.get_name()
+        return "%%%i = ReturnByRef op:%s args:%s" % (self.write_loc.index, str(self.node.op), str(self.read_locs))
     def to_json(self):
         return {"type" : "ReturnByRef", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
 
@@ -632,6 +640,6 @@ class ReturnByVal(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, interp.apply_valret(self.node, [interp.get(mem) for mem in self.read_locs]))
     def __repr__(self):
-        return "ReturnByVal:%s"%self.node.op.get_name()
+        return "%%%i = ReturnByVal op:%s args:%s" % (self.write_loc.index, str(self.node.op), str(self.read_locs))
     def to_json(self):
         return {"type" : "ReturnByVal", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
