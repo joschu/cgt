@@ -47,16 +47,10 @@ public:
     Instruction(const std::string& repr) : repr_(repr) { }
     virtual void fire(Interpreter*)=0;
     virtual ~Instruction() {};
-    const vector<MemLocation>& get_readlocs() const {
-        return readlocs;
-    }
-    const MemLocation& get_writeloc() const {
-        return writeloc;
-    }
+    virtual const vector<MemLocation>& get_readlocs() const=0;
+    virtual const MemLocation& get_writeloc() const=0;
     const std::string& repr() const { return repr_; }
 private:
-    vector<MemLocation> readlocs;
-    MemLocation writeloc;
     std::string repr_;
 };
 
@@ -93,8 +87,11 @@ class LoadArgument : public Instruction  {
 public:
     LoadArgument(const std::string& repr, int ind, const MemLocation& writeloc) : Instruction(repr), ind(ind), writeloc(writeloc) {}
     void fire(Interpreter*);
+    const vector<MemLocation>& get_readlocs() const { return readlocs; }
+    const MemLocation& get_writeloc() const { return writeloc; }
 private:
     int ind;
+    vector<MemLocation> readlocs;  // empty
     MemLocation writeloc;
 };
 
@@ -104,6 +101,8 @@ public:
     Alloc(const std::string& repr, cgtDtype dtype, vector<MemLocation> readlocs, const MemLocation& writeloc)
     : Instruction(repr), dtype(dtype), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
+    const vector<MemLocation>& get_readlocs() const { return readlocs; }
+    const MemLocation& get_writeloc() const { return writeloc; }
 private:
     cgtDtype dtype;
     vector<MemLocation> readlocs;
@@ -115,6 +114,8 @@ public:
     BuildTup(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc)
     : Instruction(repr), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
+    const vector<MemLocation>& get_readlocs() const { return readlocs; }
+    const MemLocation& get_writeloc() const { return writeloc; }
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
@@ -125,6 +126,8 @@ public:
     ReturnByRef(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc, ByRefFunCl closure)
     : Instruction(repr), readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
+    const vector<MemLocation>& get_readlocs() const { return readlocs; }
+    const MemLocation& get_writeloc() const { return writeloc; }
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
@@ -136,6 +139,8 @@ public:
     ReturnByVal(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc, ByValFunCl closure)
     : Instruction(repr), readlocs(readlocs), writeloc(writeloc), closure(closure) {}
     void fire(Interpreter*);
+    const vector<MemLocation>& get_readlocs() const { return readlocs; }
+    const MemLocation& get_writeloc() const { return writeloc; }
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;

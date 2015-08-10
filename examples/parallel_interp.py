@@ -16,7 +16,7 @@ def main():
     # params
 
     m = 20
-    d = 10000
+    d = 5000
 
     # build graph
 
@@ -39,7 +39,7 @@ def main():
     # construct parallel/sequential interpreter
 
     load_config()["parallel_interp"] = not args.seq
-    f_seq = cgt.execution.function(inputs, outputs)
+    f = cgt.execution.function(inputs, outputs)
 
     # test things out!
 
@@ -53,9 +53,9 @@ def main():
         vals.append(randn(d))
 
     times = list()
-    for k in xrange(10):
+    for k in xrange(1):
         tic = time()
-        out = f_seq(*vals)
+        out = f(*vals)
         toc = time()
         times.append(toc - tic)
         print(out)

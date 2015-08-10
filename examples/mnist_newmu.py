@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--dropout",action="store_true")
     args = parser.parse_args()
 
-    mnist = fetch_dataset("http://rll.berkeley.edu/cgt/datasets/mnist.npz")
+    mnist = fetch_dataset("http://rll.berkeley.edu/cgt-data/mnist.npz")
 
     Xdata = mnist["X"]/255.
     ydata = mnist["y"]
