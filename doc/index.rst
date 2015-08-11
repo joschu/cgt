@@ -16,7 +16,7 @@ The core features are as follows:
 
 - Automatic differentiation of functions involving multidimensional arrays, using computation graphs
 - Compile fast implementations of array computations that can be run in parallel on multiple CPUs and GPUs. [ONLY SINGLE-THREADED CPU USAGE IS CURRENTLY SUPPORTED.]
-- A graph simplification system, which readily handles extremely large (1M node) graphs.
+- A compilation process that simplifies your function through arithmetic identities and in-place optimizations, which readily handles extremely large (1M operation) graphs.
 - Supports both forward and backward derivative propagation, as well as higher-order differentiation.
 - CGT can export standalone C++ code for of your functions. [PROSPECTIVE]
 

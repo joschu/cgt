@@ -41,7 +41,7 @@ class Im2Col(core.Op):
         return info2closure(self.info)
     def get_c_impl(self, inputs):
         code = r"""
-extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgtArray** reads, cgtArray* write) {
+extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
     cgtArray* im = reads[0];
     const size_t* imshape = im->shape();
     int batchsize = imshape[0],
@@ -71,7 +71,7 @@ class Col2Im(core.Op):
         return info2closure(self.info)
     def get_c_impl(self, inputs):
         code = r"""
-extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgtArray** reads, cgtArray* write) {
+extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
     cgtArray* col = reads[0];
     size_t batchsize = reads[1]->at<size_t>(0),
            channels  = reads[2]->at<size_t>(0),

@@ -1,12 +1,9 @@
 from cgt.core import *
-import impls
+from . import impls
 from collections import defaultdict
 import time
-import threading
-from Queue import Queue
 import multiprocessing
 from multiprocessing.pool import ThreadPool
-
 
 def function(inputs, outputs, dbg=None, updates=None, givens=None):
     assert isinstance(inputs, list), "Inputs must be a list"

@@ -97,9 +97,6 @@ def conv2d(x_BKRC, f_LKrc, kersize, subsample=(1,1), pad=(0,0)):
     L,K,r,c = f_LKrc.shape
     f_LZ = f_LKrc.reshape([L, K*r*c])
     B,m,n,Z = col_BmnZ.shape
-    # col_Brc_Z = col_BrcZ.reshape([B, r*c*Z])
-    print cgt.core.infer_shape(col_BmnZ)
-    print cgt.core.infer_shape(f_LZ)
     B,m,n,Z = col_BmnZ.shape
     col_Bmn_Z = col_BmnZ.reshape([B*m*n, Z])
     col_Bmn_L = core.Result(core.Mul22(False,True), [col_Bmn_Z, f_LZ])

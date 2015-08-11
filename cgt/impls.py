@@ -5,6 +5,7 @@ import os.path as osp
 from StringIO import StringIO
 from cgt import core
 import sys, ctypes, hashlib
+import string #pylint: disable=W0402
 
 _COMPILE_CONFIG = None
 def get_compile_info():
@@ -125,13 +126,13 @@ def _build_struct_code(triples):
     if triples is None:
         return ""
     struct_code = StringIO()
-    struct_code.write("typedef struct CGT_FUNCNAME_closure {\n")
+    struct_code.write("typedef struct $closure {\n")
     for (fieldname,fieldtype,val) in triples:
         struct_code.write(_ctypes2str[fieldtype])
         struct_code.write(" ")
         struct_code.write(fieldname)
         struct_code.write(";\n")
-    struct_code.write("} CGT_FUNCNAME_closure;\n")
+    struct_code.write("} $closure;\n")
     return struct_code.getvalue()
 
 def _build_closure(triples):
@@ -161,8 +162,9 @@ class CTranslationUnit(object):
         s = StringIO()
         for filename in self.includes:
             s.write('#include "%s"\n'%filename)
-        s.write(self.struct_code.replace("CGT_FUNCNAME", funcname))
-        s.write(self.impl_code.replace("CGT_FUNCNAME", funcname))
+        d = dict(function=funcname, closure=funcname+"_closure")
+        s.write(string.Template(self.struct_code).substitute(d))
+        s.write(string.Template(self.impl_code).substitute(d))
         return s.getvalue()
 
     def hash(self):
