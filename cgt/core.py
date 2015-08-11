@@ -58,6 +58,8 @@ class TensorType(Type):
         return "Tensor(%s,%s)"%(self.dtype, self.ndim)
     def __eq__(self, other):
         return self.dtype == other.dtype and self.ndim == other.ndim
+    def __hash__(self):
+        return hash((self.dtype, self.ndim))
 
 class TupleType(Type):
     """
@@ -78,7 +80,9 @@ class TupleType(Type):
         return "Tup(" + ",".join(map(str,self.eltypes))+")"
     def __eq__(self, other):
         return len(self.eltypes) == len(other.eltypes)\
-            and all(typ0 == typ1 for (typ0, typ1) in zip(self.eltypes, other.eltypes))
+            and all(typ0 == typ1 for (typ0, typ1) in zip(self.eltypes, other.eltypes)) # XXX: self.dtype?
+    def __hash__(self):
+        return hash((self.eltypes, self.dtype))
 
 class Device(object):
     """
@@ -94,6 +98,8 @@ class Device(object):
         self.idx = idx
     def __eq__(self, other):
         return self.machine == other.machine and self.devtype == other.devtype and self.idx == other.idx
+    def __hash__(self):
+        return hash((self.machine, self.devtype, self.idx))
     def __str__(self):
         return "%s/%s/%s"%(self.machine,self.devtype,self.idx)
 
@@ -1096,13 +1102,16 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape) 
         return CImpl(code=code, includes=["cgt_common.h", "math.h"])
 
-    def cuda_code(self, inputs):
-        raise RuntimeError # move to get_*_impl
+    def get_cuda_impl(self, inputs):
+        print "CALLED"
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
         npdtype1 = inputs[1].dtype
         npdtype2 = typ2.dtype
-        return """
+        ind4shape = 1 if self.scalar_mask[0] else 0
+        index0 = "0" if self.scalar_mask[0] else "i"
+        index1 = "0" if self.scalar_mask[1] else "i"
+        code = """
 __forceinline__ __device__ %(cdtype2)s CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s) {return %(cexpr)s;}
 __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype0)s* x, %(cdtype1)s* y, %(cdtype2)s z) { \
   CUDA_KERNEL_LOOP(i, n) {
@@ -1110,16 +1119,15 @@ __global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype0)s* x, %(cdty
   }
 }
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
-    size_t n = reads[1]->size();
+    size_t n = reads[%(ind4shape)s]->size();
     int num_blocks,num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
     TODO
     CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
 }
-"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2])  
-    def cuda_includes(self):
-        raise RuntimeError # move to get_*_impl
-        return ["cgt_cuda.h","cgt_common.h"]
+"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
+    cexpr=self.info.cexpr,index0=index0,index1=index1,ind4shape=ind4shape) 
+        return CUDAImpl(code)
 
 def elwise_binary(opname, x, y):
     (x, y) = map(as_node, (x, y))
@@ -1317,10 +1325,10 @@ class TransportToOutputDevice(Op):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
         code = """
-void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgt_assert(write->devtype != reads[0]->devtype);
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgt_assert(write->devtype() != reads[0]->devtype());
     cgt_assert(write->data() != reads[0]->data());
-    cgt_memcpy(write->devtype, reads[0]->devtype, write->data(), reads[0]->data(), reads[0]->nbytes());
+    cgt_memcpy(write->devtype(), reads[0]->devtype(), write->data(), reads[0]->data(), reads[0]->nbytes());
 }
 """
         return CImpl(code)

@@ -43,33 +43,88 @@ def function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
 # Execution
 # ================================================================
 
-def determine_devices(nodes):
-    return {}
-
-
 # def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
 #     op = node.op
 #     parents = node.parents
 #     parent_devices = [node2dev[par] for par in parents]
 #     if isinstance(op,Transport):
-#         assert parent_devices[0].devtype==op.src
-#         devtype = op.targ   
+#         raise RuntimeError
+#         # assert parent_devices[0].devtype==op.src
+#         # devtype = op.targ   
 #     elif any(pardev.devtype == "gpu" for pardev in parent_devices):
 #         devtype = "gpu"
 #     else:
 #         devtype = "cpu"
 #     if devtype == "gpu":
-#         try:
-#             get_impl(node, "gpu")
-#         except MethodNotDefined:
-#             print "couldn't get gpu func for ", node
-#             devtype = "cpu"
-
 
 #     # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
 #     idx = 0 if idx is None else idx
 #     machine = "default" if machine is None else machine
 #     return Device(machine, devtype, idx)
+
+def determine_devices(nodes_sorted, node2memowner, node2forceddev=None):
+    # Op definitions (available impls, inplace-ness, etc) define constraints
+    # on possible devices for a node
+
+    # (1) Get available devices for nodes, determined by which impls are available and node types
+    compile_info = impls.get_compile_info()
+    node2availabledevs = {}
+    for node in nodes_sorted: # doesn't have be ordered
+        if node2forceddev is not None and node in node2forceddev:
+            node2availabledevs[node] = [node2forceddev[node]]
+        elif node.is_argument():
+            node2availabledevs[node] = [Device(devtype="cpu")]
+        elif node.is_data():
+            node2availabledevs[node] = [node.get_device()]
+        else:
+            can_run_on_gpu = False
+            if compile_info["CGT_ENABLE_CUDA"]:
+                try:
+                    node.op.get_cuda_impl(node.parents)
+                except MethodNotDefined:
+                    pass
+                else:
+                    can_run_on_gpu = True
+            node2availabledevs[node] = [Device(devtype="cpu"), Device(devtype="gpu")] if can_run_on_gpu else [Device(devtype="cpu")]
+
+    # Constraints on devices for output locations (given by node2memowner) must be satisfied
+    # so prune devices here
+    node2candidatedevs = {}
+    for node in node2availabledevs:
+        node2candidatedevs[node] = set(node2availabledevs[node])
+    for node in nodes_sorted:
+        print node, map(str, list(node2candidatedevs[node])), map(str, list(node2candidatedevs[node2memowner[node]]))
+        node2candidatedevs[node] &= node2candidatedevs[node2memowner[node]]
+        if not node2candidatedevs[node]:
+            raise RuntimeError("No available device for node %s, because of memory owner %s" % (node, node2memowner[node]))
+
+    # Constraints on inputs can be satisfied by inserting Transports
+
+    # (2) Memory ownership constrains writes, parent devices constrain reads
+    # samedev_constraints = defaultdict(set)
+    # for node in nodes_sorted:
+    #     if node2memowner[node] != node:
+    #         samedev_constraints[node].add(node2memowner[node])
+    #         samedev_constraints[node2memowner[node]].add(node)
+
+    #     samedev_constraints[node] |= set(node.parents)
+    #     for parent in node.parents:
+    #         samedev_constraints[parent].add(node)
+
+    # Greedy assignment: assign as many nodes to GPU as possible
+    node2dev = {}
+    for node in nodes_sorted:
+        assert node2candidatedevs[node] # every node should have at least one device
+        best_dev = None
+        for d in node2candidatedevs[node]:
+            if best_dev is None or d.devtype == "gpu":
+                best_dev = d
+        node2dev[node] = best_dev
+
+    # In the future, the assignment can take constraints into account to minimze the number of needed transports
+
+    return node2dev
+
 
 
 # def assign_devices(outputs, devfn=None):
@@ -178,9 +233,7 @@ def topsorted_shapes_first(outputs, node2shape):
                 stack.append((j,0))
     return out
 
-def determine_memowner(nodes_sorted, updates, node2dev):
-    # TODO use node2loc
-
+def determine_memowner(nodes_sorted, updates):
     # First determine how many "child" nodes each node has
     node2child = defaultdict(list)
     for node in nodes_sorted:
@@ -226,8 +279,8 @@ class MemCounter(object):
     """
     def __init__(self):
         self.count=0
-    def new_memloc(self):
-        out = MemLocation(self.count)
+    def new_memloc(self, devtype):
+        out = MemLocation(self.count, devtype)
         self.count += 1
         return out
 
@@ -239,38 +292,59 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
 
     for node in nodes_sorted:
         if node.is_argument():
-            write_loc = counter.new_memloc()
+            print node2dev[node]
+            write_loc = counter.new_memloc(node2dev[node].devtype)
             node2memloc[node] = write_loc
             i = inputs.index(node)
             instrs.append(LoadArgument(i, write_loc))
         else:
-            read_locs = [node2memloc[p] for p in node.parents]
+            # Transports for reads
+            read_locs = []
+            for parent in node.parents:
+                read_loc = node2memloc[parent]
+                if read_loc.devtype != node2dev[node].devtype:
+                    # Allocation instr for the transport destination
+                    transported_loc = counter.new_memloc(node2dev[node].devtype)
+                    parent_shape = node2shape[parent] if parent.ndim > 0 else []
+                    parent_shape_locs = [node2memloc[shpel] for shpel in parent_shape]
+                    instrs.append(Alloc(node.dtype, parent_shape_locs, transported_loc))
+                    # The transport instruction
+                    tmp_transport_node = Result(TransportToOutputDevice(), [parent])
+                    instrs.append(ReturnByRef(tmp_transport_node, [read_loc], transported_loc))
+                    read_locs.append(transported_loc)
+                else:
+                    read_locs.append(read_loc)
+            assert len(read_locs) == len(node.parents)
+
             if node.op.call_type == "inplace":
                 if node2memowner[node] == node:
                     if is_tensor(node): # just make one memory location for output
                         nodeshape = node2shape[node] if node.ndim > 0 else []
                         shape_locs = [node2memloc[shpel] for shpel in nodeshape]
-                        # XXX can probably get rid of condition
-                        write_loc = counter.new_memloc()                    
+                        # XXX can probably get rid of condition # what is this comment???
+                        write_loc = counter.new_memloc(node2dev[node].devtype)                    
                         instrs.append(Alloc(node.dtype, shape_locs, write_loc))
                     else: # if it's a tuple, we need to allocate all of the components, then build tuple
                         nodeshape = node2shape[node]
                         assert isinstance(nodeshape, tuple)
                         arr_locs = []
                         for (arrshp, arrtyp) in utils.safezip(nodeshape, node.get_type()):
-                            arr_loc = counter.new_memloc()
+                            arr_loc = counter.new_memloc(node2dev[node].devtype) #XXX is this right?
                             shape_locs = [node2memloc[shpel] for shpel in arrshp]
                             instrs.append(Alloc(arrtyp.dtype, shape_locs, arr_loc))
                             arr_locs.append(arr_loc)
-                        write_loc = counter.new_memloc()   
+                        write_loc = counter.new_memloc(node2dev[node].devtype)
                         instrs.append(BuildTup(node.get_type(), arr_locs, write_loc))
 
                 else:
+                    # If this node writes to another node's memory, the devices must be the same
+                    # this should have been enforced in determine_devices()
+                    assert node2dev[node] == node2dev[node2memowner[node]]
                     write_loc = node2memloc[node2memowner[node]]
                 instrs.append(ReturnByRef(node, read_locs, write_loc))
             else:
                 assert node.op.call_type == "valret"
-                write_loc = counter.new_memloc()
+                write_loc = counter.new_memloc(node2dev[node].devtype)
                 instrs.append(ReturnByVal(node, read_locs, write_loc))
         node2memloc[node] = write_loc
     return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
@@ -289,8 +363,6 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     outputs_updatetargs_simple, analysis = \
         simplify_and_analyze(outputs_updatetargs) if load_config()["enable_simplification"] \
         else (outputs_updatetargs, analyze(outputs_updatetargs))
-    # Determine location and device of nodes
-    node2dev = determine_devices(outputs_updatetargs_simple)
 
     # Phase 2: build execution graph
     # ------------------------------------------------------
@@ -300,7 +372,9 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     # (memowner : "memory owner")
     updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
     updatesrcs = [before for (before, _) in updates]
-    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple), node2dev)
+    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple))
+    # Determine location and device of nodes
+    node2dev = determine_devices(nodes_sorted, node2memowner)
     # Find the outputs we want to return
     outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
     # Generate execution graph
@@ -368,14 +442,15 @@ class ExecutionGraph(object):
         }
 
 class MemLocation(object):
-    def __init__(self, idx):
-        assert isinstance(idx, int)
+    def __init__(self, idx, devtype):
+        assert isinstance(idx, int) and devtype in ["cpu", "gpu"]
         self.index = idx
-        #TODO: type and device
+        self.devtype = devtype
+        # TODO: dtype
     def to_json(self):
         return self.index
     def __repr__(self):
-        return "%%%i" % self.index
+        return "%%%i(%s)" % (self.index, self.devtype)
 
 class Interpreter(object):
     def __call__(self, args):
@@ -587,7 +662,7 @@ class LoadArgument(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, interp.getarg(self.ind))
     def __repr__(self):
-        return "%%%i = LoadArg ind:%i" % (self.write_loc.index, self.ind)
+        return "%s = LoadArg ind:%i" % (self.write_loc, self.ind)
     def to_json(self):
         return {"type" : "LoadArgument", "write_loc" : self.write_loc.to_json(), "ind" : self.ind}
 
@@ -602,7 +677,7 @@ class Alloc(Instr):
         if prevarr is None or prevarr.shape != shp: 
             interp.set(self.write_loc, np.ones(shp, self.dtype))
     def __repr__(self):
-        return "%%%i = Alloc shp:%s dtype:%s" % (self.write_loc.index, "["+", ".join("%%%i"%loc.index for loc in self.read_locs)+"]", self.dtype)
+        return "%s = Alloc shp:%s dtype:%s" % (self.write_loc, str(self.read_locs), self.dtype)
     def to_json(self):
         return {"type" : "Alloc", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json()}
 
@@ -614,7 +689,7 @@ class BuildTup(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, tuple(interp.get(loc) for loc in self.read_locs))
     def __repr__(self):
-        return "%%%i = BuildTup:%s" % (self.write_loc.index, self.typ)
+        return "%s = BuildTup:%s" % (self.write_loc, self.typ)
     def to_json(self):
         return {"type" : "BuildTup"} # XXX
 
@@ -628,7 +703,7 @@ class ReturnByRef(Instr):
             [interp.get(mem) for mem in self.read_locs],
             interp.get(self.write_loc))
     def __repr__(self):
-        return "%%%i = ReturnByRef op:%s args:%s" % (self.write_loc.index, str(self.node.op), str(self.read_locs))
+        return "%s = ReturnByRef op:%s args:%s" % (self.write_loc, str(self.node.op), str(self.read_locs))
     def to_json(self):
         return {"type" : "ReturnByRef", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
 
@@ -640,6 +715,6 @@ class ReturnByVal(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, interp.apply_valret(self.node, [interp.get(mem) for mem in self.read_locs]))
     def __repr__(self):
-        return "%%%i = ReturnByVal op:%s args:%s" % (self.write_loc.index, str(self.node.op), str(self.read_locs))
+        return "%s = ReturnByVal op:%s args:%s" % (self.write_loc, str(self.node.op), str(self.read_locs))
     def to_json(self):
         return {"type" : "ReturnByVal", "read_locs" : _list_to_json(self.read_locs), "write_loc" : self.write_loc.to_json(), "op" : str(self.node.op)}
