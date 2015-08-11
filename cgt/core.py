@@ -1501,8 +1501,8 @@ class GetSli(Op):
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
-        inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*in->strides[%i]"%ax for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join(["i%i"%ax + "*write->strides[%i]"%ax for ax in xrange(x.ndim)])
+        inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*in->stride(%i)"%ax for ax in xrange(x.ndim)])
+        outidxexpr = " + ".join(["i%i"%ax + "*write->stride(%i)"%ax for ax in xrange(x.ndim)])
         code = r"""
 extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0];
@@ -1593,6 +1593,45 @@ class IncFlatIndices(Op):
         return cgt.shape(inputs[0])
     def typ_apply(self, inputs):
         return inputs[0].get_type()
+
+
+class Flip(Op):
+    def __init__(self, axes):
+        self.axes = axes
+    def get_diff(self, _):
+        return [True]
+    def get_py_impl(self):
+        def f(reads, write):
+            x = reads[0]
+            slices = [slice(0,None,None) for _ in xrange(x.ndim)]
+            for ax in self.axes: slices[ax] = slice(None,None,-1)
+            np.copyto(write, x[slices])
+        return PyImpl(inplace_func=f)
+    def pullback(self, inputs, output, goutput):
+        return [cgt.flip(goutput, self.axes)]
+    def shp_apply(self, inputs):
+        return cgt.shape(inputs[0])
+    def typ_apply(self, inputs):
+        return inputs[0].typ
+    def get_c_impl(self, inputs):
+        x = inputs[0]
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        closeloops = "}"*x.ndim
+        inidxexpr =  ",".join(["i%i"%ax for ax in xrange(x.ndim)])
+        outidxexpr =  ",".join([("shape[%(ax)s] - 1 - i%(ax)s" if ax in self.axes else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+        code = r"""
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray *in=reads[0], *out=write;
+    cgt_assert(in->size() == out->size());
+    const size_t* shape = in->shape();
+    %(openloops)s
+        out->at<%(cdtype)s>(%(outidxexpr)s) = in->at<%(cdtype)s>(%(inidxexpr)s);
+    %(closeloops)s
+}
+"""%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops, 
+    inidxexpr=inidxexpr, cdtype=np2c[inputs[0].dtype])
+        return CImpl(code)
+
 
 
 # Linalg
@@ -2028,8 +2067,12 @@ def maybe_replace(node, analysis, repl):
     # ASSUMPTION: the only type of nullary ops that we can propagate this way
     # are subclasses of Constant
     if len(parents) > 0 and all(isinstance(par.op, Constant) for par in parents):
-        if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
-        return cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
+        try:
+            out = cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
+            if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
+            return out
+        except MethodNotDefined:
+            utils.warn("Couldn't get a python impl of %s"%node.op)
     # -- SIZE --
     if isinstance(node.op, Size):
         s = analysis["node2shape"][parents[0]][node.op.axis]

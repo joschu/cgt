@@ -107,6 +107,16 @@ public:
   cgtDevtype devtype() const { return devtype_; }
   bool ownsdata() const { return ownsdata_; }
   void* data() { return data_; }
+  
+  template <typename T>
+  T& at(size_t i) {return static_cast<T*>(data_)[i];}
+  template <typename T>
+  T& at(size_t i, size_t j) {return static_cast<T*>(data_)[i*shape_[1]+j];}
+  template <typename T>
+  T& at(size_t i, size_t j, size_t k) {return static_cast<T*>(data_)[(i*shape_[1]+j)*shape_[2]+k];}
+  template <typename T>
+  T& at(size_t i, size_t j, size_t k, size_t l) {return static_cast<T*>(data_)[((i*shape_[1]+j)*shape_[2]+k)*shape_[3]+l];}
+  void print();
 
 private:
   const size_t ndim_;

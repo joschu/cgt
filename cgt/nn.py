@@ -5,7 +5,7 @@ Neural network library, drawing inspiration from Torch's nn and nngraph
 import cgt
 from cgt import core, size
 import numpy as np
-# from cgt.img_ops import *
+from .im2col import im2col, Im2ColInfo
 
 class Affine(object):
     """
@@ -85,10 +85,9 @@ def dropout(x, p=0):
         x = x /(1.0-p)
         return x
 
-
-def conv2d(x_BKRC, f_LKrc, border_mode="full",subsample=(1,1),pad=(0,0)):
+def conv2d_fft(x_BKRC, f_LKrc, subsample, pad):
     # TODO add shape assertion
-    assert border_mode=="full" # eventually support full & circular
+    f_LKrc = cgt.flip(f_LKrc, [2,3])
     padnrows = size(x_BKRC, 2) + size(f_LKrc, 2) - 1
     padncols = size(x_BKRC, 3) + size(f_LKrc, 3) - 1
     tx = cgt.rfft(x_BKRC, (padnrows,padncols), (2,3))
@@ -96,3 +95,19 @@ def conv2d(x_BKRC, f_LKrc, border_mode="full",subsample=(1,1),pad=(0,0)):
     out = cgt.irfft( cgt.einsum("BKrc,LKrc->BLrc",tx, tf), (2,3))
     out = out[:,:,pad[0]:(padnrows-pad[0]):subsample[0],pad[1]:(padncols-pad[1]):subsample[1]] #pylint: disable=E1127
     return out
+
+def conv2d(x_BKRC, f_LKrc, kersize, subsample=(1,1), pad=(0,0)):
+    kerh, kerw = kersize    
+    padh, padw = pad
+    strideh, stridew = subsample
+    col_BmnZ = im2col(x_BKRC, Im2ColInfo(kerh, kerw, padh, padw, strideh, stridew))
+    L,K,r,c = f_LKrc.shape
+    f_LZ = f_LKrc.reshape([L, K*r*c])
+    B,m,n,Z = col_BmnZ.shape
+    # col_Brc_Z = col_BrcZ.reshape([B, r*c*Z])
+    print cgt.core.infer_shape(col_BmnZ)
+    print cgt.core.infer_shape(f_LZ)
+    B,m,n,Z = col_BmnZ.shape
+    col_Bmn_Z = col_BmnZ.reshape([B*m*n, Z])
+    col_Bmn_L = core.Result(core.Mul22(False,True), [col_Bmn_Z, f_LZ])
+    return col_Bmn_L.reshape([B,m,n,L]).transpose([0,3,1,2])

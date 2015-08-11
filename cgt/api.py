@@ -175,6 +175,11 @@ def flatcat(xs):
 def flatten(x):
     return reshape(x, [mul_multi(shape(x))])
 
+def flip(x, axes):
+    x = core.as_node(x)
+    assert isinstance(axes, list)
+    return core.Result(core.Flip(axes), [x])
+
 def floor_divide(x, y):
     return ifloor(x / y)
 

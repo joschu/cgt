@@ -25,10 +25,12 @@ class ConvTestCase(unittest.TestCase):
         for b in xrange(x.shape[0]):
             for inchan in xrange(x.shape[1]):
                 for outchan in xrange(outchans):
-                    out[b,outchan] += scipy.signal.convolve2d(x[b,inchan],f[outchan,inchan],mode='full')
+                    out[b,outchan] += scipy.signal.convolve2d(x[b,inchan],f[outchan,inchan][::-1,::-1],mode='full')
 
         cgt.set_precision('double')
-        out1 = cgt.numeric_eval1(nn.conv2d(cgt.constant(x), cgt.constant(f)), {})
+        f = cgt.function([], nn.conv2d(cgt.constant(x), cgt.constant(f), kersize=(filtrows,filtcols), pad=(filtrows-1, filtcols-1)))
+        out1 = f()
+        # out1 = cgt.numeric_eval1(nn.conv2d(cgt.constant(x), cgt.constant(f), kersize=(filtrows,filtcols)), {})
         np.testing.assert_allclose(out, out1)
 
 if __name__ == "__main__":
