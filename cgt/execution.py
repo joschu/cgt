@@ -310,6 +310,7 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
                     instrs.append(Alloc(node.dtype, parent_shape_locs, transported_loc))
                     # The transport instruction
                     tmp_transport_node = Result(TransportToOutputDevice(), [parent])
+                    assert read_loc.devtype != transported_loc.devtype
                     instrs.append(ReturnByRef(tmp_transport_node, [read_loc], transported_loc))
                     read_locs.append(transported_loc)
                 else:

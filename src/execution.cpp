@@ -21,10 +21,10 @@ public:
     : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL) { }
 
     cgtObject * get(const MemLocation& m) {
-        return storage_[m.index].get();
+        return storage_[m.index()].get();
     }
     void set(const MemLocation& m, cgtObject * val) {
-        storage_[m.index] = val;
+        storage_[m.index()] = val;
     }
     cgtObject * getarg(int argind) {
         cgt_assert(argind < args_->len);        
@@ -42,7 +42,7 @@ public:
         size_t n_outputs = output_locs_.size();
         cgtTuple * out = new cgtTuple(n_outputs);
         for (int i=0; i < n_outputs; ++i) {
-            int index = output_locs_[i].index; // XXX what is this used for?
+            int index = output_locs_[i].index(); // XXX what is this used for?
             out->setitem(i, get(output_locs_[i]));
         }
         return out;
@@ -65,10 +65,10 @@ public:
     }
 
     cgtObject * get(const MemLocation& m) {
-        return storage_[m.index].get();
+        return storage_[m.index()].get();
     }
     void set(const MemLocation& m, cgtObject * val) {
-        storage_[m.index] = val;
+        storage_[m.index()] = val;
     }
     cgtObject * getarg(int argind) {
         cgt_assert(argind < args_->len);
@@ -94,7 +94,7 @@ public:
             for (int instr_ind : ready_instr_inds_) {
                 Instruction* instr = eg_->instrs()[instr_ind];
                 instr_threads[j] = std::thread(fire_instr, instr, this);
-                int ind = instr->get_writeloc().index;
+                int ind = instr->get_writeloc().index();
                 write_queue_[ind].erase(write_queue_[ind].begin());
                 j++;
             }
@@ -107,7 +107,7 @@ public:
         size_t n_outputs = output_locs_.size();
         cgtTuple * out = new cgtTuple(n_outputs);
         for (int i=0; i < n_outputs; ++i) {
-            int index = output_locs_[i].index;
+            int index = output_locs_[i].index();
             out->setitem(i, get(output_locs_[i]));
         }
         return out;
@@ -115,7 +115,7 @@ public:
     }
     void setup_instr_locs() {
         for (int k=0; k < eg_->n_instrs(); k++) {
-            write_queue_[eg_->instrs()[k]->get_writeloc().index].push_back(k);
+            write_queue_[eg_->instrs()[k]->get_writeloc().index()].push_back(k);
             instrs_left_.insert(k);
         }
         update_instr_locs();
@@ -140,11 +140,11 @@ public:
         Instruction* instr = eg_->instrs()[instr_ind];
         bool read_rdy = true;
         for (const MemLocation& loc : instr->get_readlocs()) {
-            for (int k : write_queue_[loc.index]) {
+            for (int k : write_queue_[loc.index()]) {
                 if (k < instr_ind) read_rdy = false;
             }
         }
-        bool write_rdy = write_queue_[instr->get_writeloc().index][0] == instr_ind;
+        bool write_rdy = write_queue_[instr->get_writeloc().index()][0] == instr_ind;
         return read_rdy && write_rdy;
     }
     ~ParallelInterpreter() {
@@ -183,7 +183,7 @@ void Alloc::fire(Interpreter* interp) {
 
     cgtArray* cur = static_cast<cgtArray*>(interp->get(writeloc));
     if (!(cur && cur->ndim() == ndim && std::equal(shape.begin(), shape.end(), cur->shape()))) {
-        interp->set(writeloc, new cgtArray(ndim, shape.data(), dtype, cgtCPU));
+        interp->set(writeloc, new cgtArray(ndim, shape.data(), dtype, writeloc.devtype()));
     }
 }
 

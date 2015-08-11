@@ -33,11 +33,13 @@ public:
 
 class MemLocation {
 public:
-    MemLocation() : index(0) {}
-    MemLocation(size_t index) : index(index) {}
-    size_t get_index() {return index;}
-    size_t index;
-    cgtDevtype devtype;
+    MemLocation() : index_(0), devtype_(cgtCPU) {}
+    MemLocation(size_t index, cgtDevtype devtype) : index_(index), devtype_(devtype) {}
+    size_t index() const { return index_; }
+    cgtDevtype devtype() const { return devtype_; }
+private:
+    size_t index_;
+    cgtDevtype devtype_; // TODO: full device, not just devtype
 };
 
 class Interpreter;

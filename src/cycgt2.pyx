@@ -260,8 +260,8 @@ cdef extern from "execution.h" namespace "cgt":
         ByValFunCl(cgtByValFun, void*)
         ByValFunCl()
     cppclass MemLocation:
-        MemLocation(size_t)
         MemLocation()
+        MemLocation(size_t, cgtDevtype)
     cppclass Instruction:
         pass
     cppclass ExecutionGraph:
@@ -366,7 +366,7 @@ cdef ByValFunCl _node2valretclosure(oplib, node) except *:
         return ByValFunCl(<cgtByValFun>cfun, _ctypesstructptr(closure))
 
 cdef MemLocation _tocppmem(object pymem):
-    return MemLocation(<size_t>pymem.index)
+    return MemLocation(<size_t>pymem.index, devtype_fromstr(pymem.devtype))
 
 cdef vector[MemLocation] _tocppmemvec(object pymemlist) except *:
     cdef vector[MemLocation] out = vector[MemLocation]()
