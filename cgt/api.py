@@ -264,6 +264,7 @@ def max(x, axis=None, keepdims=False): #pylint: disable=W0622
     return out
 
 def mean(x, axis=None, keepdims=False):
+    if x.dtype == 'i1': x = cgt.cast(x, cgt.floatX)
     axes = _red_axes(axis, x.ndim)
     return sum(x, axis=axes, keepdims=keepdims) / mul_multi([size(x, ax) for ax in axes])
 

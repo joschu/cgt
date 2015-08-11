@@ -43,7 +43,7 @@ cgtArray::cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype 
 
 void cgtArray::print() {
   printf("Array{shape=(");
-  if (ndim_ > 0) printf("%i",shape_[0]);
+  if (ndim_ > 0) printf("%zu",shape_[0]);
   for (int i=1; i < ndim_; ++i) {
     printf(", %zu", shape_[i]);
   }

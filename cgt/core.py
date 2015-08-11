@@ -793,7 +793,17 @@ class Fill(Op):
     def typ_apply(self, inputs):
         assert all(x.dtype == 'i8' for x in inputs)
         return TensorType(self.dtype, len(inputs))
-
+    def get_closure(self, inputs):
+        typ = ctypes.c_long if self.value.dtype.kind=='i' else ctypes.c_double
+        return [("value", typ, self.value.item())]
+    def get_c_impl(self, inputs):
+        outdtype = Dtype.canon(self.value.dtype)
+        return CImpl(code=r"""
+extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads, cgtArray* write) {
+    size_t s = write->size();
+    %(cdtype)s value = cldata->value;
+    for (int i=0; i < s; ++i) write->at<%(cdtype)s>(i) = value;
+}"""%dict(cdtype = np2c[outdtype]))
 def _is_int(node):
     return dtype_kind(node.dtype)=='i'
 
@@ -1242,7 +1252,6 @@ class Stack(Op):
         return TensorType(inputs[0].dtype, inputs[0].ndim+1)
 
 class Repeat(Op):
-    call_type = "inplace"
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, num_inputs):
@@ -1257,6 +1266,22 @@ class Repeat(Op):
                 arr = np.repeat(arr, numrep, ax)
             np.copyto(write, arr)
         return PyImpl(inplace_func=f)
+    def get_c_impl(self, inputs):
+        x = inputs[0]
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        closeloops = "}"*x.ndim
+        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        inidxexpr = ",".join(["0" if ax in self.axes else "i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        code = r"""
+extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray *read=reads[0];
+    %(openloops)s
+        write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
+    %(closeloops)s
+}
+"""%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
+    cdtype=np2c[inputs[0].dtype])
+        return CImpl(code)
     def get_replacement(self, parents, analysis):
         if parents[0] in analysis["node2sv"]:
             value = analysis["node2sv"][parents[0]]

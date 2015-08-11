@@ -11,7 +11,7 @@ import time
 def init_weights(*shape):
     return cgt.shared(np.random.randn(*shape) * 0.01)
 
-def rmsprop_updates(cost, params, lr=0.001, rho=0.9, epsilon=1e-6):
+def rmsprop_updates(cost, params, stepsize=0.001, rho=0.9, epsilon=1e-6):
     grads = cgt.grad(cost, params)
     updates = []
     for p, g in zip(params, grads):
@@ -20,15 +20,15 @@ def rmsprop_updates(cost, params, lr=0.001, rho=0.9, epsilon=1e-6):
         gradient_scaling = cgt.sqrt(acc_new + epsilon)
         g = g / gradient_scaling
         updates.append((acc, acc_new))
-        updates.append((p, p - lr * g))
+        updates.append((p, p - stepsize * g))
     return updates
 
 def model(X, w_h, w_h2, w_o, p_drop_input, p_drop_hidden):
     X = nn.dropout(X, p_drop_input)
-    h = nn.rectify(cgt.dot(X, w_h))
+    h = cgt.tanh(cgt.dot(X, w_h))
 
     h = nn.dropout(h, p_drop_hidden)
-    h2 = nn.rectify(cgt.dot(h, w_h2))
+    h2 = cgt.tanh(cgt.dot(h, w_h2))
 
     h2 = nn.dropout(h2, p_drop_hidden)
     py_x = nn.softmax(cgt.dot(h2, w_o))
@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--epochs",type=int,default=10)
     parser.add_argument("--profile",action="store_true")
     parser.add_argument("--dropout",action="store_true")
+    parser.add_argument("--stepsize",type=float, default=.001)
     args = parser.parse_args()
 
     mnist = fetch_dataset("http://rll.berkeley.edu/cgt-data/mnist.npz")
@@ -76,7 +77,7 @@ def main():
     params = [w_h, w_h2, w_o]
 
     cost_drop = -cgt.mean(categorical.loglik(y, pofy_drop))
-    updates = rmsprop_updates(cost_drop, params, lr=0.0005)
+    updates = rmsprop_updates(cost_drop, params, stepsize=args.stepsize)
 
     y_nodrop = cgt.argmax(pofy_drop, axis=1)
     cost_nodrop = -cgt.mean(categorical.loglik(y, pofy_nodrop))
@@ -85,7 +86,7 @@ def main():
     train = cgt.function(inputs=[X, y], outputs=[], updates=updates)
     computeloss = cgt.function(inputs=[X, y], outputs=[err_nodrop,cost_nodrop])
 
-    batch_size=64
+    batch_size=128
 
     if args.profile: cgt.execution.profiler.start()
 

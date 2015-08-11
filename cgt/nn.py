@@ -53,15 +53,8 @@ def setup_contiguous_storage(shareds, dtype = None):
         start += size
     return flatvec
 
-def _nu_rectify(x, out=None):
-    if out is None:
-        return x * (x > 0)
-    else:
-        np.multiply(x, (x>0), out=out)
-
 def rectify(x):
-    return core.Result(core.ElwiseUnary("rectify",
-        info=core.UnaryInfo("rectify",_nu_rectify, True, "s", lambda x,y,gy:gy*cgt.sign(x), "x*(x>0)")),[x])
+    return x * (x >= 0)
 
 def softmax(x,axis=1):
     x = cgt.broadcast("-", x, x.max(axis=1,keepdims=True),"xx,x1")
