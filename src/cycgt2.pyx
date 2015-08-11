@@ -377,16 +377,17 @@ cdef vector[MemLocation] _tocppmemvec(object pymemlist) except *:
 cdef Instruction* _tocppinstr(object oplib, object pyinstr) except *:
     t = type(pyinstr)
     cdef Instruction* out
+    cdef MemLocation wloc = _tocppmem(pyinstr.write_loc)
     if t == execution.LoadArgument:
-        out = new LoadArgument(repr(pyinstr), pyinstr.ind, _tocppmem(pyinstr.write_loc))
+        out = new LoadArgument(repr(pyinstr), pyinstr.ind, wloc)
     elif t == execution.Alloc:
-        out = new Alloc(repr(pyinstr), dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
+        out = new Alloc(repr(pyinstr), dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == execution.BuildTup:
-        out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc))
+        out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == execution.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc), _node2inplaceclosure(oplib, pyinstr.node))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _node2inplaceclosure(oplib, pyinstr.node))
     elif t == execution.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), _tocppmem(pyinstr.write_loc),_node2valretclosure(oplib, pyinstr.node))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _node2valretclosure(oplib, pyinstr.node))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out

@@ -74,6 +74,12 @@ public:
         cgt_assert(argind < args_->len);
         return args_->members[argind].get();
     }
+
+    static void fire_instr(Instruction* instr, Interpreter* interp)
+    {
+        instr->fire(interp);
+    }
+
     cgtTuple * run(cgtTuple * newargs) {
         args_ = newargs;
         cgt_assert(newargs != NULL);
@@ -84,10 +90,13 @@ public:
             const int nthreads = ready_instr_inds_.size();
             // XXX use thread pool
             std::vector<std::thread> instr_threads(nthreads);
+            int j = 0;
             for (int instr_ind : ready_instr_inds_) {
                 Instruction* instr = eg_->instrs()[instr_ind];
-                instr_threads[instr_ind] = std::thread(std::bind(&Instruction::fire, instr,
-                            std::placeholders::_1), this);
+                instr_threads[j] = std::thread(fire_instr, instr, this);
+                int ind = instr->get_writeloc().index;
+                write_queue_[ind].erase(write_queue_[ind].begin());
+                j++;
             }
             for (int k = 0; k < instr_threads.size(); k++)
                 instr_threads[k].join();
@@ -106,24 +115,36 @@ public:
     }
     void setup_instr_locs() {
         for (int k=0; k < eg_->n_instrs(); k++) {
-            write_queue_[k].push(eg_->instrs()[k]->get_writeloc().index);
+            write_queue_[eg_->instrs()[k]->get_writeloc().index].push_back(k);
+            instrs_left_.insert(k);
         }
         update_instr_locs();
     }
     void update_instr_locs() {
+        for (int instr_ind : ready_instr_inds_) {
+            instrs_left_.erase(instr_ind);
+        }
         ready_instr_inds_.clear();
         for (int instr_ind : instrs_left_) {
-            if (ready_to_fire(instr_ind))
+            if (ready_to_fire(instr_ind)) {
                 ready_instr_inds_.push_back(instr_ind);
+            }
+        }
+        printf("ready_instrs: %d\n", int(ready_instr_inds_.size()));
+        for (int k : ready_instr_inds_) {
+            Instruction* instr = eg_->instrs()[k];
+            printf("%s ", instr->repr().c_str());
         }
     }
     bool ready_to_fire(int instr_ind) {
         Instruction* instr = eg_->instrs()[instr_ind];
         bool read_rdy = true;
-        for (MemLocation loc : instr->get_readlocs())
-            if (write_queue_[loc.index].size() > 0)
-                read_rdy = false;
-        bool write_rdy = write_queue_[instr->get_writeloc().index].front() == instr_ind;
+        for (const MemLocation& loc : instr->get_readlocs()) {
+            for (int k : write_queue_[loc.index]) {
+                if (k < instr_ind) read_rdy = false;
+            }
+        }
+        bool write_rdy = write_queue_[instr->get_writeloc().index][0] == instr_ind;
         return read_rdy && write_rdy;
     }
     ~ParallelInterpreter() {
@@ -134,7 +155,7 @@ private:
     vector<IRC<cgtObject>> storage_;
     std::set<int> instrs_left_;
     vector<int> ready_instr_inds_;
-    vector<std::queue<int> > write_queue_;
+    vector<std::vector<int> > write_queue_;
     cgtTuple * args_;
 };
 
