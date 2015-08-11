@@ -53,6 +53,7 @@ static inline int cgt_itemsize(cgtDtype dtype) {
       return 8;
   }
   assert(0 && "invalid dtype");
+  return -1;
 }
 
 typedef enum cgtDevtype {

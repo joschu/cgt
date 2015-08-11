@@ -114,6 +114,7 @@ def determine_devices(nodes_sorted, node2memowner, node2forceddev=None):
     # Greedy assignment: assign as many nodes to GPU as possible
     node2dev = {}
     for node in nodes_sorted:
+        print node
         assert node2candidatedevs[node] # every node should have at least one device
         best_dev = None
         for d in node2candidatedevs[node]:
@@ -168,7 +169,7 @@ def is_tensor(x):
 def is_tuple(x):
     return isinstance(x.typ, TupleType)
 
-def create_interpreter(inputs, outputs, eg, node2memloc):
+def create_interpreter(inputs, outputs, eg, node2memloc, node2dev):
     assert isinstance(eg, ExecutionGraph)
     input_types = [input.get_type() for input in inputs]
     output_types = [output.get_type() for output in outputs]
@@ -186,9 +187,9 @@ def create_interpreter(inputs, outputs, eg, node2memloc):
         oplib = impls.OpLibrary(force_python_impl=False)
         import cycgt2
         if parallel_interp:
-            return cycgt2.CppInterpreterWrapper(eg, oplib, input_types, output_locs, True)
+            return cycgt2.CppInterpreterWrapper(eg, oplib, node2dev, input_types, output_locs, True)
         else:
-            return cycgt2.CppInterpreterWrapper(eg, oplib, input_types, output_locs, False)
+            return cycgt2.CppInterpreterWrapper(eg, oplib, node2dev, input_types, output_locs, False)
     else:
         raise NotImplementedError("invalid backend %s"%backend)
 
@@ -286,13 +287,13 @@ class MemCounter(object):
 
 
 def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memowner, node2dev):
+    node2dev = copy.copy(node2dev) # we'll insert transport ops
     instrs = []
     counter = MemCounter()
     node2memloc = {}
 
     for node in nodes_sorted:
         if node.is_argument():
-            print node2dev[node]
             write_loc = counter.new_memloc(node2dev[node].devtype)
             node2memloc[node] = write_loc
             i = inputs.index(node)
@@ -313,6 +314,7 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
                     assert read_loc.devtype != transported_loc.devtype
                     instrs.append(ReturnByRef(tmp_transport_node, [read_loc], transported_loc))
                     read_locs.append(transported_loc)
+                    node2dev[tmp_transport_node] = Device(devtype="cpu")
                 else:
                     read_locs.append(read_loc)
             assert len(read_locs) == len(node.parents)
@@ -348,7 +350,7 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
                 write_loc = counter.new_memloc(node2dev[node].devtype)
                 instrs.append(ReturnByVal(node, read_locs, write_loc))
         node2memloc[node] = write_loc
-    return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
+    return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc, node2dev
 
 
 def run_compilation_pipeline(inputs, outputs, updates, givens):
@@ -379,7 +381,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     # Find the outputs we want to return
     outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
     # Generate execution graph
-    eg, node2memloc = create_execution_graph(inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev)
+    eg, node2memloc, node2dev = create_execution_graph(inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev)
 
     # Print execution graph
     print 'begin'
@@ -388,7 +390,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------
-    interp = create_interpreter(inputs, outputs_simple, eg, node2memloc)
+    interp = create_interpreter(inputs, outputs_simple, eg, node2memloc, node2dev)
 
     # Done!
     return interp
