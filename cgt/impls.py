@@ -71,7 +71,7 @@ def _make_compile_command(fname, libpath, extra_link_flags):
         if fname.endswith(".cpp"):
             cmd = r'''
 cd %(cacheroot)s && \
-c++ %(cflags)s %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ %(cflags)s %(srcpath)s -std=c++11 -stdlib=libc++ -c -o %(srcpath)s.o %(includes)s %(defines)s && \
 c++ %(cflags)s %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
             '''%d
         elif fname.endswith(".cu"):
@@ -84,7 +84,7 @@ c++ %(cflags)s -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rp
     else:
         if fname.endswith(".cpp"):
             cmd = '''
-c++ %(cflags)s %(srcpath)s -std=c++11 -c -o %(srcpath)s.o %(includes)s %(defines)s && \
+c++ %(cflags)s %(srcpath)s -std=c++11 -stdlib=libc++ -c -o %(srcpath)s.o %(includes)s %(defines)s && \
 c++ %(cflags)s -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
             '''%d
         elif fname.endswith(".cu"):
