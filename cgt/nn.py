@@ -5,7 +5,8 @@ Neural network library, drawing inspiration from Torch's nn and nngraph
 import cgt
 from cgt import core, size
 import numpy as np
-from .im2col import im2col, Im2ColInfo
+from .im2col import im2col
+from .pooling import max_pool_2d
 
 class Affine(object):
     """
@@ -57,7 +58,7 @@ def rectify(x):
     return x * (x >= 0)
 
 def softmax(x,axis=1):
-    x = cgt.broadcast("-", x, x.max(axis=1,keepdims=True),"xx,x1")
+    # x = cgt.broadcast("-", x, x.max(axis=1,keepdims=True),"xx,x1")
     out = cgt.exp(x)
     out = cgt.broadcast("/", out, out.sum(axis=axis,keepdims=True), "xx,x1")
     return out
@@ -89,11 +90,8 @@ def conv2d_fft(x_BKRC, f_LKrc, subsample, pad):
     out = out[:,:,pad[0]:(padnrows-pad[0]):subsample[0],pad[1]:(padncols-pad[1]):subsample[1]] #pylint: disable=E1127
     return out
 
-def conv2d(x_BKRC, f_LKrc, kersize, subsample=(1,1), pad=(0,0)):
-    kerh, kerw = kersize    
-    padh, padw = pad
-    strideh, stridew = subsample
-    col_BmnZ = im2col(x_BKRC, Im2ColInfo(kerh, kerw, padh, padw, strideh, stridew))
+def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
+    col_BmnZ = im2col(x_BKRC, kernelshape, pad, stride)
     L,K,r,c = f_LKrc.shape
     f_LZ = f_LKrc.reshape([L, K*r*c])
     B,m,n,Z = col_BmnZ.shape
