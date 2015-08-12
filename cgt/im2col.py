@@ -86,17 +86,22 @@ extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
         return core.CImpl(code=code, includes=["im2col.h"])
 
 def test():
-    x = cgt.tensor4("x")
+    np.random.seed(0)
+    cgt.set_precision("quad")
+    x = cgt.tensor4("x", fixed_shape=(2,3,5,7))
     info = Im2ColInfo(4,4,0,0,1,1)
     y = cgt.core.Result(Im2Col(info), [x])
-    f = cgt.function([x],y)
     xval = np.arange(2*3*5*7).reshape(2,3,5,7).astype(cgt.floatX)
-    yval = f(xval)
-    assert np.allclose(yval[0,0,0] , xval[0,:,0:4,0:4].flatten())
-    gy = cgt.tensor4("gy")    
-    a,b,c,d = [cgt.scalar(dtype='i8') for _ in xrange(4)]
-    gx = cgt.core.Result(Col2Im(info), [gy,a,b,c,d])
-    fb = cgt.function([gy,a,b,c,d],gx)
-    gyval = np.ones_like(yval)
-    gxval = fb(gyval,2,3,5,7)
+    h = cgt.constant(np.random.randn(*core.infer_shape(y)))
+    cost = (y*h).sum()
+    fcost = cgt.function([x],cost)
+    fgrad = cgt.function([x], cgt.grad(cost, [x])[0])
 
+    from cgt.numeric_diff import numeric_grad
+    gnum = numeric_grad(fcost, xval)
+    gana = fgrad(xval)
+    assert np.allclose(gnum, gana)
+
+    fy = cgt.function([x],y)
+    yval = fy(xval)
+    assert np.allclose(yval[0,0,0] , xval[0,:,0:4,0:4].flatten())

@@ -252,6 +252,11 @@ class Node(object):
     def flatten(self):
         return cgt.flatten(self)
 
+    def is_array(self):
+        return isinstance(self.typ, TensorType)
+    def is_tuple(self):
+        return isinstance(self.typ, TupleType)
+
 def _ndarray_type(value):
     assert isinstance(value, np.ndarray)
     return TensorType(value.dtype, value.ndim)
@@ -627,20 +632,27 @@ def pullback(outputs, goutputs, wrt):
 
     active = dio.intersection(dibw)
 
+    # TODO: document what's going on here
+
     for node in reversed(nodelist):
         if node not in active: continue
         # once we reach a node, we have already backpropagated from all parents
         # so now we can sum up the gradients
         if len(var2gs[node]) > 1:
-            var2gs[node] = [cgt.add_multi(var2gs[node])]
+            if node.is_array():
+                var2gs[node] = [cgt.add_multi(var2gs[node])]
         # only one gradient at this point
         gnode = var2gs[node][0]
         if isinstance(node, Result):
+            # x       ->      (y, z)      ->      y
+            # input        Result{goofyop}      Result{tupleindex{0}}
+            # so at this point in the code, we just got gy.
+            # we first set the gradient at (y,z) to [[None,None]]
+            # then we set the first element to gy
             if isinstance(node.op, TupleIndex):
                 par = node.parents[0]
-                if par not in var2gs: var2gs[par] = [tuple([] for _ in len(par.get_type())) ]
-                var2gs[par][0][node.op.idx].append(gnode)
-                # XXX wil fail with unused outputs
+                if par not in var2gs: var2gs[par] = [[None for _ in par.typ]]
+                var2gs[par][0][node.op.idx] = gnode
             else:
                 gpars = node.op.pullback(node.parents, node, gnode)
                 diffs = node.get_diff()
