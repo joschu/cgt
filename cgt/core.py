@@ -258,6 +258,11 @@ class Node(object):
     def flatten(self):
         return cgt.flatten(self)
 
+    def is_array(self):
+        return isinstance(self.typ, TensorType)
+    def is_tuple(self):
+        return isinstance(self.typ, TupleType)
+
 def _ndarray_type(value):
     assert isinstance(value, np.ndarray)
     return TensorType(value.dtype, value.ndim)
@@ -510,7 +515,7 @@ class GetData(Op):
         return PyImpl(valret_func=f)
     def get_c_impl(self, *args):
         return CImpl(code=r"""
-extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
+extern "C" cgtArray* $function($closure* cldata, cgtArray** reads) {
     return (cgtArray*)cldata->ptr;
 }""")
     def get_closure(self, _):
@@ -633,20 +638,27 @@ def pullback(outputs, goutputs, wrt):
 
     active = dio.intersection(dibw)
 
+    # TODO: document what's going on here
+
     for node in reversed(nodelist):
         if node not in active: continue
         # once we reach a node, we have already backpropagated from all parents
         # so now we can sum up the gradients
         if len(var2gs[node]) > 1:
-            var2gs[node] = [cgt.add_multi(var2gs[node])]
+            if node.is_array():
+                var2gs[node] = [cgt.add_multi(var2gs[node])]
         # only one gradient at this point
         gnode = var2gs[node][0]
         if isinstance(node, Result):
+            # x       ->      (y, z)      ->      y
+            # input        Result{goofyop}      Result{tupleindex{0}}
+            # so at this point in the code, we just got gy.
+            # we first set the gradient at (y,z) to [[None,None]]
+            # then we set the first element to gy
             if isinstance(node.op, TupleIndex):
                 par = node.parents[0]
-                if par not in var2gs: var2gs[par] = [tuple([] for _ in len(par.get_type())) ]
-                var2gs[par][0][node.op.idx].append(gnode)
-                # XXX wil fail with unused outputs
+                if par not in var2gs: var2gs[par] = [[None for _ in par.typ]]
+                var2gs[par][0][node.op.idx] = gnode
             else:
                 gpars = node.op.pullback(node.parents, node, gnode)
                 diffs = node.get_diff()
@@ -736,13 +748,13 @@ class ConstantTensor(Constant):
         if isinstance(self.value, tuple):
             raise MethodNotDefined
         return r"""
-extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads, cgtArray* write) {
+extern "C" void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
     cgt_memcpy(cgtCPU, cgtCPU, write->data(), cldata->data, write->nbytes());
 }
 """
     def _c_code_valret(self, inputs):
         return r"""
-extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
+extern "C" cgtArray* $function($closure* cldata, cgtArray** reads) {
         auto out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
             (cgtDtype)cldata->dtype, cgtCPU, (void*)cldata->data, false);
         return out;
@@ -799,7 +811,17 @@ class Fill(Op):
     def typ_apply(self, inputs):
         assert all(x.dtype == 'i8' for x in inputs)
         return TensorType(self.dtype, len(inputs))
-
+    def get_closure(self, inputs):
+        typ = ctypes.c_long if self.value.dtype.kind=='i' else ctypes.c_double
+        return [("value", typ, self.value.item())]
+    def get_c_impl(self, inputs):
+        outdtype = Dtype.canon(self.value.dtype)
+        return CImpl(code=r"""
+extern "C" void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
+    size_t s = write->size();
+    %(cdtype)s value = cldata->value;
+    for (int i=0; i < s; ++i) write->at<%(cdtype)s>(i) = value;
+}"""%dict(cdtype = np2c[outdtype]))
 def _is_int(node):
     return dtype_kind(node.dtype)=='i'
 
@@ -958,14 +980,14 @@ class ElwiseUnary(Op):
         info = self.info
         out_dtype = self.typ_apply(inputs).dtype
         code = r"""
-static inline %(cdtype1)s scalar_CGT_FUNCNAME(%(cdtype0)s x) {return %(cexpr)s;}
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+static inline %(cdtype1)s scalar_$function(%(cdtype0)s x) {return %(cexpr)s;}
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray* read = reads[0];
     int s = read->size();
     %(cdtype0)s* readdata = (%(cdtype0)s*)read->data();
     %(cdtype1)s* writedata = (%(cdtype1)s*)write->data();
     for (int i=0; i < s; ++i) {
-        writedata[i] = scalar_CGT_FUNCNAME(readdata[i]);
+        writedata[i] = scalar_$function(readdata[i]);
     }
 }
 """%dict(cdtype0=np2c[inputs[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
@@ -975,18 +997,18 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
         info = self.info
         npdtype = inputs[0].dtype
         return """
-__forceinline__ __device__ %(cdtype)s CGT_FUNCNAME(%(cdtype)s x) {return %(cexpr)s;}        
-__global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype)s* in, %(cdtype)s* out) {
+__forceinline__ __device__ %(cdtype)s $function(%(cdtype)s x) {return %(cexpr)s;}        
+__global__ void ${function}_kernel(const size_t n, const %(cdtype)s* in, %(cdtype)s* out) {
   CUDA_KERNEL_LOOP(i, n) {
-    out[i] = CGT_FUNCNAME(in[i]);
+    out[i] = $function(in[i]);
   }
 }
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray* read = reads[0];
     size_t n = read->size();
     int num_blocks, num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
-    CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype)s*)read->data(), (%(cdtype)s*)write->data());
+    ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype)s*)read->data(), (%(cdtype)s*)write->data());
 }
 """%dict(cdtype=np2c[npdtype],cexpr=info.cexpr)
     def cuda_includes(self):
@@ -1087,15 +1109,15 @@ class ElwiseBinary(Op):
         index0 = "0" if self.scalar_mask[0] else "i"
         index1 = "0" if self.scalar_mask[1] else "i"
         code = r"""
-static inline %(cdtype2)s scalar_CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+static inline %(cdtype2)s scalar_$function(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     int s = reads[%(ind4shape)s]->size();
     %(cdtype0)s* in0 = (%(cdtype0)s*)reads[0]->data();
     %(cdtype1)s* in1 = (%(cdtype1)s*)reads[1]->data();
     %(cdtype2)s* out = (%(cdtype2)s*)write->data();
     cgt_check(write->size() == s, "Shape error in elementwise binary operation. You might be missing a call to cgt.broadcast(...)");
     for (int i=0; i < s; ++i) {
-        out[i] = scalar_CGT_FUNCNAME(in0[%(index0)s], in1[%(index1)s]);
+        out[i] = scalar_$function(in0[%(index0)s], in1[%(index1)s]);
     }
 }
 """%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
@@ -1112,17 +1134,17 @@ extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
         index0 = "0" if self.scalar_mask[0] else "i"
         index1 = "0" if self.scalar_mask[1] else "i"
         code = """
-__forceinline__ __device__ %(cdtype2)s CGT_FUNCNAME(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
-__global__ void CGT_FUNCNAME_kernel(const size_t n, const %(cdtype0)s* x, const %(cdtype1)s* y, %(cdtype2)s* z) { \
+__forceinline__ __device__ %(cdtype2)s $function(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
+__global__ void ${function}_kernel(const size_t n, const %(cdtype0)s* x, const %(cdtype1)s* y, %(cdtype2)s* z) {
   CUDA_KERNEL_LOOP(i, n) {
-    z[i] = CGT_FUNCNAME(x[%(index0)s], y[%(index1)s]);
+    z[i] = $function(x[%(index0)s], y[%(index1)s]);
   }
 }
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     size_t n = reads[%(ind4shape)s]->size();
     int num_blocks,num_threads;
     cgt_get_bt(n, &num_blocks, &num_threads);
-    CGT_FUNCNAME_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
+    ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
 }
 """%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
     cexpr=self.info.cexpr,index0=index0,index1=index1,ind4shape=ind4shape) 
@@ -1170,8 +1192,8 @@ class Size(Op):
         return [("ax",ctypes.c_int,self.axis)]
     def get_c_impl(self, _):
         code = r"""
-extern "C" cgtArray* CGT_FUNCNAME(void* cl0, cgtArray** reads) {
-CGT_FUNCNAME_closure* cl = (CGT_FUNCNAME_closure*)cl0;
+extern "C" cgtArray* $function(void* cl0, cgtArray** reads) {
+$closure* cl = ($closure*)cl0;
     cgtArray* in = reads[0];
     cgtArray* out = new cgtArray(0, NULL, cgt_i8, cgtCPU);
     ((long*)out->data())[0] = in->shape()[cl->ax];
@@ -1197,7 +1219,7 @@ class Reshape(Op):
         return [("ndim", ctypes.c_int,len(parents)-1)]
     def get_c_impl(self, _):
         code = r"""
-extern "C" cgtArray* CGT_FUNCNAME(CGT_FUNCNAME_closure* cldata, cgtArray** reads) {
+extern "C" cgtArray* $function($closure* cldata, cgtArray** reads) {
     cgtArray* in = reads[0];
     size_t* newshape = new size_t[cldata->ndim];
     for (int i=0; i < cldata->ndim; ++i) newshape[i] = static_cast<size_t*>(reads[i+1]->data())[0];
@@ -1248,7 +1270,6 @@ class Stack(Op):
         return TensorType(inputs[0].dtype, inputs[0].ndim+1)
 
 class Repeat(Op):
-    call_type = "inplace"
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, num_inputs):
@@ -1263,6 +1284,22 @@ class Repeat(Op):
                 arr = np.repeat(arr, numrep, ax)
             np.copyto(write, arr)
         return PyImpl(inplace_func=f)
+    def get_c_impl(self, inputs):
+        x = inputs[0]
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        closeloops = "}"*x.ndim
+        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        inidxexpr = ",".join(["0" if ax in self.axes else "i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        code = r"""
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray *read=reads[0];
+    %(openloops)s
+        write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
+    %(closeloops)s
+}
+"""%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
+    cdtype=np2c[inputs[0].dtype])
+        return CImpl(code)
     def get_replacement(self, parents, analysis):
         if parents[0] in analysis["node2sv"]:
             value = analysis["node2sv"][parents[0]]
@@ -1304,7 +1341,7 @@ class Transpose(Op):
         d["inidxexpr"] = " + ".join(["i%i * read->stride(%i)"%(i,ax) for (i,ax) in enumerate(self.axes)])
         d["cdtype"] = np2c[x.dtype]
         code = r"""
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read = reads[0];
     %(cdtype)s* indata = (%(cdtype)s*)read->data(), *outdata = (%(cdtype)s*)write->data();
     %(openloops)s
@@ -1324,7 +1361,7 @@ class TransportToOutputDevice(Op):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
         code = """
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgt_assert(write->devtype() != reads[0]->devtype());
     cgt_assert(write->data() != reads[0]->data());
     cgt_memcpy(write->devtype(), reads[0]->devtype(), write->data(), reads[0]->data(), reads[0]->nbytes());
@@ -1406,7 +1443,7 @@ class Sum(Op):
         outidxexpr = " + ".join(["i%(ax)s * write->stride(%(ax)s)"%dict(ax=ax) for ax in outdims])\
             if len(outdims)>0 else "0"
         code = r"""
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read=reads[0];
     memset(write->data(), 0, write->nbytes());
     %(openloops)s
@@ -1503,10 +1540,10 @@ class GetSli(Op):
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
-        inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*in->strides[%i]"%ax for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join(["i%i"%ax + "*write->strides[%i]"%ax for ax in xrange(x.ndim)])
+        inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*in->stride(%i)"%ax for ax in xrange(x.ndim)])
+        outidxexpr = " + ".join(["i%i"%ax + "*write->stride(%i)"%ax for ax in xrange(x.ndim)])
         code = r"""
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0];
     long start = ((long*)reads[1]->data())[0];
     //long stop = ((long*)reads[2]->data())[0];
@@ -1549,7 +1586,7 @@ class IncSli(Op):
         incidxexpr =  " + ".join(["i%i"%ax + "*inc->stride(%i)"%ax for ax in xrange(x.ndim)])
         outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*out->stride(%i)"%ax for ax in xrange(x.ndim)])
         code = r"""
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtArray* write) {
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0], *inc = reads[4], *out=write;
     long start = ((long*)reads[1]->data())[0];
     //long stop = ((long*)reads[2]->data())[0];
@@ -1595,6 +1632,45 @@ class IncFlatIndices(Op):
         return cgt.shape(inputs[0])
     def typ_apply(self, inputs):
         return inputs[0].get_type()
+
+
+class Flip(Op):
+    def __init__(self, axes):
+        self.axes = axes
+    def get_diff(self, _):
+        return [True]
+    def get_py_impl(self):
+        def f(reads, write):
+            x = reads[0]
+            slices = [slice(0,None,None) for _ in xrange(x.ndim)]
+            for ax in self.axes: slices[ax] = slice(None,None,-1)
+            np.copyto(write, x[slices])
+        return PyImpl(inplace_func=f)
+    def pullback(self, inputs, output, goutput):
+        return [cgt.flip(goutput, self.axes)]
+    def shp_apply(self, inputs):
+        return cgt.shape(inputs[0])
+    def typ_apply(self, inputs):
+        return inputs[0].typ
+    def get_c_impl(self, inputs):
+        x = inputs[0]
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        closeloops = "}"*x.ndim
+        inidxexpr =  ",".join(["i%i"%ax for ax in xrange(x.ndim)])
+        outidxexpr =  ",".join([("shape[%(ax)s] - 1 - i%(ax)s" if ax in self.axes else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+        code = r"""
+extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+    cgtArray *in=reads[0], *out=write;
+    cgt_assert(in->size() == out->size());
+    const size_t* shape = in->shape();
+    %(openloops)s
+        out->at<%(cdtype)s>(%(outidxexpr)s) = in->at<%(cdtype)s>(%(inidxexpr)s);
+    %(closeloops)s
+}
+"""%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops, 
+    inidxexpr=inidxexpr, cdtype=np2c[inputs[0].dtype])
+        return CImpl(code)
+
 
 
 # Linalg
@@ -1659,7 +1735,7 @@ class Mul22(Op):
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         code = """
-extern "C" void CGT_FUNCNAME(CGT_FUNCNAME_closure* cl, cgtArray** AB, cgtArray* C) {
+extern "C" void $function($closure* cl, cgtArray** AB, cgtArray* C) {
     cgtArray *A=AB[0], *B=AB[1];
     int lda = A->shape()[1], ldb = B->shape()[1], ldc = C->shape()[1];
     int M = C->shape()[0];
@@ -2030,8 +2106,12 @@ def maybe_replace(node, analysis, repl):
     # ASSUMPTION: the only type of nullary ops that we can propagate this way
     # are subclasses of Constant
     if len(parents) > 0 and all(isinstance(par.op, Constant) for par in parents):
-        if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
-        return cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
+        try:
+            out = cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
+            if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
+            return out
+        except MethodNotDefined:
+            utils.warn("Couldn't get a python impl of %s"%node.op)
     # -- SIZE --
     if isinstance(node.op, Size):
         s = analysis["node2shape"][parents[0]][node.op.axis]

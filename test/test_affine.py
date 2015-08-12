@@ -199,6 +199,18 @@ def rfft(x):
     else:
         return cgt.real(cgt.rfft(x, (10,10), [0,1])).sum()
 
+def flip0(x, y):
+    if isinstance(x, np.ndarray):
+        return (x[::-1,:]*y).sum()
+    else:
+        return (cgt.flip(x, [0])*y).sum()
+
+def flip1(x, y):
+    if isinstance(x, np.ndarray):
+        return (x[:, ::-1]*y).sum()
+    else:
+        return (cgt.flip(x, [1])*y).sum()
+
 ################################################################
 ### Tests 
 ################################################################
@@ -262,6 +274,9 @@ class AffineTestCase(unittest.TestCase):
         check_affine(transpose021, T235)
         check_affine(transpose102, T235)
         check_affine(batchedmatmul, T235, T257)
+
+        check_affine(flip0, M23, nr.randn(2,3))
+        check_affine(flip1, M23, nr.randn(2,3))
 
         # check_affine(rfft, M35)
 

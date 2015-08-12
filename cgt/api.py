@@ -175,6 +175,11 @@ def flatcat(xs):
 def flatten(x):
     return reshape(x, [mul_multi(shape(x))])
 
+def flip(x, axes):
+    x = core.as_node(x)
+    assert isinstance(axes, list)
+    return core.Result(core.Flip(axes), [x])
+
 def floor_divide(x, y):
     return ifloor(x / y)
 
@@ -259,6 +264,7 @@ def max(x, axis=None, keepdims=False): #pylint: disable=W0622
     return out
 
 def mean(x, axis=None, keepdims=False):
+    if x.dtype == 'i1': x = cgt.cast(x, cgt.floatX)
     axes = _red_axes(axis, x.ndim)
     return sum(x, axis=axes, keepdims=keepdims) / mul_multi([size(x, ax) for ax in axes])
 

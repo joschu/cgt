@@ -16,8 +16,8 @@ class SinCos(core.Op):
             x = reads[0]
             return (np.sin(x), np.cos(x))
         return core.PyImpl(valret_func=f)
-    c_extra_link_flags = "-lm"
-    c_extra_includes = ["math.h"]
+    # c_extra_link_flags = "-lm"
+    # c_extra_includes = ["math.h"]
 #     def get_c_impl(self, inputs):
 #         code = """
 # void CGT_FUNCNAME(void* cldata, cgt_array** io) {
@@ -44,7 +44,7 @@ class SinCos2(core.Op):
         return core.PyImpl(inplace_func=f)
     def get_c_impl(self, inputs):
         code = """
-extern "C" void CGT_FUNCNAME(void* cldata, cgtArray** reads, cgtTuple* write) {
+extern "C" void $function(void* cldata, cgtArray** reads, cgtTuple* write) {
     float* x = static_cast<float*>(reads[0]->data());
     float* y = static_cast<float*>(static_cast<cgtArray*>(write->getitem(0))->data());
     float* z = static_cast<float*>(static_cast<cgtArray*>(write->getitem(1))->data());

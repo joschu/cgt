@@ -1,19 +1,16 @@
 from cgt.core import *
-import impls
+from . import impls
 from collections import defaultdict
 import time
-import threading
-from Queue import Queue
 import multiprocessing
 from multiprocessing.pool import ThreadPool
-
 
 def function(inputs, outputs, dbg=None, updates=None, givens=None):
     assert isinstance(inputs, list), "Inputs must be a list"
     assert all(isinstance(el, Node) for el in inputs), "Invalid input: should be a list of nodes"
 
     if isinstance(outputs, list): 
-        assert all(isinstance(el, Node) for el in inputs), "Invalid output: should all be symbolic variables"
+        assert all(isinstance(el, Node) for el in outputs), "Invalid output: should all be symbolic variables"
         return function_listout(inputs, outputs, dbg, updates, givens)
     elif isinstance(outputs, Node):         
         f_listout = function_listout(inputs, [outputs], dbg, updates, givens)
@@ -361,7 +358,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     # ------------------------------------------------------
     # Add add update targets to outputs
     outputs_updatetargs = outputs + [after for (_before, after) in updates]
-    outputs_updatetargs = clone(outputs_updatetargs, dict(givens))
+    if givens: outputs_updatetargs = clone(outputs_updatetargs, dict(givens))
     # Do simplification + analysis pass on expression graph
     outputs_updatetargs_simple, analysis = \
         simplify_and_analyze(outputs_updatetargs) if load_config()["enable_simplification"] \

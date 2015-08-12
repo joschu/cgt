@@ -446,8 +446,9 @@ cdef class CppInterpreterWrapper:
         if self.interp != NULL: del self.interp
         if self.eg != NULL: del self.eg
     def __call__(self, *pyargs):
-        pyargs = tuple(execution.as_valid_arg(arg) for arg in pyargs)
-        execution.typecheck_args(pyargs, self.input_types)
+        assert len(pyargs) == len(self.input_types)
+        pyargs = tuple(execution.as_valid_array(arg,typ) for (arg,typ) in zip(pyargs,self.input_types)) 
+        # execution.typecheck_args(pyargs, self.input_types)
 
         # TODO: much better type checking on inputs
         cdef cgtTuple* cargs = new cgtTuple(len(pyargs))

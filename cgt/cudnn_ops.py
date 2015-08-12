@@ -10,6 +10,8 @@ def make_closure(ph, pw, sv, sh):
         ("pw",ctypes.c_int,pw),
         ("sv",ctypes.c_int,sv),
         ("sh",ctypes.c_int,sh),
+        ("handle",ctypes.c_void_p),
+        ("stream",ctypes.c_void_p),
     ]
 
 class CudnnConvForward(Op):
@@ -23,10 +25,12 @@ class CudnnConvForward(Op):
     def get_closure(self, _inputs):
         return make_closure(self.ph, self.pw, self.sv, self.sh)
     def get_cuda_impl(self, inputs):
-        return CUDAImpl(code = """
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-    CudaPerformConvForward(io[0], io[1], io[2], io[3], (conv_closure*)cldata, stream, handle)
-}""", includes=["cudnn_conv.cuh"], link_flags="-lcudnn")
+        return CUDAImpl(
+            code = """
+extern "C" void $function(conv_closure* closure, cgt_array** io) {
+    performConvForward(closure, io[0], io[1], io[2], io[3])
+}""", 
+        includes=["cudnn_support.h"], link_flags="-lcudnn", setup="setupConv", teardown="teardownConv")
     def shp_apply(self, inputs):
         X,W,_b = inputs
         h = cgt.ceil_divide(cgt.size(X,2)  - cgt.size(W, 2) + 1, self.sv)
@@ -49,11 +53,12 @@ class CudnnConvBackwardData(Op):
         self.sh = sh    
     def get_cuda_impl(self, _inputs, funcname):
         return CUDAImpl(code="""
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-    CudaPerformConvBackwardData(io[1], io[2], io[3], (conv_closure*)cldata, stream, handle);
-}""", includes=["cudnn_conv.cuh"], link_flags="-lcudnn"))
-    def cuda_includes(self): 
-        return ["cudnn_conv.hpp"]
+extern "C" void $function(conv_closure* closure, cgt_array** io) {
+    performConvBackwardData(closure io[1], io[2], io[3]);
+}
+extern "C" void CGT_FUNCNAME_setup(conv_closure* closure) {conv_closure_setup(closure);}
+extern "C" void CGT_FUNCNAME_teardown(conv_closure* closure) {conv_closure_setup(closure);}
+""", includes=["cudnn_support.h"], link_flags="-lcudnn", setup="setupConv", teardown="teardownConv"))
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, _inputs):
@@ -67,9 +72,9 @@ class CudnnConvBackwardFilter(Op):
         self.sh = sh        
     def get_cuda_impl(self, _inputs, funcname):
         return CUDAImpl("""
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-    CudaPerformConvBackwardFilter(io[1], io[2], io[3],  (conv_closure*)cldata, stream, handle);
-}"""%dict(funcname=funcname),includes=["cudnn_conv.cuh"], link_flags="-lcudnn")
+extern "C" void $function(conv_closure* closure, cgt_array** io) {
+    performConvBackwardFilter(closure io[1], io[2], io[3]);
+}"""%dict(funcname=funcname),includes=["cudnn_support.h"], link_flags="-lcudnn", setup="setupConv", teardown="teardownConv")
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, _inputs):
@@ -83,9 +88,9 @@ class CudnnConvBackwardBias(Op):
         self.sh = sh    
     def get_cuda_impl(self, _inputs, funcname):
         return CUDAImpl("""
-void CGT_FUNCNAME(void* cldata, cgt_array** io) {
-    CudaPerformConvBackwardBias(io[1], io[2], io[3],  (conv_closure*)cldata, stream, handle);
-}"""%dict(funcname=funcname),includes=["cudnn_conv.cuh"], link_flags="-lcudnn")
+extern "C" void $function(conv_closure* closure, cgt_array** io) {
+    performConvBackwardBias(closure io[1], io[2], io[3]);
+}"""%dict(funcname=funcname),includes=["cudnn_support.h"], link_flags="-lcudnn", setup="setupConv", teardown="teardownConv")
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, _inputs):
