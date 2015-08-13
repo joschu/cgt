@@ -114,14 +114,14 @@ def ntm_address(opt, wprev_bhn, M_bnm, k_bhm, beta_bh, g_bh, s_bh3, gamma_bh):
     )
     csim_bhn =  numer / denom
     assert infer_shape(csim_bhn) == (opt.b, 2*opt.h, opt.n)
-    e_bhn = cgt.broadcast("*", beta_bh[:,:,None], csim_bhn, "xx1,xxx")
-    wc_bhn = sum_normalize2(cgt.exp( e_bhn ))
+    tmp_bhn = cgt.broadcast("*", beta_bh[:,:,None], csim_bhn, "xx1,xxx")
+    wc_bhn = sum_normalize2(cgt.exp( tmp_bhn ))
     # Interpolation
     g_bh1 = g_bh[:,:,None]
     wg_bhn = cgt.broadcast("*", wprev_bhn, (1 - g_bh1), "xxx,xx1") \
             + cgt.broadcast("*", wc_bhn, g_bh1, "xxx,xx1")
     # Shift
-    wtil_bhn = correlate1d(wg_bhn, s_bh3, axis=2)
+    wtil_bhn = circ_conv_1d(wg_bhn, s_bh3, axis=2)
     # Sharpening
     wfin_bhn = sum_normalize2(cgt.broadcast("**", wtil_bhn, gamma_bh.reshape([opt.b,2*opt.h,1]), "xxx,xx1"))
 
@@ -193,41 +193,10 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
 
     flatgrad = cgt.flatcat(gradloss)
 
-    f_loss = cgt.function1([x_tbk, y_tbk], loss)
+    f_loss = cgt.function([x_tbk, y_tbk], loss)
     f_loss_and_grad = cgt.function([x_tbk, y_tbk], [loss, flatgrad])
 
     return f_loss, f_loss_and_grad
-
-
-class Correlate1d(cgt.EasyCustomOp):
-    def __init__(self, axis, ndim):
-        self.axis = axis
-        cgt.EasyCustomOp.__init__(self,
-            input_types = [core.TensorType(cgt.floatX, ndim), core.TensorType(cgt.floatX, ndim)],
-            output_type = core.TensorType(cgt.floatX, ndim),
-            forward_impl = self.correlate_forward,
-            pullback_impl = self.correlate_pullback)
-    def correlate_forward(self, x, s):
-        print x.shape, x.shape, ss.correlate(x, s, mode='same').shape
-        # assert s.shape[self.axis] == 1
-        return ss.correlate(x, s, mode='same')
-    def correlate_pullback(self, x, y, _z, gz):
-        padshp = list(y.shape)
-        padshp[self.axis] = y.shape[self.axis]//2
-        padzeros = np.zeros(tuple(padshp),dtype=x.dtype)
-        gzpad = np.concatenate([padzeros, gz, padzeros], axis=self.axis)
-        return (ss.correlate(gzpad, y, mode='valid')[::-1], 
-                ss.correlate(gzpad, x, mode='valid')[::-1])
-    def shp_apply(self, inputs):
-        return cgt.shape(inputs[0])
-
-
-def correlate1d(x, s, axis):
-    assert x.ndim == s.ndim
-    cgt.utils.warn("SKIPPING correlate1d")
-    return x
-    return core.Result(Correlate1d(axis, x.ndim), [x,s])
-
 
 class CopyTask(object):
     def __init__(self, batch_size, seq_length, input_dim):
@@ -248,12 +217,24 @@ class CopyTask(object):
     def total_time(self):
         return 2*self.t+2
 
+def circ_conv_1d(wg_bhn, s_bh3, axis=2):
+    "VERY inefficient way to implement circular convolution for the special case of filter size 3"
+    assert axis == 2
+    n = cgt.size(wg_bhn,2)
+    wback = cgt.concatenate([wg_bhn[:,:,n-1:n], wg_bhn[:,:,:n-1]], axis=2)
+    w = wg_bhn
+    wfwd = cgt.concatenate([wg_bhn[:,:,1:n], wg_bhn[:,:,0:1]], axis=2)
+    return cgt.broadcast("*", s_bh3[:,:,0:1] , wback, "xx1,xxx")\
+     + cgt.broadcast("*", s_bh3[:,:,1:2] , w, "xx1,xxx")\
+     + cgt.broadcast("*", s_bh3[:,:,2:3] , wfwd, "xx1,xxx")
+
 
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--grad_check",action="store_true")
     args = parser.parse_args()
+    np.seterr("raise")
 
     cgt.set_precision("quad" if args.grad_check else "single")
     np.random.seed(0)
@@ -264,10 +245,10 @@ def main():
 
     # model parameters
     opt = NTMOpts(
-        b = 7, # batch size
-        h = 3, # number of heads
-        n = 13, # number of memory sites
-        m = 5, # dimension at each memory site
+        b = 2, # batch size
+        h = 2, # number of heads
+        n = 3, # number of memory sites
+        m = 2, # dimension at each memory site
         k = 2, # dimension of input
         p = 2, # dimension of output
         ff_hid_sizes = []
@@ -278,7 +259,6 @@ def main():
 
     ntm = make_ntm(opt)
     params = ntm.get_parameters()
-    print params
     th = nn.setup_contiguous_storage(params)
     th[:] = nr.uniform(-0.08, 0.08, th.shape)
 
@@ -294,10 +274,24 @@ def main():
             th[:] = thold
             return loss
         from cgt.numeric_diff import numeric_grad
-        g_num = numeric_grad(f, th,eps=1e-10)
+        g_num = numeric_grad(f, th,eps=1e-8)
         _, g_anal = f_loss_and_grad(x,y)
         assert np.allclose(g_num, g_anal, atol=1e-4)
         print "Gradient check succeeded!"
+        print "%i/%i elts of grad are nonzero"%( (g_anal != 0).sum(), g_num.size )
+
+        import matplotlib.pyplot as plt
+        im = g_anal[:params[0].get_size()].reshape(params[0].get_shape())!=0
+        plt.imshow(im,interpolation='none')
+        H = opt.h*2
+        sizes = [H*opt.m,H,H,3*H,H,opt.h*opt.m,opt.h*opt.m,opt.p]
+        edges = np.cumsum(sizes)
+        ax = plt.gca()
+        ax.set_xticks(edges-.5)
+        ax.set_xticklabels(["k","beta","g","s","gamma","e","a","y"])
+        plt.show()
+
+
         return
 
 

@@ -35,22 +35,23 @@ class Module(object):
     def expand(self, inputs):
         return self.c.expand(inputs)
 
-def setup_contiguous_storage(shareds, dtype = None):
+def setup_contiguous_storage(shareds):
     """
     Moves the data stored in a bunch of Data variables to be slices of a single contiguous vector,
     and return a view on that vector.
     This facilitates writing optimization code that acts on flat vectors.
     """
-    raise RuntimeError("currently broken")
-    dtype = dtype or cgt.floatX
+    dtype = cgt.floatX
     # assert utils.allsame([s.get_device() for s in shareds])
-    tot_size = sum(s.value.size for s in shareds)
+    tot_size = sum(s.get_size() for s in shareds)
     flatvec = np.empty(tot_size, dtype=dtype)
     start = 0
     for s in shareds:
-        size = s.value.size #pylint: disable=W0621
-        flatvec[start:start+size] = s.value.ravel()
-        s.value = flatvec[start:start+size].reshape(s.value.shape)
+        assert s.dtype == dtype
+        v = s.get_value()
+        size = v.size #pylint: disable=W0621
+        flatvec[start:start+size] = v.ravel()
+        s.set_value(flatvec[start:start+size].reshape(v.shape))
         start += size
     return flatvec
 

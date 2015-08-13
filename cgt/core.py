@@ -556,6 +556,11 @@ class Data(Input):
         return self._value if self.use_numpy else self._value.to_numpy()
     def get_shape(self):
         return self._value.shape
+    def get_size(self):
+        return self._value.size
+    def set_value(self, x):
+        assert isinstance(x, np.ndarray) and self.use_numpy
+        self._value = x
 
 
     # TODO: remove external accesses to .value
@@ -923,7 +928,7 @@ BINARY_INFO = {
     ">"   : BinaryInfo("greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
     "<="   : BinaryInfo("less_equal",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
     ">="   : BinaryInfo("greater_equal",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
-    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,z*cgt.log(x)],"pow(x,y)"),
+    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), # XXX only when x > 0
     "=="  : BinaryInfo("equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
     "!="  : BinaryInfo("not_equal", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
 }
