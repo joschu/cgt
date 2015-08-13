@@ -8,8 +8,11 @@ import numpy as np
 # <Copied from im2col.py>
 PoolInfo = namedtuple("PoolInfo", ["kernel_h", "kernel_w", "pad_h", "pad_w", "stride_h", "stride_w"])
 
-def max_pool(x, info):
-    return core.Result(MaxPool(info), [x])
+def max_pool_2d(x, kernelshape, pad = (0,0), stride=(1,1)):
+    kernel_h, kernel_w = kernelshape
+    pad_h, pad_w = pad
+    stride_h, stride_w = stride
+    return core.Result(MaxPool(PoolInfo(kernel_h, kernel_w, pad_h, pad_w, stride_h, stride_w)), [x])[0]
 
 def info2closure(info):
     return [
@@ -24,6 +27,7 @@ def info2closure(info):
 
 class MaxPool(core.Op):
     def __init__(self, info):
+        assert info.stride_h>0 and info.stride_w>0        
         self.info = info
     def get_diff(self, _):
         return [True]
@@ -48,11 +52,6 @@ class MaxPool(core.Op):
         return info2closure(self.info)
     def get_c_impl(self, inputs):
         code = r"""
-
-
-
-
-
 extern "C" void $function(conv_closure* cl, cgtArray** reads, cgtTuple* write) {
     max_pool<%(cdtype)s>(cl, reads[0], static_cast<cgtArray*>(write->getitem(0)), static_cast<cgtArray*>(write->getitem(1)));
 }"""%dict(cdtype=core.np2c[inputs[0].dtype])
@@ -76,12 +75,11 @@ extern "C" void $function(conv_closure* cl, cgtArray** reads, cgtArray* write) {
 }"""%dict(cdtype=core.np2c[inputs[0].dtype])
         return core.CImpl(code=code, includes=["pooling.h"])
 
-if __name__ == "__main__":
+def test():
     np.random.seed(0)
     cgt.set_precision("quad")
     x = cgt.tensor4("x", fixed_shape=(2,3,5,7))
-    info = PoolInfo(4,4,0,0,1,1)
-    y = cgt.core.Result(MaxPool(info), [x])[0]
+    y = max_pool_2d(x, (4,4),(0,0),(1,1))
     xval = np.random.randn(2,3,5,7)
     hval = np.random.randn(*core.infer_shape(y))
     h = cgt.constant(hval)
@@ -96,3 +94,6 @@ if __name__ == "__main__":
     gana = fgrad(xval)
 
     assert np.allclose(gnum,gana)
+
+if __name__ == "__main__":
+    test()

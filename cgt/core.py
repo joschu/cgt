@@ -560,6 +560,14 @@ class Data(Input):
         return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
         return self._value if self.use_numpy else self._value.to_numpy()
+    def get_shape(self):
+        return self._value.shape
+    def get_size(self):
+        return self._value.size
+    def set_value(self, x):
+        assert isinstance(x, np.ndarray) and self.use_numpy
+        self._value = x
+
 
     # TODO: remove external accesses to .value
 
@@ -672,7 +680,7 @@ def pullback(outputs, goutputs, wrt):
 
 # XXX fails when non-constant
 def infer_shape(arr):
-    return tuple(x.op.value for x in  CACHER.simplify(cgt.shape(arr)))
+    return tuple(x.op.value if isinstance(x.op, Constant) else None for x in  CACHER.simplify(cgt.shape(arr)))
 
 def grad(cost, wrt):    
     """
@@ -926,7 +934,7 @@ BINARY_INFO = {
     ">"   : BinaryInfo("greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
     "<="   : BinaryInfo("less_equal",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
     ">="   : BinaryInfo("greater_equal",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
-    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,z*cgt.log(x)],"pow(x,y)"),
+    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), # XXX only when x > 0
     "=="  : BinaryInfo("equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
     "!="  : BinaryInfo("not_equal", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
 }
@@ -1337,15 +1345,15 @@ class Transpose(Op):
         d = {}
         d["openloops"] = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         d["closeloops"] = "}"*x.ndim
-        d["outidxexpr"] = " + ".join(["i%i * write->stride(%i)"%(i,i) for i in xrange(x.ndim)])
-        d["inidxexpr"] = " + ".join(["i%i * read->stride(%i)"%(i,ax) for (i,ax) in enumerate(self.axes)])
+        d["outidxexpr"] = ",".join(["i"+str(i) for i in xrange(x.ndim)])
+        d["inidxexpr"] = ",".join(["i"+str(i) for i in utils.invert_perm(self.axes)])
         d["cdtype"] = np2c[x.dtype]
         code = r"""
 extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read = reads[0];
     %(cdtype)s* indata = (%(cdtype)s*)read->data(), *outdata = (%(cdtype)s*)write->data();
     %(openloops)s
-        outdata[%(outidxexpr)s] = indata[%(inidxexpr)s];
+        write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
     %(closeloops)s
 }"""%d
         return CImpl(code)
@@ -1734,7 +1742,7 @@ class Mul22(Op):
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
-        code = """
+        code = r"""
 extern "C" void $function($closure* cl, cgtArray** AB, cgtArray* C) {
     cgtArray *A=AB[0], *B=AB[1];
     int lda = A->shape()[1], ldb = B->shape()[1], ldc = C->shape()[1];
@@ -1875,6 +1883,14 @@ class TupleIndex(Op):
         intype = inputs[0].get_type()
         assert isinstance(intype, TupleType)
         return inputs[0].get_type()[self.idx]
+    def get_closure(self, _inputs):
+        return [("idx",ctypes.c_int, self.idx)]
+    def get_c_impl(self, inputs):
+        return CImpl(code=r"""
+extern "C" cgtObject* $function($closure* cldata, cgtTuple** reads) {
+    return reads[0]->getitem(cldata->idx);
+}""")
+
 
 class MakeTuple(Op):
     call_type="valret"

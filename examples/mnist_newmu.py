@@ -5,11 +5,11 @@ import cgt
 from cgt import nn
 from cgt.distributions import categorical
 import numpy as np
-from example_utils import fmt_row, fetch_dataset, train_val_test_slices
-import time
+from example_utils import fmt_row, fetch_dataset
+import time, sys
 
 def init_weights(*shape):
-    return cgt.shared(np.random.randn(*shape) * 0.01)
+    return cgt.shared(np.random.randn(*shape) * 0.01, fixed_shape_mask='all')
 
 def rmsprop_updates(cost, params, stepsize=0.001, rho=0.9, epsilon=1e-6):
     grads = cgt.grad(cost, params)
@@ -23,16 +23,40 @@ def rmsprop_updates(cost, params, stepsize=0.001, rho=0.9, epsilon=1e-6):
         updates.append((p, p - stepsize * g))
     return updates
 
-def model(X, w_h, w_h2, w_o, p_drop_input, p_drop_hidden):
+def dense_model(X, w_h, w_h2, w_o, p_drop_input, p_drop_hidden):
     X = nn.dropout(X, p_drop_input)
-    h = cgt.tanh(cgt.dot(X, w_h))
+    h = nn.rectify(cgt.dot(X, w_h))
 
     h = nn.dropout(h, p_drop_hidden)
-    h2 = cgt.tanh(cgt.dot(h, w_h2))
+    h2 = nn.rectify(cgt.dot(h, w_h2))
 
     h2 = nn.dropout(h2, p_drop_hidden)
     py_x = nn.softmax(cgt.dot(h2, w_o))
-    return h, h2, py_x
+    return py_x
+
+def convnet_model(X, w, w2, w3, w4, w_o, p_drop_conv, p_drop_hidden):
+    l1a = nn.rectify(nn.conv2d(X, w, kernelshape=(3,3), pad=(1,1)))
+    l1 = nn.max_pool_2d(l1a, kernelshape=(2, 2), stride=(2,2))
+    l1 = nn.dropout(l1, p_drop_conv)
+
+    l2a = nn.rectify(nn.conv2d(l1, w2, (3,3), pad=(1,1)))
+    l2 = nn.max_pool_2d(l2a, kernelshape=(2, 2), stride=(2,2))
+    l2 = nn.dropout(l2, p_drop_conv)
+
+    l3a = nn.rectify(nn.conv2d(l2, w3, kernelshape=(3,3), pad=(1,1)))
+    l3b = nn.max_pool_2d(l3a, kernelshape=(2, 2), stride=(2,2))
+    l3 = cgt.reshape(l3b, [l3b.shape[0], l3b.shape[1]*l3b.shape[2]*l3b.shape[3]])
+    l3 = nn.dropout(l3, p_drop_conv)
+
+    l4 = nn.rectify(cgt.dot(l3, w4))
+    l4 = nn.dropout(l4, p_drop_hidden)
+    
+    print cgt.core.infer_shape(l4)
+
+    pyx = nn.softmax(cgt.dot(l4, w_o))
+    return pyx
+
+
 
 def main():
     import argparse
@@ -41,17 +65,18 @@ def main():
     parser.add_argument("--profile",action="store_true")
     parser.add_argument("--dropout",action="store_true")
     parser.add_argument("--stepsize",type=float, default=.001)
+    parser.add_argument("--convnet",action="store_true")
     args = parser.parse_args()
 
     # from mldata.org http://mldata.org/repository/data/viewslug/mnist-original/
     # converted to npz
     mnist = fetch_dataset("http://rll.berkeley.edu/cgt-data/mnist.npz")
 
-    Xdata = mnist["X"]/255.
+    Xdata = (mnist["X"]/255.).astype(cgt.floatX)
     ydata = mnist["y"]
 
-
-
+    if args.convnet:
+        Xdata = Xdata.reshape(-1, 1, 28, 28)
     Xtrain = Xdata[0:60000]
     ytrain = ydata[0:60000]
 
@@ -64,19 +89,29 @@ def main():
 
     np.random.seed(0)
 
-    w_h = init_weights(784, 625)
-    w_h2 = init_weights(625, 625)
-    w_o = init_weights(625, 10)
-
-    X = cgt.matrix("X")
+    X = cgt.tensor4("X",fixed_shape=(None,1,28,28)) if args.convnet else cgt.matrix("X", fixed_shape=(None,28*28))
     y = cgt.vector("y",dtype='i8')
 
-    p_drop_input,p_drop_hidden = (0.2, 0.5) if args.dropout else (0,0)
 
-    _h_drop, _h2_drop, pofy_drop = model(X, w_h, w_h2, w_o, p_drop_input, p_drop_hidden)
-    _h_nodrop, _h2_nodrop, pofy_nodrop = model(X, w_h, w_h2, w_o, 0., 0.)
 
-    params = [w_h, w_h2, w_o]
+    if args.convnet:
+        p_drop_conv,p_drop_hidden = (0.2, 0.5) if args.dropout else (0,0)            
+        w = init_weights(32, 1, 3, 3)
+        w2 = init_weights(64, 32, 3, 3)
+        w3 = init_weights(128, 64, 3, 3)
+        w4 = init_weights(128 * 2 * 2, 625)
+        w_o = init_weights(625, 10)
+        pofy_drop = convnet_model(X, w, w2, w3, w4, w_o, p_drop_conv, p_drop_hidden)
+        pofy_nodrop = convnet_model(X, w, w2, w3, w4, w_o, 0., 0.)
+        params = [w, w2, w3, w4, w_o]
+    else:
+        p_drop_input,p_drop_hidden = (0.2, 0.5) if args.dropout else (0,0)    
+        w_h = init_weights(784, 625)
+        w_h2 = init_weights(625, 625)
+        w_o = init_weights(625, 10)
+        pofy_drop = dense_model(X, w_h, w_h2, w_o, p_drop_input, p_drop_hidden)
+        pofy_nodrop = dense_model(X, w_h, w_h2, w_o, 0., 0.)
+        params = [w_h, w_h2, w_o]
 
     cost_drop = -cgt.mean(categorical.loglik(y, pofy_drop))
     updates = rmsprop_updates(cost_drop, params, stepsize=args.stepsize)
@@ -96,10 +131,12 @@ def main():
     for i_epoch in xrange(args.epochs):
         tstart = time.time()
         for start in xrange(0, Xtrain.shape[0], batch_size):
+            sys.stdout.write("."); sys.stdout.flush()
             end = start+batch_size
             train(Xtrain[start:end], ytrain[start:end])
+        print
         elapsed = time.time() - tstart
-        trainerr, trainloss = computeloss(Xtrain, ytrain)
+        trainerr, trainloss = computeloss(Xtrain[:len(Xtest)], ytrain[:len(Xtest)])
         testerr, testloss = computeloss(Xtest, ytest)
         print fmt_row(10, [i_epoch, trainloss, trainerr, testloss, testerr, elapsed])
     if args.profile: cgt.execution.profiler.print_stats()

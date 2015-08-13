@@ -30,7 +30,9 @@ def get_compile_info():
 
         CUDA_ROOT = cmake_info["CUDA_ROOT"]
         CGT_ENABLE_CUDA = cmake_info["CGT_ENABLE_CUDA"] in ["1","ON"]
+        CGT_ENABLE_CUDNN = cmake_info["CGT_ENABLE_CUDNN"] in ["1","ON"]        
         DEFINITIONS = "-DENABLE_CUDA" if CGT_ENABLE_CUDA else ""
+        CUDNN_ROOT = cmake_info["CUDNN_ROOT"]
 
 
         _COMPILE_CONFIG = dict(        
@@ -42,19 +44,31 @@ def get_compile_info():
             CUDA_LIBRARIES = cmake_info["CUDA_LIBRARIES"], 
             DEFINITIONS = DEFINITIONS,  
             CUDA_ROOT = CUDA_ROOT,
+            CUDNN_ROOT = CUDNN_ROOT,
             CACHE_ROOT = osp.expanduser(config["cache_dir"]),
-            CGT_ENABLE_CUDA = CGT_ENABLE_CUDA
+            CGT_ENABLE_CUDA = CGT_ENABLE_CUDA,
+            CGT_ENABLE_CUDNN = CGT_ENABLE_CUDNN,
             # CGT_LIBRARY = cmake_info["CGT_LIBRARY"],
         )
     return _COMPILE_CONFIG
 
 def _make_compile_command(fname, libpath, extra_link_flags):
     info = get_compile_info()
-    includes = "-I%(CGT_INCLUDE_DIR)s -I%(CUDA_INCLUDE_DIR)s -I%(OPENBLAS_INCLUDE_DIR)s"%info    
+    includes  = "-I"+info["CGT_INCLUDE_DIR"]
+    includes += " -I"+info["OPENBLAS_INCLUDE_DIR"]
+    if info["CGT_ENABLE_CUDA"]:  includes += " -I"+info["CUDA_INCLUDE_DIR"]
+    if info["CGT_ENABLE_CUDNN"]: includes += " -I"+info["CUDNN_ROOT"]
+
+
+    linkdirs = "-L"+info["CGT_LIBRARY_DIR"]
+    if info["CGT_ENABLE_CUDA"]: linkdirs += " -L"+info["CUDA_LIBRARY_DIR"]
+    if info["CGT_ENABLE_CUDNN"]: linkdirs += " -L"+info["CUDNN_ROOT"]
+
     d = dict(
         cacheroot=info["CACHE_ROOT"],
         srcpath=fname,
         includes=includes,
+        linkdirs =linkdirs,
         defines=info["DEFINITIONS"],
         libname=osp.basename(libpath),
         libpath=libpath,
@@ -72,7 +86,7 @@ def _make_compile_command(fname, libpath, extra_link_flags):
             cmd = r'''
 cd %(cacheroot)s && \
 c++ %(cflags)s %(srcpath)s -std=c++11 -stdlib=libc++ -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ %(cflags)s %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s -L%(cgtlibdir)s -lcgt %(extralink)s
+c++ %(cflags)s %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s %(linkdirs)s -lcgt %(extralink)s
             '''%d
         elif fname.endswith(".cu"):
             cmd = r'''
@@ -85,7 +99,7 @@ c++ %(cflags)s -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rp
         if fname.endswith(".cpp"):
             cmd = '''
 c++ %(cflags)s %(srcpath)s -std=c++11 -stdlib=libc++ -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ %(cflags)s -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o -L%(cgtlibdir)s -lcgt
+c++ %(cflags)s -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(linkdirs)s -lcgt
             '''%d
         elif fname.endswith(".cu"):
             cmd = r'''
@@ -149,6 +163,9 @@ def _build_closure(triples):
     return closure
 
 
+# TODO maybe we should get the function pointers here as well as the closure structs
+# not clear what happens where
+
 class CTranslationUnit(object):
     """All the input that goes into building a binary for an Op"""
 
@@ -162,7 +179,7 @@ class CTranslationUnit(object):
         s = StringIO()
         for filename in self.includes:
             s.write('#include "%s"\n'%filename)
-        d = dict(function=funcname, closure=funcname+"_closure")
+        d = dict(function=funcname, closure=funcname+"_closure",setup=funcname+"_setup",teardown=funcname+"_teardown")
         s.write(string.Template(self.struct_code).substitute(d))
         s.write(string.Template(self.impl_code).substitute(d))
         return s.getvalue()

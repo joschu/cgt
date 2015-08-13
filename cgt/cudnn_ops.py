@@ -10,8 +10,8 @@ def make_closure(ph, pw, sv, sh):
         ("pw",ctypes.c_int,pw),
         ("sv",ctypes.c_int,sv),
         ("sh",ctypes.c_int,sh),
-        ("handle",ctypes.c_void_p),
-        ("stream",ctypes.c_void_p),
+        ("handle",ctypes.c_void_p,0),
+        ("stream",ctypes.c_void_p,0),
     ]
 
 class CudnnConvForward(Op):
@@ -24,17 +24,18 @@ class CudnnConvForward(Op):
 
     def get_closure(self, _inputs):
         return make_closure(self.ph, self.pw, self.sv, self.sh)
-    def get_cuda_impl(self, inputs):
-        return CUDAImpl(
+    def get_c_impl(self, inputs):
+        return CImpl(
             code = """
-extern "C" void $function(conv_closure* closure, cgt_array** io) {
-    performConvForward(closure, io[0], io[1], io[2], io[3])
+extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
+    if (!closure->handle) setupConv(closure);
+    performConvForward(closure, reads[0], reads[1], reads[2], write);
 }""", 
-        includes=["cudnn_support.h"], link_flags="-lcudnn", setup="setupConv", teardown="teardownConv")
+        includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")
     def shp_apply(self, inputs):
         X,W,_b = inputs
-        h = cgt.ceil_divide(cgt.size(X,2)  - cgt.size(W, 2) + 1, self.sv)
-        w = cgt.ceil_divide(cgt.size(X,3)  - cgt.size(W, 3) + 1, self.sh)
+        h = cgt.ceil_divide(cgt.size(X,2) + self.ph*2 - cgt.size(W, 2) + 1, self.sv)
+        w = cgt.ceil_divide(cgt.size(X,3) + self.pw*2 - cgt.size(W, 3) + 1, self.sh)
         return [cgt.size(X,0), cgt.size(W,0), h, w]
     def typ_apply(self, _inputs):
         return TensorType(cgt.floatX, 4)
@@ -51,14 +52,13 @@ class CudnnConvBackwardData(Op):
         self.pw = pw
         self.sv = sv
         self.sh = sh    
-    def get_cuda_impl(self, _inputs, funcname):
-        return CUDAImpl(code="""
-extern "C" void $function(conv_closure* closure, cgt_array** io) {
-    performConvBackwardData(closure io[1], io[2], io[3]);
+    def get_c_impl(self, _inputs):
+        return CImpl(code="""
+extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
+    if (!closure->handle) setupConv(closure);
+    performConvBackwardData(closure, reads[1], reads[2], write);
 }
-extern "C" void CGT_FUNCNAME_setup(conv_closure* closure) {conv_closure_setup(closure);}
-extern "C" void CGT_FUNCNAME_teardown(conv_closure* closure) {conv_closure_setup(closure);}
-""", includes=["cudnn_support.h"], link_flags="-lcudnn", setup="setupConv", teardown="teardownConv"))
+""", includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, _inputs):
@@ -70,11 +70,12 @@ class CudnnConvBackwardFilter(Op):
         self.pw = pw
         self.sv = sv
         self.sh = sh        
-    def get_cuda_impl(self, _inputs, funcname):
-        return CUDAImpl("""
-extern "C" void $function(conv_closure* closure, cgt_array** io) {
-    performConvBackwardFilter(closure io[1], io[2], io[3]);
-}"""%dict(funcname=funcname),includes=["cudnn_support.h"], link_flags="-lcudnn", setup="setupConv", teardown="teardownConv")
+    def get_c_impl(self, _inputs):
+        return CImpl("""
+extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
+    if (!closure->handle) setupConv(closure);
+    performConvBackwardFilter(closure, reads[1], reads[2], write);
+}""", includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, _inputs):
@@ -86,12 +87,32 @@ class CudnnConvBackwardBias(Op):
         self.pw = pw
         self.sv = sv
         self.sh = sh    
-    def get_cuda_impl(self, _inputs, funcname):
-        return CUDAImpl("""
-extern "C" void $function(conv_closure* closure, cgt_array** io) {
-    performConvBackwardBias(closure io[1], io[2], io[3]);
-}"""%dict(funcname=funcname),includes=["cudnn_support.h"], link_flags="-lcudnn", setup="setupConv", teardown="teardownConv")
+    def get_c_impl(self, _inputs):
+        return CImpl("""
+extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
+    if (!closure->handle) setupConv(closure);
+    performConvBackwardBias(closure, reads[1], write);
+}""", includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, _inputs):
         return TensorType(cgt.floatX, 4)
+
+
+def main():
+    X = cgt.tensor4("X", fixed_shape=(2,3,10,10))
+    W = cgt.tensor4("W", fixed_shape=(5,3,2,2))
+    b = cgt.tensor4("b", fixed_shape=(1,5,1,1))
+    Y = cgt.core.Result(CudnnConvForward(1,1,1,1),[X, W, b])
+    Y2 = np.random.randn(*cgt.core.infer_shape(Y))
+    cost = (Y*Y2).sum()
+    fcost = cgt.function([X,W,b],cost)
+    fgrad = cgt.function([X,W,b],cgt.grad(cost, [X,W,b]))
+    Xval = np.zeros((2,2,59,78),cgt.floatX)
+    Wval = np.zeros((2,2,4,4),cgt.floatX)
+    bval = np.zeros((1,2,1,1),cgt.floatX)
+    fcost(Xval,Wval,bval)
+    fgrad(Xval,Wval,bval)
+
+if __name__ == "__main__":
+    main()

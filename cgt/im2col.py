@@ -6,8 +6,9 @@ import numpy as np
 
 Im2ColInfo = namedtuple("Im2ColInfo", ["kernel_h", "kernel_w", "pad_h", "pad_w", "stride_h", "stride_w"])
 
-def im2col(x, info):
-    return core.Result(Im2Col(info), [x])
+def im2col(x, kernelshape, pad, stride):
+    kernelshape, pad, stride = map(tuple, (kernelshape, pad, stride))
+    return core.Result(Im2Col(Im2ColInfo(*(kernelshape+pad+stride))), [x])
 
 def info2closure(info):
     return [
@@ -22,13 +23,14 @@ def info2closure(info):
 
 class Im2Col(core.Op):
     def __init__(self, info):
+        assert info.stride_h>0 and info.stride_w>0
         self.info = info
     def get_diff(self, _):
         return [True]
     def get_py_impl(self):
         raise core.MethodNotDefined
     def pullback(self, (x,), _y, gy):
-        return core.Result(Col2Im(self.info), [gy] + cgt.shape(x))
+        return [core.Result(Col2Im(self.info), [gy] + cgt.shape(x))]
     def shp_apply(self, inputs):
         info = self.info
         batch_size, channels, height, width = cgt.shape(inputs[0])
@@ -36,6 +38,7 @@ class Im2Col(core.Op):
         width_out = (width + 2 * info.pad_w - info.kernel_w) // info.stride_w + 1
         return [batch_size ,  height_out,  width_out, channels * info.kernel_w * info.kernel_h]
     def typ_apply(self, inputs):
+        assert inputs[0].ndim == 4
         return core.TensorType(inputs[0].dtype, 4)
     def get_closure(self, _inputs):
         return info2closure(self.info)
@@ -88,20 +91,26 @@ extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
 def test():
     np.random.seed(0)
     cgt.set_precision("quad")
-    x = cgt.tensor4("x", fixed_shape=(2,3,5,7))
-    info = Im2ColInfo(4,4,0,0,1,1)
-    y = cgt.core.Result(Im2Col(info), [x])
-    xval = np.arange(2*3*5*7).reshape(2,3,5,7).astype(cgt.floatX)
-    h = cgt.constant(np.random.randn(*core.infer_shape(y)))
-    cost = (y*h).sum()
-    fcost = cgt.function([x],cost)
-    fgrad = cgt.function([x], cgt.grad(cost, [x])[0])
 
-    from cgt.numeric_diff import numeric_grad
-    gnum = numeric_grad(fcost, xval)
-    gana = fgrad(xval)
-    assert np.allclose(gnum, gana)
 
-    fy = cgt.function([x],y)
-    yval = fy(xval)
-    assert np.allclose(yval[0,0,0] , xval[0,:,0:4,0:4].flatten())
+    for settings in [ ((4,4),(0,0),(1,1)), ((3,3),(1,1),(2,2)) ]:
+        x = cgt.tensor4("x", fixed_shape=(2,3,15,17))
+        y = im2col(x, *settings)
+        xval = np.arange(2*3*15*17).reshape(2,3,15,17).astype(cgt.floatX)
+        h = cgt.constant(np.random.randn(*core.infer_shape(y)))
+        cost = (y*h).sum()
+        fcost = cgt.function([x],cost)
+        fgrad = cgt.function([x], cgt.grad(cost, [x])[0])
+
+        from cgt.numeric_diff import numeric_grad
+        gnum = numeric_grad(fcost, xval,eps=1e-5)
+        gana = fgrad(xval)
+        assert np.allclose(gnum, gana)
+
+        # fy = cgt.function([x],y)
+        # yval = fy(xval)
+        # assert np.allclose(yval[0,0,0] , xval[0,:,0:4,0:4].flatten())
+
+
+if __name__ == "__main__":
+    test()

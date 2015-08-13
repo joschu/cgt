@@ -41,6 +41,7 @@ endif()
 
 
 option(CGT_ENABLE_CUDA OFF "Enable CUDA support")
+option(CGT_ENABLE_CUDNN ON "Enable CUDNN support")
 option(CGT_DEVEL_MODE OFF "Build with more compiler errors and warnings")
 
 message(
@@ -64,7 +65,11 @@ message("include dir ${CGT_INCLUDE_DIR}")
 add_library(cgt SHARED src/cgt_common.cpp include/cgt_common.h)
 if (CGT_ENABLE_CUDA)
   find_package(CUDA REQUIRED)
-  add_definitions(-DCGT_ENABLE_CUDA)
+  add_definitions(-DCGT_ENABLE_CUDA)  
+endif()
+
+if (CGT_ENABLE_CUDNN)
+  set(CUDNN_ROOT "/Users/joschu/Src/cudnn-6.5-osx-v2")
 endif()
 
 target_link_libraries(cgt ${CUDA_CUDART_LIBRARY})
@@ -124,4 +129,6 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/build_info.txt
   "CGT_LIBRARY_PATH := ${CGT_LIBRARY_PATH}\n"
   "CUDA_LIBRARIES := ${CUDA_LIBRARIES}\n"
   "CGT_ENABLE_CUDA := ${CGT_ENABLE_CUDA}\n"
+  "CGT_ENABLE_CUDNN := ${CGT_ENABLE_CUDNN}\n"
+  "CUDNN_ROOT := ${CUDNN_ROOT}\n"
 )
