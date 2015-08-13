@@ -5,7 +5,7 @@
 
 #define CUDNN_CHECK(status) \
   do { \
-    if (status != CUDNN_STATUS_SUCCESS) {puts(cudnnGetErrorString(status)); abort();} \
+    if (status != CUDNN_STATUS_SUCCESS) {printf("%s (%s:%d)\n", cudnnGetErrorString(status), __FILE__, __LINE__); abort();} \
   } while (0)
 
 const char* cudnnGetErrorString(cudnnStatus_t status) {
@@ -46,7 +46,7 @@ struct conv_closure {
 cudnnDataType_t cudnnDataType(cgtDtype d) {
   if (d == cgt_i4) return CUDNN_DATA_FLOAT;
   else if (d==cgt_i8) return CUDNN_DATA_DOUBLE;
-  else assert(0 && "Invalid datatype");
+  else cgt_assert(0 && "Invalid datatype");
 }
 
 cudnnConvolutionDescriptor_t createConvDescr(conv_closure* cl) {
@@ -69,6 +69,7 @@ cudnnTensorDescriptor_t createTensorDescr(cgtArray* a) {
     shape[i] = a->shape()[i];
   }
   CUDNN_CHECK(cudnnSetTensorNdDescriptor(desc, CUDNN_DATA_FLOAT, a->ndim(), shape, strides));
+  return desc;
 }
 
 cudnnFilterDescriptor_t createFilterDescr(cgtArray* a) {
@@ -78,16 +79,17 @@ cudnnFilterDescriptor_t createFilterDescr(cgtArray* a) {
   assert(a->dtype() == cgt_f4);
   int shape[4];
   for (int i=0; i < a->ndim(); ++i) shape[i] = a->shape()[i];
-  CUDNN_CHECK(cudnnSetFilterNdDescriptor(&desc, CUDNN_DATA_FLOAT, a->ndim(), shape));  
+  CUDNN_CHECK(cudnnSetFilterNdDescriptor(desc, CUDNN_DATA_FLOAT, a->ndim(), shape));
+  return desc;
 }
 
 
 void destroyConvDescr(cudnnConvolutionDescriptor_t desc) {
-  CUDNN_CHECK(cudnnDestroyConvolutionDescriptor(&desc));
+  CUDNN_CHECK(cudnnDestroyConvolutionDescriptor(desc));
 }
 
 void destroyTensorDescr(cudnnTensorDescriptor_t desc) {
-  CUDNN_CHECK(cudnnDestroyTensorDescriptor(&desc));  
+  CUDNN_CHECK(cudnnDestroyTensorDescriptor(desc));  
 }
 
 void destroyFilterDescr(cudnnFilterDescriptor_t desc) {
@@ -95,14 +97,14 @@ void destroyFilterDescr(cudnnFilterDescriptor_t desc) {
 }
 
 extern "C" void setupConv(conv_closure* cl) {
-  CUDA_CHECK(cudaStreamCreate(cl->stream));
-  CUDNN_CHECK(cudnnCreate(cl->handle));
+  CUDA_CHECK(cudaStreamCreate(&cl->stream));
+  CUDNN_CHECK(cudnnCreate(&cl->handle));
   CUDNN_CHECK(cudnnSetStream(cl->handle, cl->stream));
 }
 
 extern "C" void teardownConv(conv_closure* cl) {
   CUDNN_CHECK(cudnnDestroy(cl->handle));
-  CUDA_CHECKcudaStreamDestroy(cl->stream));
+  CUDA_CHECK(cudaStreamDestroy(cl->stream));
 }
 
 void performConvForward(conv_closure* cl, cgtArray* bottom, cgtArray* filter, cgtArray* bias, 
@@ -113,6 +115,11 @@ void performConvForward(conv_closure* cl, cgtArray* bottom, cgtArray* filter, cg
   auto bias_desc = createTensorDescr(bias);  
   auto top_desc = createTensorDescr(top);  
   auto conv_desc = createConvDescr(cl);
+
+
+  int outputdim[4] = {0,0,0,0};
+  CUDNN_CHECK(cudnnGetConvolutionNdForwardOutputDim(conv_desc, bottom_desc, filter_desc, 4, outputdim));
+  for (int i=0; i < top->ndim(); ++i) cgt_assert(outputdim[i]==top->shape()[i]);
 
   float one = 1;
   float zero = 0;
@@ -128,17 +135,17 @@ void performConvForward(conv_closure* cl, cgtArray* bottom, cgtArray* filter, cg
   CUDA_CHECK(cudaFree(workspace));
 
   destroyConvDescr(conv_desc);
-  destoryTensorDescr(top_desc);
-  destoryTensorDescr(bias_desc);
+  destroyTensorDescr(top_desc);
+  destroyTensorDescr(bias_desc);
   destroyFilterDescr(filter_desc);
-  destoryTensorDescr(bottom_desc);
+  destroyTensorDescr(bottom_desc);
 }
 
 void performConvBackwardData(conv_closure* cl, cgtArray* top_diff, cgtArray* filter, cgtArray* bottom_diff) {
 
   auto top_diff_desc = createTensorDescr(top_diff);  
   auto filter_desc = createFilterDescr(filter);  
-  auto bottom_desc = createTensorDescr(bottom_diff);  
+  auto bottom_diff_desc = createTensorDescr(bottom_diff);  
   auto conv_desc = createConvDescr(cl);
 
   float one = 1;
@@ -146,26 +153,26 @@ void performConvBackwardData(conv_closure* cl, cgtArray* top_diff, cgtArray* fil
   CUDNN_CHECK(cudnnConvolutionBackwardData(cl->handle, &one, filter_desc, filter->data(), top_diff_desc, top_diff->data(), conv_desc, &zero, bottom_diff_desc, bottom_diff->data()));
   CUDA_CHECK(cudaStreamSynchronize(cl->stream));  // Synchronize before destruction
 
-  destroyConvDescr(conv_desc)
-  destroyTensorDescr(bottom_diff);
-  destroyFilterDescr(filter);
-  destroyTensorDescr(top_diff);
+  destroyConvDescr(conv_desc);
+  destroyTensorDescr(bottom_diff_desc);
+  destroyFilterDescr(filter_desc);
+  destroyTensorDescr(top_diff_desc);
 
 }
 
 void performConvBackwardFilter(conv_closure* cl, cgtArray* top_diff, cgtArray* bottom, cgtArray* filter_diff) {
 
-  auto bottom_desc = createTensorDescr(bottom_desc);  
-  auto filter_desc = createFilterDescr(filter_diff_desc);  
-  auto top_desc = createTensorDescr(top_diff_desc);  
+  auto bottom_desc = createTensorDescr(bottom);  
+  auto filter_diff_desc = createFilterDescr(filter_diff);  
+  auto top_diff_desc = createTensorDescr(top_diff);  
   auto conv_desc = createConvDescr(cl);
 
   float one = 1;
   float zero = 0;
-  CUDNN_CHECK(cudnnConvolutionBackwardFilter(cl->handle, &one, bottom_desc, bottom->data(), top_diff_desc, top_diff->data(), conv_desc, &zero, filter_diff_desc, filter_diff->data));
+  CUDNN_CHECK(cudnnConvolutionBackwardFilter(cl->handle, &one, bottom_desc, bottom->data(), top_diff_desc, top_diff->data(), conv_desc, &zero, filter_diff_desc, filter_diff->data()));
   CUDA_CHECK(cudaStreamSynchronize(cl->stream));  // Synchronize before destruction
 
-  destroyTensorDescr(conv_desc);
+  destroyConvDescr(conv_desc);
   destroyTensorDescr(top_diff_desc);
   destroyFilterDescr(filter_diff_desc);
   destroyTensorDescr(bottom_desc);
@@ -178,7 +185,7 @@ void performConvBackwardBias(conv_closure* cl, cgtArray* top_diff, cgtArray* bia
 
   float one = 1;
   float zero = 0;
-  CUDNN_CHECK(cudnnConvolutionBackwardBias(cl->handle, &one, top_diff_desc, top_diff->data(), &zero, bias_diff_desc, bias_diff->data));
+  CUDNN_CHECK(cudnnConvolutionBackwardBias(cl->handle, &one, top_diff_desc, top_diff->data(), &zero, bias_diff_desc, bias_diff->data()));
   CUDA_CHECK(cudaStreamSynchronize(cl->stream));  // Synchronize before destruction
 
   destroyTensorDescr(bias_diff_desc);
