@@ -235,65 +235,60 @@ class OpLibrary(object):
     Stores compiled Op implementations. Performs just-in-time compiling.
     """
 
-    def __init__(self, force_python_impl=False):
+    def __init__(self):
         self.node2binary = {}
-        self.force_python_impl = force_python_impl
+        config = core.load_config()
+        self.force_python_impl = config["force_python_impl"] or config["backend"] == "python"
+        self.disallow_python_impl = config["disallow_python_impl"]
+        compile_info = get_compile_info()
+        self.cuda_enabled = config["enable_cuda"]
+        if self.cuda_enabled:
+            assert compile_info["CGT_ENABLE_CUDA"], "CUDA requested in configuration, but CGT is not compiled with CUDA support"
 
-    def num_impls_compiled(self):
-        return len(self.implhash2binary)
+    def get_available_impls(self, node):
+        if self.force_python_impl:
+            assert not self.disallow_python_impl
+            try: impl = node.op.get_py_impl()
+            except MethodNotDefined: raise RuntimeError("Python impls forced, but node %s has no Python impl" % node)
+            else: return {"impl_py": impl}
 
-    def _get_op_impl(self, node, devtype=None):
+        impltype2impl = {}
+        if self.cuda_enabled:
+            try: impl = node.op.get_cuda_impl(node.parents)
+            except MethodNotDefined: pass
+            else: impltype2impl["impl_cuda"] = impl
+
+        try: impl = node.op.get_c_impl(node.parents)
+        except MethodNotDefined: pass
+        else: impltype2impl["impl_c"] = impl
+
+        if not self.disallow_python_impl:
+            try: impl = node.op.get_py_impl()
+            except MethodNotDefined: pass
+            else: impltype2impl["impl_py"] = impl
+
+        return impltype2impl
+
+    def _get_op_impl(self, node, impltype):
         """
         Grabs the preferred implementation of an op, falling back to
         Python if necessary
-
-        devtype ignored if Python impls are forced
         """
+        assert impltype in ["impl_py", "impl_c", "impl_cuda"]
+        if impltype == "gpu" and not self.cuda_enabled:
+            raise RuntimeError("GPU requested for node %s, but CUDA is not enabled" % node)
 
-        config = core.load_config()
-        force_python_impl = config["force_python_impl"]
-        disallow_python_impl = config["disallow_python_impl"]
-        compile_info = get_compile_info()
+        impltype2impl = self.get_available_impls(node)
+        if impltype not in impltype2impl:
+            raise RuntimeError("Node %s has no available %s")
+        return impltype2impl[impltype]
 
-        if not force_python_impl and not self.force_python_impl:
-            assert devtype is not None
-            if devtype == "gpu":
-                if not compile_info["CGT_ENABLE_CUDA"]:
-                    raise RuntimeError("tried to get CUDA implementation but CUDA is disabled (set CGT_ENABLE_CUDA and recompile)")
-                try:
-                    impl = node.op.get_cuda_impl(node.parents)
-                except MethodNotDefined:
-                    raise RuntimeError('Op %s has no CUDA implementation, but GPU mode is requested' % repr(node.op))
-                assert impl is not None
-                return impl
-
-            assert devtype == "cpu"
-            try:
-                impl = node.op.get_c_impl(node.parents)
-            except MethodNotDefined:
-                if disallow_python_impl:
-                    raise RuntimeError("Op %s has no C implementation, but Python fallback is disabled" % repr(node.op))
-                else:
-                    print "Op %s has no C implementation, falling back to Python" % repr(node.op)
-            else:
-                assert impl is not None
-                return impl
-
-        if disallow_python_impl:
-            raise RuntimeError("Requested Python implementation for op %s, but Python implementations are disabled" % repr(node.op))
-        try:
-            impl = node.op.get_py_impl()
-        except MethodNotDefined:
-            raise RuntimeError("Op %s has no Python implementation" % repr(node.op))
-        assert impl is not None
-        return impl
-
-    def fetch_binary(self, node, devtype=None):
+    def fetch_binary(self, node, impltype):
         """
         Gets the binary for node's Op, compiling its Impl if necessary.
         """
         if node not in self.node2binary:
-            impl = self._get_op_impl(node, devtype)
+            impl = self._get_op_impl(node, impltype)
             self.node2binary[node] = _compile_impl(node, impl)
         return self.node2binary[node]
 
@@ -304,7 +299,7 @@ class OpLibrary(object):
     # These functions are only for the python SequentialInterpreter
     # and only work when the nodes use (forced) python impls
     def py_apply_inplace(self, node, reads, write):
-        self.fetch_binary(node).pyimpl.inplace_func(reads, write)
+        self.fetch_binary(node, "impl_py").pyimpl.inplace_func(reads, write)
 
     def py_apply_valret(self, node, reads):
-        return self.fetch_binary(node).pyimpl.valret_func(reads)
+        return self.fetch_binary(node, "impl_py").pyimpl.valret_func(reads)

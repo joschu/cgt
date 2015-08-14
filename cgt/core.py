@@ -565,7 +565,7 @@ class Data(Input):
     def get_size(self):
         return self._value.size
     def set_value(self, x):
-        assert isinstance(x, np.ndarray) and self.use_numpy
+        assert isinstance(x, np.ndarray) and self.use_numpy # XXX what is this?
         self._value = x
 
 
@@ -1133,7 +1133,6 @@ extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         return CImpl(code=code, includes=["cgt_common.h", "math.h"])
 
     def get_cuda_impl(self, inputs):
-        print "CALLED"
         typ2 = self.typ_apply(inputs)
         npdtype0 = inputs[0].dtype
         npdtype1 = inputs[1].dtype

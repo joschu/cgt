@@ -337,8 +337,8 @@ cdef void* _getfun(libname, funcname) except *:
     return out
 
 
-cdef ByRefFunCl _node2inplaceclosure(oplib, node, node2dev) except *:
-    binary = oplib.fetch_binary(node, devtype=node2dev[node].devtype)
+cdef ByRefFunCl _node2inplaceclosure(oplib, node, node2impltype) except *:
+    binary = oplib.fetch_binary(node, node2impltype[node])
     if binary.pyimpl is not None:
         assert binary.pyimpl.valret_func is None
         pyfun = binary.pyimpl.inplace_func        
@@ -351,8 +351,8 @@ cdef ByRefFunCl _node2inplaceclosure(oplib, node, node2dev) except *:
         shit2.append(closure)  # XXX
         return ByRefFunCl(<cgtByRefFun>cfun, _ctypesstructptr(closure))
 
-cdef ByValFunCl _node2valretclosure(oplib, node, node2dev) except *:
-    binary = oplib.fetch_binary(node, devtype=node2dev[node].devtype)
+cdef ByValFunCl _node2valretclosure(oplib, node, node2impltype) except *:
+    binary = oplib.fetch_binary(node, node2impltype[node])
     if binary.pyimpl is not None:
         assert binary.pyimpl.inplace_func is None
         pyfun = binary.pyimpl.valret_func        
@@ -374,7 +374,7 @@ cdef vector[MemLocation] _tocppmemvec(object pymemlist) except *:
         out.push_back(_tocppmem(pymem))
     return out
 
-cdef Instruction* _tocppinstr(object oplib, object pyinstr, object node2dev) except *:
+cdef Instruction* _tocppinstr(object oplib, object pyinstr, object node2impltype) except *:
     t = type(pyinstr)
     cdef Instruction* out
     cdef MemLocation wloc = _tocppmem(pyinstr.write_loc)
@@ -385,9 +385,9 @@ cdef Instruction* _tocppinstr(object oplib, object pyinstr, object node2dev) exc
     elif t == execution.BuildTup:
         out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == execution.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _node2inplaceclosure(oplib, pyinstr.node, node2dev))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _node2inplaceclosure(oplib, pyinstr.node, node2impltype))
     elif t == execution.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _node2valretclosure(oplib, pyinstr.node, node2dev))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _node2valretclosure(oplib, pyinstr.node, node2impltype))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out
@@ -396,11 +396,11 @@ cdef Instruction* _tocppinstr(object oplib, object pyinstr, object node2dev) exc
 ### Wrapper classes
 ################################################################
 
-cdef ExecutionGraph* make_cpp_execution_graph(pyeg, oplib, node2dev) except *:
+cdef ExecutionGraph* make_cpp_execution_graph(pyeg, oplib, node2impltype) except *:
     "make an execution graph object"
     cdef vector[Instruction*] instrs
     for instr in pyeg.instrs:
-        instrs.push_back(_tocppinstr(oplib, instr, node2dev))
+        instrs.push_back(_tocppinstr(oplib, instr, node2impltype))
     return new ExecutionGraph(instrs,pyeg.n_args, pyeg.n_locs)
 
 cdef class CppArrayWrapper:
@@ -420,6 +420,9 @@ cdef class CppArrayWrapper:
     def shape(self):
         return [self.arr.shape()[i] for i in range(self.arr.ndim())]
     @property
+    def size(self):
+        return self.arr.size()
+    @property
     def dtype(self):
         return dtype_tostr(self.arr.dtype())
     def get_pointer(self):
@@ -437,8 +440,8 @@ cdef class CppInterpreterWrapper:
     cdef ExecutionGraph* eg # owned
     cdef Interpreter* interp # owned
     cdef object input_types
-    def __init__(self, pyeg, oplib, node2dev, input_types, output_locs, parallel):
-        self.eg = make_cpp_execution_graph(pyeg, oplib, node2dev)
+    def __init__(self, pyeg, oplib, node2impltype, input_types, output_locs, parallel):
+        self.eg = make_cpp_execution_graph(pyeg, oplib, node2impltype)
         cdef vector[MemLocation] cpp_output_locs = _tocppmemvec(output_locs)
         self.interp = create_interpreter(self.eg, cpp_output_locs, parallel)
         self.input_types = input_types

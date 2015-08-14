@@ -40,49 +40,39 @@ def function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
 # Execution
 # ================================================================
 
-# def determine_device(node, node2dev, devtype=None, machine=None, idx = None):
-#     op = node.op
-#     parents = node.parents
-#     parent_devices = [node2dev[par] for par in parents]
-#     if isinstance(op,Transport):
-#         raise RuntimeError
-#         # assert parent_devices[0].devtype==op.src
-#         # devtype = op.targ   
-#     elif any(pardev.devtype == "gpu" for pardev in parent_devices):
-#         devtype = "gpu"
-#     else:
-#         devtype = "cpu"
-#     if devtype == "gpu":
-
-#     # devtype = "cpu" if devtype is None else ("gpu" if any(pardev.devtype == "gpu" for pardev in parent_devices) else "cpu")
-#     idx = 0 if idx is None else idx
-#     machine = "default" if machine is None else machine
-#     return Device(machine, devtype, idx)
-
-def determine_devices(nodes_sorted, node2memowner, node2forceddev=None):
+def determine_devices(nodes_sorted, oplib, node2memowner, node2forceddev=None):
     # Op definitions (available impls, inplace-ness, etc) define constraints
     # on possible devices for a node
 
     # (1) Get available devices for nodes, determined by which impls are available and node types
     compile_info = impls.get_compile_info()
+
+    cuda_enabled = load_config()["enable_cuda"]
+    if cuda_enabled:
+        assert compile_info["CGT_ENABLE_CUDA"], "CUDA requested in configuration, but CGT is not compiled with CUDA support"
+
     node2availabledevs = {}
+    node2availableimpltypes = {}
     for node in nodes_sorted: # doesn't have be ordered
+        devs = None
         if node2forceddev is not None and node in node2forceddev:
-            node2availabledevs[node] = [node2forceddev[node]]
+            devs = [node2forceddev[node]]
         elif node.is_argument():
-            node2availabledevs[node] = [Device(devtype="cpu")]
+            devs = [Device(devtype="cpu")]
         elif node.is_data():
-            node2availabledevs[node] = [node.get_device()]
+            devs = [node.get_device()]
         else:
-            can_run_on_gpu = False
-            if compile_info["CGT_ENABLE_CUDA"]:
-                try:
-                    node.op.get_cuda_impl(node.parents)
-                except MethodNotDefined:
-                    pass
-                else:
-                    can_run_on_gpu = True
-            node2availabledevs[node] = [Device(devtype="cpu"), Device(devtype="gpu")] if can_run_on_gpu else [Device(devtype="cpu")]
+            available_impls = oplib.get_available_impls(node).keys()
+            node2availableimpltypes[node] = available_impls
+            devs = []
+            if "impl_py" in available_impls or "impl_c" in available_impls:
+                devs.append(Device(devtype="cpu"))
+            if "impl_cuda" in available_impls:
+                devs.append(Device(devtype="gpu"))
+            if not devs:
+                raise RuntimeError("Node %s has no implementations" % node)
+        assert devs
+        node2availabledevs[node] = devs
 
     # Constraints on devices for output locations (given by node2memowner) must be satisfied
     # so prune devices here
@@ -90,83 +80,41 @@ def determine_devices(nodes_sorted, node2memowner, node2forceddev=None):
     for node in node2availabledevs:
         node2candidatedevs[node] = set(node2availabledevs[node])
     for node in nodes_sorted:
-        print node, map(str, list(node2candidatedevs[node])), map(str, list(node2candidatedevs[node2memowner[node]]))
         node2candidatedevs[node] &= node2candidatedevs[node2memowner[node]]
         if not node2candidatedevs[node]:
             raise RuntimeError("No available device for node %s, because of memory owner %s" % (node, node2memowner[node]))
 
     # Constraints on inputs can be satisfied by inserting Transports
 
-    # (2) Memory ownership constrains writes, parent devices constrain reads
-    # samedev_constraints = defaultdict(set)
-    # for node in nodes_sorted:
-    #     if node2memowner[node] != node:
-    #         samedev_constraints[node].add(node2memowner[node])
-    #         samedev_constraints[node2memowner[node]].add(node)
-
-    #     samedev_constraints[node] |= set(node.parents)
-    #     for parent in node.parents:
-    #         samedev_constraints[parent].add(node)
-
     # Greedy assignment: assign as many nodes to GPU as possible
     node2dev = {}
+    node2impltype = {}
     for node in nodes_sorted:
-        print node
         assert node2candidatedevs[node] # every node should have at least one device
         best_dev = None
+        best_impl = None
         for d in node2candidatedevs[node]:
-            if best_dev is None or d.devtype == "gpu":
+            if d.devtype == "gpu":
                 best_dev = d
+                best_impl = "impl_cuda"
+            elif d.devtype == "cpu" and best_dev is None:
+                best_dev = d
+                best_impl = None
+                if node in node2availableimpltypes:
+                    best_impl = "impl_c" if "impl_c" in node2availableimpltypes[node] else "impl_py"
         node2dev[node] = best_dev
+        node2impltype[node] = best_impl
 
     # In the future, the assignment can take constraints into account to minimze the number of needed transports
 
-    return node2dev
-
-
-
-# def assign_devices(outputs, devfn=None):
-#     # First assign each node to a device
-#     node2dev={}
-#     for node in topsorted(outputs):        
-#         maybedev = None if devfn is None else devfn(node)
-#         if maybedev: 
-#             node2dev[node] = maybedev
-#         elif node.is_argument():
-#             node2dev[node] = Device(devtype="cpu")
-#         elif node.is_data():
-#             node2dev[node] = node.get_device()
-#         else:
-#             node2dev[node] = determine_device(node, node2dev)
-
-#     # Now make a new computation graph with 
-#     replace = {}
-#     newnode2dev = {}
-#     for node in topsorted(outputs):
-#         parents = node.parents
-#         dev = node2dev[node]
-#         if node.is_input():
-#             replace[node] = node
-#         else:
-#             newparents = []
-#             for par in parents:
-#                 if node2dev[par] == dev:
-#                     newparents.append(replace[par])
-#                 else:
-#                     newparents.append(transport(replace[par], node2dev[par], dev))
-#                     newnode2dev[newparents[-1]] = dev
-#             replace[node] = Result(node.op, newparents, typ=node.get_type())
-#         newnode2dev[replace[node]] = dev
-
-#     return [replace[node] for node in outputs], newnode2dev
-
+    return node2dev, node2impltype
 
 def is_tensor(x):
     return isinstance(x.typ, TensorType)
 def is_tuple(x):
     return isinstance(x.typ, TupleType)
 
-def create_interpreter(inputs, outputs, eg, node2memloc, node2dev):
+def create_interpreter(inputs, outputs, eg, node2memloc, node2impltype, oplib):
     assert isinstance(eg, ExecutionGraph)
     input_types = [input.get_type() for input in inputs]
     output_types = [output.get_type() for output in outputs]
@@ -175,18 +123,16 @@ def create_interpreter(inputs, outputs, eg, node2memloc, node2dev):
     backend = load_config()["backend"]
     parallel_interp = load_config()["parallel_interp"]
     if backend == "python":
-        oplib = impls.OpLibrary(force_python_impl=True)
         if parallel_interp:
             return ParallelInterpreter(eg, oplib, output_locs, input_types)
         else:
             return SequentialInterpreter(eg, oplib, output_locs, input_types)
     elif backend == "cython":
-        oplib = impls.OpLibrary(force_python_impl=False)
         import cycgt2
         if parallel_interp:
-            return cycgt2.CppInterpreterWrapper(eg, oplib, node2dev, input_types, output_locs, True)
+            return cycgt2.CppInterpreterWrapper(eg, oplib, node2impltype, input_types, output_locs, True)
         else:
-            return cycgt2.CppInterpreterWrapper(eg, oplib, node2dev, input_types, output_locs, False)
+            return cycgt2.CppInterpreterWrapper(eg, oplib, node2impltype, input_types, output_locs, False)
     else:
         raise NotImplementedError("invalid backend %s"%backend)
 
@@ -283,8 +229,8 @@ class MemCounter(object):
         return out
 
 
-def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memowner, node2dev):
-    node2dev = copy.copy(node2dev) # we'll insert transport ops
+def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memowner, node2dev, node2impltype):
+    node2impltype = copy.copy(node2impltype) # we'll insert transport ops
     instrs = []
     counter = MemCounter()
     node2memloc = {}
@@ -311,7 +257,8 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
                     assert read_loc.devtype != transported_loc.devtype
                     instrs.append(ReturnByRef(tmp_transport_node, [read_loc], transported_loc))
                     read_locs.append(transported_loc)
-                    node2dev[tmp_transport_node] = Device(devtype="cpu")
+                    node2impltype[tmp_transport_node] = "impl_c"
+                    # node2dev[tmp_transport_node] = Device(devtype="cpu")
                 else:
                     read_locs.append(read_loc)
             assert len(read_locs) == len(node.parents)
@@ -347,7 +294,7 @@ def create_execution_graph(inputs, outputs, nodes_sorted, node2shape, node2memow
                 write_loc = counter.new_memloc(node2dev[node].devtype)
                 instrs.append(ReturnByVal(node, read_locs, write_loc))
         node2memloc[node] = write_loc
-    return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc, node2dev
+    return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc, node2impltype
 
 
 def run_compilation_pipeline(inputs, outputs, updates, givens):
@@ -374,11 +321,13 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     updatesrcs = [before for (before, _) in updates]
     node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple))
     # Determine location and device of nodes
-    node2dev = determine_devices(nodes_sorted, node2memowner)
+    oplib = impls.OpLibrary()
+    node2dev, node2impltype = determine_devices(nodes_sorted, oplib, node2memowner)
     # Find the outputs we want to return
     outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
     # Generate execution graph
-    eg, node2memloc, node2dev = create_execution_graph(inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev)
+    eg, node2memloc, node2impltype = create_execution_graph(
+        inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev, node2impltype)
 
     # Print execution graph
     print 'begin'
@@ -387,7 +336,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------
-    interp = create_interpreter(inputs, outputs_simple, eg, node2memloc, node2dev)
+    interp = create_interpreter(inputs, outputs_simple, eg, node2memloc, node2impltype, oplib)
 
     # Done!
     return interp
@@ -450,7 +399,7 @@ class MemLocation(object):
     def to_json(self):
         return self.index
     def __repr__(self):
-        return "%%%i(%s)" % (self.index, self.devtype)
+        return "%%%i/%s" % (self.index, self.devtype)
 
 class Interpreter(object):
     def __call__(self, args):
