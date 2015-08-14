@@ -100,7 +100,7 @@ class Device(object):
         return self.machine == other.machine and self.devtype == other.devtype and self.idx == other.idx
     def __hash__(self):
         return hash((self.machine, self.devtype, self.idx))
-    def __str__(self):
+    def __repr__(self):
         return "%s/%s/%s"%(self.machine,self.devtype,self.idx)
 
 def _promote(typ1, typ2):
@@ -1371,8 +1371,6 @@ class TransportToOutputDevice(Op):
         return inputs[0].get_type()
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
-    def get_py_impl(self):
-        raise RuntimeError("Only CPU supported in Python mode. No Transport ops should exist.")
     def get_c_impl(self, _inputs):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
@@ -1525,7 +1523,7 @@ class Argmax(Op):
 # ----------------------------------------------------------------
 
 class GetSli(Op):
-    call_type = "valret"
+    call_type = "inplace"
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
@@ -1552,20 +1550,20 @@ class GetSli(Op):
         assert inputs[1].dtype == inputs[2].dtype == inputs[3].dtype == 'i8'
         return inputs[0].get_type()
     def get_c_impl(self, inputs):
-        raise MethodNotDefined # XXXXXXXXX
         x = inputs[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; i%(ax)s += %(step)s) {"%dict(ax=ax, step="step" if ax==self.axis else "1") for ax in xrange(x.ndim)])
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
-        inidxexpr =  " + ".join([("(start+i%i*step)"%ax if ax==self.axis else "i%i"%ax) + "*in->stride(%i)"%ax for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join(["i%i"%ax + "*write->stride(%i)"%ax for ax in xrange(x.ndim)])
+
+        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        inidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+
         code = r"""
 extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0];
-    long start = ((long*)reads[1]->data())[0];
-    //long stop = ((long*)reads[2]->data())[0];
-    long step = ((long*)reads[3]->data())[0];
+    size_t start = reads[1]->at<size_t>(0);
+    size_t step = reads[3]->at<size_t>(0);
     %(openloops)s
-        ((%(cdtype)s*)write->data())[%(outidxexpr)s] = ((%(cdtype)s*)in->data())[%(inidxexpr)s];
+        write->at<%(cdtype)s>(%(outidxexpr)s) = in->at<%(cdtype)s>(%(inidxexpr)s);
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
@@ -1595,23 +1593,23 @@ class IncSli(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def get_c_impl(self, inputs):
-        raise MethodNotDefined
         x = inputs[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
-        incidxexpr =  " + ".join(["i%i"%ax + "*inc->stride(%i)"%ax for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join([("i%i*step+start"%ax if ax == self.axis else "i%i"%ax) + "*out->stride(%i)"%ax for ax in xrange(x.ndim)])
+
+        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        incidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+
         code = r"""
 extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0], *inc = reads[4], *out=write;
-    long start = ((long*)reads[1]->data())[0];
-    //long stop = ((long*)reads[2]->data())[0];
-    long step = ((long*)reads[3]->data())[0];
+    long start = reads[1]->at<size_t>(0);
+    long step = reads[3]->at<size_t>(0);
     cgt_assert(in->size() == out->size());
     if (out->data() != in->data()) cgt_memcpy(cgtCPU, cgtCPU, out, in, out->nbytes());
     %(openloops)s
-        ((%(cdtype)s*)out->data())[%(outidxexpr)s] += ((%(cdtype)s*)inc->data())[%(incidxexpr)s];
+        write->at<%(cdtype)s>(%(outidxexpr)s) += inc->at<%(cdtype)s>(%(incidxexpr)s);
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops,

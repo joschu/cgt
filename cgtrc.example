@@ -8,3 +8,4 @@ force_python_impl = False
 disallow_python_impl = False
 parallel_interp = False
 enable_cuda = False
+debug_cpp = False

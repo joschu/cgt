@@ -64,6 +64,8 @@ def _make_compile_command(fname, libpath, extra_link_flags):
     if info["CGT_ENABLE_CUDA"]: linkdirs += " -L"+info["CUDA_LIBRARY_DIR"]
     if info["CGT_ENABLE_CUDNN"]: linkdirs += " -L"+info["CUDNN_ROOT"]
 
+    config = core.load_config()
+
     d = dict(
         cacheroot=info["CACHE_ROOT"],
         srcpath=fname,
@@ -74,7 +76,7 @@ def _make_compile_command(fname, libpath, extra_link_flags):
         libpath=libpath,
         cgtlibdir=info["CGT_LIBRARY_DIR"],
         extralink=extra_link_flags,
-        cflags="-fPIC -O3 -DNDEBUG -ffast-math")
+        cflags="-fPIC -O0 -g" if config["debug_cpp"] else "-O3 -DNDEBUG -ffast-math")
     if fname.endswith(".cu"):
         if not info["CGT_ENABLE_CUDA"]:
             raise RuntimeError("Trying to compile a CUDA function but CUDA is disabled in your build. Rebuild with CGT_ENABLE_CUDA=ON")

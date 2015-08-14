@@ -90,6 +90,9 @@ def determine_devices(nodes_sorted, oplib, node2memowner, node2forceddev=None):
     node2dev = {}
     node2impltype = {}
     for node in nodes_sorted:
+        # As nodes get assigned, we need to propagate constraints
+        if node2memowner[node] in node2dev:
+            node2candidatedevs[node] = [node2dev[node2memowner[node]]]
         assert node2candidatedevs[node] # every node should have at least one device
         best_dev = None
         best_impl = None
