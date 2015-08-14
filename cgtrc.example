@@ -1,5 +1,10 @@
-# See cgtrc_spec.ini for listing of options
-# Copy to $HOME/.cgtrc
 precision = single
-backend = cython
-backend_check_values=False 
+backend = "python"
+backend_check_values = False
+cache_dir = "~/.cgt_cache"
+enable_inplace_opt = True
+enable_simplification = True
+force_python_impl = False
+disallow_python_impl = False
+parallel_interp = False
+enable_cuda = False

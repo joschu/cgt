@@ -532,7 +532,6 @@ class Data(Input):
         value = as_valid_array(value)
         if device is None:
             self.device = Device()
-        # TODO only if backend=cython
         import cycgt2
 
         self.use_numpy = cgt.load_config()["backend"] == "python"

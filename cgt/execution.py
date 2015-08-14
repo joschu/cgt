@@ -127,7 +127,7 @@ def create_interpreter(inputs, outputs, eg, node2memloc, node2impltype, oplib):
             return ParallelInterpreter(eg, oplib, output_locs, input_types)
         else:
             return SequentialInterpreter(eg, oplib, output_locs, input_types)
-    elif backend == "cython":
+    elif backend == "native":
         import cycgt2
         if parallel_interp:
             return cycgt2.CppInterpreterWrapper(eg, oplib, node2impltype, input_types, output_locs, True)
@@ -330,9 +330,9 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
         inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev, node2impltype)
 
     # Print execution graph
-    # print 'begin'
-    # print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
-    # print 'end'
+    print 'begin'
+    print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
+    print 'end'
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------
