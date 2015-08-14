@@ -368,7 +368,7 @@ class Op(object):
         """
         Get a human-readable description of the Op, including its attributes
         """
-        return type(self).__name__.lower()
+        return type(self).__name__
     def get_py_impl(self):
         raise MethodNotDefined
     def get_c_impl(self, inputs):
@@ -430,7 +430,7 @@ class Op(object):
         """
         Get a human-readable description of the Op, including its attributes
         """
-        return type(self).__name__.lower()
+        return type(self).__name__
 
 
 def as_node(val_or_node):
@@ -566,6 +566,7 @@ class Data(Input):
         return self._value.size
     def set_value(self, x):
         assert isinstance(x, np.ndarray) and self.use_numpy # XXX what is this?
+        assert x.dtype == self._value.dtype
         self._value = x
 
 
@@ -707,7 +708,7 @@ class Constant(Op): #pylint: disable=W0223
         return self.value
 
 class ConstantTensor(Constant):
-    call_type = "inplace"
+    call_type = "valret"
     # XXX for some reason valret version gives rare segfaults
     def __init__(self, value):
         Constant.__init__(self, as_valid_array(value))
@@ -719,15 +720,15 @@ class ConstantTensor(Constant):
         ndim = self.value.ndim
         return "%g"%self.value if ndim==0 else "%s%g...%s"%("["*ndim, self.value.flat[0], "]"*ndim)        
     def get_py_impl(self):
-        # def valret_func(reads):
-        #     return self.value
+        def valret_func(reads):
+            return self.value
         def inplace_func(reads, write):
             if isinstance(write, tuple):
                 for (arrfrom,arrto) in utils.safezip(self.value,write):
                     np.copyto(arrto, arrfrom)
             else:
                 np.copyto(write,self.value)
-        return PyImpl(inplace_func=inplace_func)#PyImpl(valret_func=valret_func)
+        return PyImpl(valret_func=valret_func)#PyImpl(valret_func=valret_func)
     def pullback(self, _inps, _out, _gout):
         return []
     def shp_apply(self, _inputs):
@@ -892,14 +893,23 @@ def _nu_sigmoid(x, out=None):
     return np.reciprocal(1+np.exp(-x), out=out)
 
 def _nu_iceil(x,out=None):
-    return np.ceil(x, out=out)
+    if out is None:
+        return np.ceil(x)
+    else:
+        np.ceil(x,out)
 
 def _nu_ifloor(x,out=None):
-    return np.floor(x,out=out)
+    if out is None:
+        return np.floor(x)
+    else:
+        np.floor(x,out)
 
 def _nu_divide(x, y, out=None):
     if x.dtype.kind != 'f': x = x.astype(cgt.floatX)
-    return np.divide(x, y, out=out)
+    if out is None:
+        return np.divide(x,y)
+    else:
+        np.divide(x,y,out)
 
 UnaryInfo = namedtuple("UnaryInfo", ("short","pyfunc","diff","typeinfo", "gradexpr", "cexpr"))
 

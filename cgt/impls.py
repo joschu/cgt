@@ -280,7 +280,7 @@ class OpLibrary(object):
 
         impltype2impl = self.get_available_impls(node)
         if impltype not in impltype2impl:
-            raise RuntimeError("Node %s has no available %s")
+            raise RuntimeError("Node %s has no available %s"%(node, impltype))
         return impltype2impl[impltype]
 
     def fetch_binary(self, node, impltype):

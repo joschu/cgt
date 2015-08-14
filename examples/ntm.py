@@ -47,7 +47,7 @@ def make_ff_controller(opt):
     r_bhm = cgt.tensor3("r", fixed_shape = (b,h,m))
     X_bk = cgt.matrix("x", fixed_shape = (b,k))
     r_b_hm = r_bhm.reshape([r_bhm.shape[0], r_bhm.shape[1]*r_bhm.shape[2]])
-    inp_bq = cgt.concatenate([r_b_hm, X_bk], axis=1)
+    inp_bq = cgt.concatenate([X_bk, r_b_hm], axis=1)
 
     hid_sizes = opt.ff_hid_sizes
     activation = cgt.tanh
@@ -59,8 +59,8 @@ def make_ff_controller(opt):
     for i in xrange(len(layer_out_sizes)-1):
         indim = layer_out_sizes[i]
         outdim = layer_out_sizes[i+1]        
-        W = cgt.shared(np.zeros((indim, outdim)), name="W%i"%i, fixed_shape_mask="all")
-        bias = cgt.shared(np.zeros((1, outdim)), name="b%i"%i, fixed_shape_mask="all")
+        W = cgt.shared(.02*nr.randn(indim, outdim), name="W%i"%i, fixed_shape_mask="all")
+        bias = cgt.shared(.02*nr.randn(1, outdim), name="b%i"%i, fixed_shape_mask="all")
         last_out = cgt.broadcast("+",last_out.dot(W),bias,"xx,1x")
         if i != len(layer_out_sizes)-2: last_out = activation(last_out)
 
@@ -82,6 +82,7 @@ def make_ff_controller(opt):
     gamma_bH = cgt.sigmoid(gamma_bH)+1
     e_bhm = cgt.sigmoid(e_bhm)
     a_bhm = cgt.tanh(a_bhm)
+    # y_bp = y_bp
 
     assert infer_shape(k_bHm) == (b,H,m)
     assert infer_shape(beta_bH) == (b,H)
@@ -98,6 +99,7 @@ def make_ntm_initial_states(opt):
     n, m, h, b = opt.n, opt.m, opt.h, opt.b
     M_1nm = cgt.shared(.01*nr.randn(1,n,m))
     winit_1Hn = cgt.shared(.01*nr.rand(1,2*h,n))
+    winit_1Hn = sum_normalize2(cgt.exp(winit_1Hn))
     rinit_1hm = cgt.shared(.01*nr.randn(1,h,m))
     return [cgt.repeat(arr, b, axis=0) for arr in (M_1nm, winit_1Hn, rinit_1hm)]
 
@@ -136,21 +138,21 @@ def ntm_read(M_bnm, w_bhn):
     return r_bhm
 
 def ntm_write(M_bnm, w_bhn, e_bhm, a_bhm):
-    e_b1m = (1-e_bhm).prod(axis=1,keepdims=True)
-    M_bnm = cgt.broadcast("*", M_bnm, e_b1m, 'xxx,x1x')
+    we_bhmn = cgt.broadcast("*", w_bhn[:,:,:,None], e_bhm[:,:,None,:], "xxx1,xx1x")
+    mult_bmn = (1 - we_bhmn).prod(axis=1)
+    M_bnm = M_bnm * mult_bmn
     a_b1m = a_bhm.sum(axis=1,keepdims=True)
     M_bnm = cgt.broadcast("+", M_bnm, a_b1m, 'xxx,x1x')
     return M_bnm
 
 def ntm_step(opt, Mprev_bnm, X_bk, wprev_bHn, rprev_bhm, controller):
-    n_heads = rprev_bhm.shape[1]
+    n_heads = opt.h
     k_bHm, beta_bH, g_bH, s_bH3, gamma_bH, e_bhm, a_bhm, y_bp = controller.expand([rprev_bhm, X_bk])
     w_bHn = ntm_address(opt, wprev_bHn, Mprev_bnm, k_bHm, beta_bH, g_bH, s_bH3, gamma_bH)
     wr_bhn = w_bHn[:,:n_heads,:]
     ww_bhn = w_bHn[:,n_heads:,:]    
     r_bhm = ntm_read(Mprev_bnm, wr_bhn)
     M_bnm = ntm_write(Mprev_bnm, ww_bhn, e_bhm, a_bhm)
-    w_bHn = cgt.concatenate([wr_bhn, ww_bhn], axis=1)
     return M_bnm, w_bHn, r_bhm, y_bp
 
 def sum_normalize2(x):
@@ -169,15 +171,21 @@ def make_ntm(opt):
     ntm = nn.Module([X_bk, Mprev_bnm, wprev_bHn, rprev_bhm], [y_bp, M_bnm, w_bHn, r_bhm])
     return ntm
 
+def bernoulli_loglik(bins, probs):
+    return -(bins*cgt.log(probs) + (1-bins)*cgt.log(1-probs))
 
-def make_funcs(opt, ntm, total_time, loss_timesteps):
+def make_funcs(opt, ntm, total_time, loss_timesteps):    
     x_tbk = cgt.tensor3("x", fixed_shape=(total_time, opt.b, opt.k))
-    y_tbk = cgt.tensor3("y", fixed_shape=(total_time, opt.b, opt.k))
+    y_tbp = cgt.tensor3("y", fixed_shape=(total_time, opt.b, opt.p))
     loss_timesteps = set(loss_timesteps)
+
+    initial_states = make_ntm_initial_states(opt)
+    # params = ntm.get_parameters() + get_parameters(initial_states)
+    params = ntm.get_parameters()
 
     loss = 0
 
-    state_arrs = make_ntm_initial_states(opt)
+    state_arrs = initial_states
     for t in xrange(total_time):
         tmp = ntm.expand([x_tbk[t]] + state_arrs)
         raw_pred = tmp[0]
@@ -185,32 +193,37 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
 
         if t in loss_timesteps:
             p_pred = cgt.sigmoid(raw_pred)
-            negloglik = - (y_tbk[t] * cgt.log(p_pred)).sum() # cross-entropy of bernoulli distribution
+            negloglik = bernoulli_loglik(y_tbp[t] , p_pred).sum() # cross-entropy of bernoulli distribution
             loss = loss + negloglik
 
-    params = ntm.get_parameters()
+    loss = loss / (len(loss_timesteps) * opt.k * opt.b)
     gradloss = cgt.grad(loss, params)
 
     flatgrad = cgt.flatcat(gradloss)
 
-    f_loss = cgt.function([x_tbk, y_tbk], loss)
-    f_loss_and_grad = cgt.function([x_tbk, y_tbk], [loss, flatgrad])
+    f_loss = cgt.function([x_tbk, y_tbp], loss)
+    f_loss_and_grad = cgt.function([x_tbk, y_tbp], [loss, flatgrad])
 
-    return f_loss, f_loss_and_grad
+    return f_loss, f_loss_and_grad, params
 
 class CopyTask(object):
-    def __init__(self, batch_size, seq_length, input_dim):
+    def __init__(self, batch_size, seq_length, output_dim):
         self.b = batch_size
         self.t = seq_length
-        self.k = input_dim
+        self.k = output_dim+2
+        self.p = output_dim
     def gen_batch(self):
+        assert self.k == self.p + 2
         x_tbk = np.zeros((2*self.t + 2, self.b, self.k),cgt.floatX)
         x_tbk[0, :, 0] = 1 # start symbol
-        message = nr.rand(self.t, self.b, self.k)
-        x_tbk[1:self.t+1] = message  
+        # message = (nr.rand(self.t, self.b, self.p) > .5).astype(cgt.floatX)
+        message = (nr.rand(self.t, self.b, self.p)).astype(cgt.floatX)
+
+        x_tbk[1:self.t+1,:,2:] = message
         x_tbk[self.t+1, :, 1] = 1 # end symbol
-        y_tbk = np.zeros((2*self.t + 2, self.b, self.k),cgt.floatX)
+        y_tbk = np.zeros((2*self.t+2, self.b, self.p),cgt.floatX)
         y_tbk[self.t+2:] = message # desired output
+
         return x_tbk, y_tbk
     def loss_timesteps(self):
         return range(self.t+1, 2*self.t+2)
@@ -228,6 +241,32 @@ def circ_conv_1d(wg_bhn, s_bh3, axis=2):
      + cgt.broadcast("*", s_bh3[:,:,1:2] , w, "xx1,xxx")\
      + cgt.broadcast("*", s_bh3[:,:,2:3] , wfwd, "xx1,xxx")
 
+def rmsprop_update(grad, state):
+    state.sqgrad[:] *= state.decay_rate
+    np.square(grad, out=state.scratch) # scratch=g^2
+    state.sqgrad[:] += state.scratch
+    np.sqrt(state.sqgrad, out=state.scratch) # scratch = scaling
+    np.divide(grad, state.scratch, out=state.scratch) # scratch = grad/scaling
+    np.multiply(state.scratch, state.step_size, out=state.scratch)
+    state.theta[:] -= state.scratch
+
+class Table(dict):
+    "dictionary-like object that exposes its keys as attributes"
+    def __init__(self, **kwargs):
+        dict.__init__(self, kwargs)
+        self.__dict__ = self
+
+def make_rmsprop_state(theta, step_size, decay_rate):
+    return Table(theta=theta, sqgrad=np.zeros_like(theta)+1e-6, scratch=np.empty_like(theta), 
+        step_size=step_size, decay_rate=decay_rate)
+
+def get_parameters(xs):
+    # XXX
+    out = []
+    for node in core.topsorted(xs):
+        if node.is_data():
+            out.append(node)
+    return out
 
 def main():
     import argparse
@@ -238,32 +277,39 @@ def main():
 
     cgt.set_precision("quad" if args.grad_check else "single")
     np.random.seed(0)
-    x = cgt.vector('x')
-    y = cgt.vector('y')
-    xval = nr.randn(100)
-    yval = nr.randn(3)
 
     # model parameters
-    opt = NTMOpts(
-        b = 2, # batch size
-        h = 2, # number of heads
-        n = 3, # number of memory sites
-        m = 2, # dimension at each memory site
-        k = 2, # dimension of input
-        p = 2, # dimension of output
-        ff_hid_sizes = []
-    )
+    if args.grad_check:
+        opt = NTMOpts(
+            b = 1, # batch size
+            h = 1, # number of heads
+            n = 2, # number of memory sites
+            m = 3, # dimension at each memory site
+            k = 4, # dimension of input
+            p = 2, # dimension of output
+            ff_hid_sizes = []
+        )
+        seq_length = 2
+
+    else:
+        opt = NTMOpts(
+            b = 64, # batch size
+            h = 1, # number of heads
+            n = 10, # number of memory sites
+            m = 16, # dimension at each memory site
+            k = 3, # dimension of input
+            p = 1, # dimension of output
+            ff_hid_sizes = [16]
+        )
 
     # task parameters
-    seq_length = 2
+        seq_length = 4
 
     ntm = make_ntm(opt)
-    params = ntm.get_parameters()
-    th = nn.setup_contiguous_storage(params)
-    th[:] = nr.uniform(-0.08, 0.08, th.shape)
 
-    task = CopyTask(opt.b, seq_length, opt.k)
-    f_loss, f_loss_and_grad = make_funcs(opt, ntm, task.total_time(), task.loss_timesteps())
+    task = CopyTask(opt.b, seq_length, opt.p)
+    f_loss, f_loss_and_grad, params = make_funcs(opt, ntm, task.total_time(), task.loss_timesteps())
+    th = nn.setup_contiguous_storage(params)
 
     if args.grad_check:
         x,y = task.gen_batch()
@@ -276,13 +322,14 @@ def main():
         from cgt.numeric_diff import numeric_grad
         g_num = numeric_grad(f, th,eps=1e-8)
         _, g_anal = f_loss_and_grad(x,y)
-        assert np.allclose(g_num, g_anal, atol=1e-4)
-        print "Gradient check succeeded!"
-        print "%i/%i elts of grad are nonzero"%( (g_anal != 0).sum(), g_num.size )
+        assert np.allclose(g_num, g_anal, atol=1e-8)
+        # print "Gradient check succeeded!"
+        print "%i/%i elts of grad are nonzero"%( (g_anal != 0).sum(), g_anal.size )
 
         import matplotlib.pyplot as plt
         im = g_anal[:params[0].get_size()].reshape(params[0].get_shape())!=0
         plt.imshow(im,interpolation='none')
+        print im.mean()
         H = opt.h*2
         sizes = [H*opt.m,H,H,3*H,H,opt.h*opt.m,opt.h*opt.m,opt.p]
         edges = np.cumsum(sizes)
@@ -295,9 +342,12 @@ def main():
         return
 
 
-
-    x,y = task.gen_batch()
-    print f_loss_and_grad(x, y)
+    state = make_rmsprop_state(th, .01, .95)
+    while True:
+        x,y = task.gen_batch()
+        l,g = f_loss_and_grad(x,y)
+        print l
+        rmsprop_update(g, state)        
 
 
     
