@@ -130,10 +130,10 @@ public:
                 ready_instr_inds_.push_back(instr_ind);
             }
         }
-        printf("ready_instrs: %d\n", int(ready_instr_inds_.size()));
+        //printf("ready_instrs: %d\n", int(ready_instr_inds_.size()));
         for (int k : ready_instr_inds_) {
             Instruction* instr = eg_->instrs()[k];
-            printf("%s ", instr->repr().c_str());
+            //printf("%s ", instr->repr().c_str());
         }
     }
     bool ready_to_fire(int instr_ind) {

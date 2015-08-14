@@ -1695,7 +1695,6 @@ extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
 
 
 class Mul21(Op):
-    c_extra_includes = ["cblas.h"]
     def __init__(self, tA):
         self.tA = tA
     def get_py_impl(self):
@@ -1711,11 +1710,33 @@ class Mul21(Op):
         return [cgt.outer(goutput,inputs[1]), Result(Mul21(not self.tA), [inputs[0],goutput])]
     def shp_apply(self, inputs):
         assertequal1(cgt.size(inputs[0],0 if self.tA else 1),cgt.size(inputs[1],0),
-            "shape mismatch at matrix-vector multiplication")         
+            "shape mismatch at matrix-vector multiplication")
         return [cgt.size(inputs[0], 1 if self.tA else 0)]
     def typ_apply(self, inputs):
         return TensorType(inputs[0].dtype, 1)
-    def get_expr(self, (xexpr,yexpr)):        
+    def get_closure(self, inputs):
+        return [("tA",ctypes.c_bool, self.tA)]
+    # gemv docs: https://software.intel.com/en-us/node/520750
+    def get_c_impl(self, inputs):
+        npdtype = inputs[0].dtype
+        try:
+            letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
+        except KeyError:
+            raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
+        code = r"""
+extern "C" void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
+    cgtArray *A=Ax[0], *x=Ax[1];
+    int lda = A->shape()[1];
+    int M = A->shape()[0];
+    int N = A->shape()[1];
+    const %(cdtype)s alpha=1, beta=0;
+    int incx = 1, incy = 1;
+  cblas_%(letter)sgemv(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), M, N, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
+      incx, beta, (%(cdtype)s*)y->data(), incy);
+}
+"""%dict(letter=letter, cdtype = np2c[npdtype])
+        return CImpl(code, includes=["cblas.h"], link_flags="-lblas")
+    def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
 class Mul22(Op):
@@ -1741,9 +1762,6 @@ class Mul22(Op):
         return inputs[0].get_type()
     def get_closure(self, inputs):
         return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB)]
-    def c_name(self, npdtype):
-        raise RuntimeError # move to get_c_impl
-        return "mul22_%s"%(npdtype)
     # best gemm docs: https://software.intel.com/en-us/node/520775
     def get_c_impl(self, inputs):
         npdtype = inputs[0].dtype
@@ -1764,6 +1782,8 @@ extern "C" void $function($closure* cl, cgtArray** AB, cgtArray* C) {
 }
 """%dict(letter=letter, cdtype = np2c[npdtype])
         return CImpl(code, includes=["cblas.h"], link_flags="-lblas")
+    def get_expr(self, (xexpr,yexpr)):
+        return u"%s%s \u00D7 %s%s"%(xexpr, u"\u1d57" if self.tA else "", yexpr, u"\u1d57" if self.tB else "")
 
 class BatchedMul22(Op):
     def __init__(self, tA, tB):

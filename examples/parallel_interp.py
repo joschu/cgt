@@ -15,8 +15,8 @@ def main():
 
     # params
 
-    m = 20
-    d = 5000
+    m = 10
+    d = 10000
 
     # build graph
 
@@ -53,7 +53,7 @@ def main():
         vals.append(randn(d))
 
     times = list()
-    for k in xrange(1):
+    for k in xrange(10):
         tic = time()
         out = f(*vals)
         toc = time()
