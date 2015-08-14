@@ -330,9 +330,9 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
         inputs, outputs_simple, nodes_sorted, analysis["node2shape"], node2memowner, node2dev, node2impltype)
 
     # Print execution graph
-    print 'begin'
-    print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
-    print 'end'
+    # print 'begin'
+    # print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
+    # print 'end'
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------

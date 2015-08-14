@@ -708,7 +708,7 @@ class Constant(Op): #pylint: disable=W0223
         return self.value
 
 class ConstantTensor(Constant):
-    call_type = "valret"
+    call_type = "inplace"
     # XXX for some reason valret version gives rare segfaults
     def __init__(self, value):
         Constant.__init__(self, as_valid_array(value))
@@ -728,7 +728,7 @@ class ConstantTensor(Constant):
                     np.copyto(arrto, arrfrom)
             else:
                 np.copyto(write,self.value)
-        return PyImpl(valret_func=valret_func)#PyImpl(valret_func=valret_func)
+        return PyImpl(inplace_func=inplace_func)
     def pullback(self, _inps, _out, _gout):
         return []
     def shp_apply(self, _inputs):
@@ -1596,6 +1596,7 @@ class IncSli(Op):
     def typ_apply(self, inputs):
         return inputs[0].get_type()
     def get_c_impl(self, inputs):
+        raise MethodNotDefined
         x = inputs[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])

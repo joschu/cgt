@@ -28,7 +28,7 @@ class ConvTestCase(unittest.TestCase):
                     out[b,outchan] += scipy.signal.convolve2d(x[b,inchan],f[outchan,inchan][::-1,::-1],mode='full')
 
         cgt.set_precision('double')
-        f = cgt.function([], nn.conv2d(cgt.constant(x), cgt.constant(f), kersize=(filtrows,filtcols), pad=(filtrows-1, filtcols-1)))
+        f = cgt.function([], nn.conv2d(cgt.constant(x), cgt.constant(f), kernelshape=(filtrows,filtcols), pad=(filtrows-1, filtcols-1)))
         out1 = f()
         # out1 = cgt.numeric_eval1(nn.conv2d(cgt.constant(x), cgt.constant(f), kersize=(filtrows,filtcols)), {})
         np.testing.assert_allclose(out, out1)
