@@ -105,6 +105,11 @@ def determine_devices(nodes_sorted, oplib, node2memowner, node2forceddev=None):
                 best_impl = None
                 if node in node2availableimpltypes:
                     best_impl = "impl_c" if "impl_c" in node2availableimpltypes[node] else "impl_py"
+
+                elif node.is_data():
+                    best_impl = "impl_py" if node.use_numpy else "impl_c"
+            else:
+                raise RuntimeError('devtype %s not supported' % d.devtype)
         node2dev[node] = best_dev
         node2impltype[node] = best_impl
 
@@ -611,6 +616,7 @@ class LoadArgument(Instr):
     def __init__(self, ind, write_loc):
         self.ind = ind
         self.write_loc = write_loc
+        self.read_locs = list()  # empty
     def fire(self, interp):
         interp.set(self.write_loc, interp.getarg(self.ind))
     def __repr__(self):
