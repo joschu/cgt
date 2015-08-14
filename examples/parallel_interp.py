@@ -15,25 +15,25 @@ def main():
 
     # params
 
-    m = 10
-    d = 10000
+    m = 8
+    d = 1000
 
     # build graph
 
     X = cgt.matrix("X")
-    y = cgt.vector("y")
-    ws = list()
+    Y = cgt.matrix("Y")
+    Ws = list()
     for k in xrange(m):
-        ws.append(cgt.vector("w_%d" % k))
+        Ws.append(cgt.matrix("W_%d" % k))
     b = cgt.scalar("b")
-    ypred = b
+    Ypred = b
     for k in xrange(m):
-        ypred = ypred + X.dot(ws[k])
-    loss = cgt.sum(cgt.square(ypred - y))
+        Ypred = Ypred + X.dot(Ws[k])
+    loss = cgt.sum(cgt.square(Ypred - Y))
 
-    inputs = [X, y, b]
+    inputs = [X, Y, b]
     for k in xrange(m):
-        inputs.append(ws[k])
+        inputs.append(Ws[k])
     outputs = [loss]
 
     # construct parallel/sequential interpreter
@@ -46,11 +46,11 @@ def main():
     seed(0)
 
     X_val = randn(d, d)
-    y_val = randn(d)
+    Y_val = randn(d, d)
     b_val = 5.0
-    vals = [X_val, y_val, b_val]
+    vals = [X_val, Y_val, b_val]
     for k in xrange(m):
-        vals.append(randn(d))
+        vals.append(randn(d, d))
 
     times = list()
     for k in xrange(10):

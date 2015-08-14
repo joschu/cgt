@@ -3,6 +3,7 @@
 #include <queue>
 #include <set>
 #include <vector>
+#include "util/ThreadPool.h"
 
 namespace cgt {
 
@@ -60,8 +61,9 @@ private:
 class ParallelInterpreter: public Interpreter {
 public:
     ParallelInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs)
-    : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL), write_queue_(eg->n_locs()) {
-
+    : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL), write_queue_(eg->n_locs()),
+      pool(std::thread::hardware_concurrency()) {
+        printf("Using %d threads\n", int(std::thread::hardware_concurrency()));
     }
 
     cgtObject * get(const MemLocation& m) {
@@ -86,20 +88,19 @@ public:
         cgt_assert(newargs->len == eg_->n_args());
 
         setup_instr_locs();
+
         while (instrs_left_.size() > 0) {
-            const int nthreads = ready_instr_inds_.size();
-            // XXX use thread pool
-            std::vector<std::thread> instr_threads(nthreads);
-            int j = 0;
+            std::vector< std::future<void> > results;
             for (int instr_ind : ready_instr_inds_) {
                 Instruction* instr = eg_->instrs()[instr_ind];
-                instr_threads[j] = std::thread(fire_instr, instr, this);
+                results.emplace_back(
+                    pool.enqueue(fire_instr, instr, this)
+                );
                 int ind = instr->get_writeloc().index();
                 write_queue_[ind].erase(write_queue_[ind].begin());
-                j++;
             }
-            for (int k = 0; k < instr_threads.size(); k++)
-                instr_threads[k].join();
+            for (auto && result : results)
+                result.get();
             update_instr_locs();
         }
 
@@ -151,6 +152,7 @@ public:
     }
 private:
     ExecutionGraph* eg_;
+    ThreadPool pool;
     vector<MemLocation> output_locs_;
     vector<IRC<cgtObject>> storage_;
     std::set<int> instrs_left_;
