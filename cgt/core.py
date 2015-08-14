@@ -1362,8 +1362,6 @@ class TransportToOutputDevice(Op):
         return inputs[0].get_type()
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
-    def get_py_impl(self):
-        raise RuntimeError("Only CPU supported in Python mode. No Transport ops should exist.")
     def get_c_impl(self, _inputs):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
