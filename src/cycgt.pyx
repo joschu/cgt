@@ -432,3 +432,6 @@ cdef class CppInterpreterWrapper:
         cdef IRC[cgtTuple] ret = IRC[cgtTuple](self.interp.run(cargs))
         del cargs
         return list(cgt2py_object(ret.get(), False)) # TODO maybe allow returning view?
+
+def cgt_build_root():
+    return osp.dirname(osp.dirname(osp.abspath(__file__)))

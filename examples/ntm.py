@@ -1,16 +1,42 @@
 __doc__ = """
+
 Neural turing machine.
 
-Doesn't work yet.
+Names of arrays
+---------------
+
+Along with range of elements [low, high]
+
+Mprev_bnm:          previous memory state. [-inf, inf]
+X_bk:               external inputs. [0,1]
+wprev_bHn:          previous weights (read & write). [0, 1]. Normalized along axis 2.
+rprev_bhm:          previous vector read from memory. [-1, 1]
+k_bHm:              key vectors [-1, 1]
+beta_bH:            key strength [0, infinity]
+g_bH:               gating for weight update.  [0, 1]
+s_bH3:              shift weighting. [0, 1]. Normalized along axis 2. 
+gamma:              sharpening [1, 2]
+e_bhm:              erase [0, 1]
+a_bhm:              add [-1, 1]
+
+Names of subscripts
+-------------------
+
+- b: batch size
+- h: number of read heads == number of write heads
+- H: number of read + write heads == 2*h
+- n: number of memory sites
+- m: dimension at each memory site
+- k: dimension of input
+- p: dimension of output
 
 """
 
-
-
-import cgt, numpy as np, scipy.signal as ss, numpy.random as nr
+import cgt, numpy as np, numpy.random as nr
 from cgt import core, nn
 from collections import namedtuple
 from cgt.core import infer_shape
+from example_utils import fmt_row
 
 # Subscript indicate dimensions of array, and what each dimension indexes over
 NTMOpts = namedtuple("NTMOpts",[
@@ -23,19 +49,6 @@ NTMOpts = namedtuple("NTMOpts",[
     "ff_hid_sizes", # hidden layer sizes of feedforward controller
 ])
 
-
-# Names of arrays:
-# Mprev_bnm: previous memory state
-# X_bk: inputs
-# wprev_bHn: previous weights (read & write, concatenated along axis 1)
-# rprev_bhm: previous vector read from memory
-
-# k: key vector
-# beta: key strength
-# g: gating for weight update
-# s: shift weighting
-# gamma: sharpening
-
 def make_ff_controller(opt):
 
     b, h, m, p, k = opt.b, opt.h, opt.m, opt.p, opt.k
@@ -44,9 +57,12 @@ def make_ff_controller(opt):
     in_size = k + h*m
     out_size = H*m + H + H + H*3 + H + h*m + h*m + p
 
+    # Previous reads
     r_bhm = cgt.tensor3("r", fixed_shape = (b,h,m))
+    # External inputs
     X_bk = cgt.matrix("x", fixed_shape = (b,k))
     r_b_hm = r_bhm.reshape([r_bhm.shape[0], r_bhm.shape[1]*r_bhm.shape[2]])
+    # Input to controller
     inp_bq = cgt.concatenate([X_bk, r_b_hm], axis=1)
 
     hid_sizes = opt.ff_hid_sizes
@@ -54,7 +70,6 @@ def make_ff_controller(opt):
 
     layer_out_sizes = [in_size] + hid_sizes + [out_size]
     last_out = inp_bq
-
     # feedforward part. we could simplify a bit by using nn.Affine
     for i in xrange(len(layer_out_sizes)-1):
         indim = layer_out_sizes[i]
@@ -62,8 +77,8 @@ def make_ff_controller(opt):
         W = cgt.shared(.02*nr.randn(indim, outdim), name="W%i"%i, fixed_shape_mask="all")
         bias = cgt.shared(.02*nr.randn(1, outdim), name="b%i"%i, fixed_shape_mask="all")
         last_out = cgt.broadcast("+",last_out.dot(W),bias,"xx,1x")
+        # Don't apply nonlinearity at the last layer
         if i != len(layer_out_sizes)-2: last_out = activation(last_out)
-
 
     idx = 0
     k_bHm = last_out[:,idx:idx+H*m];      idx += H*m;         k_bHm = k_bHm.reshape([b,H,m])
@@ -76,9 +91,9 @@ def make_ff_controller(opt):
     y_bp = last_out[:,idx:idx+p];         idx += p
 
     k_bHm = cgt.tanh(k_bHm)
-    beta_bH = cgt.sigmoid(beta_bH)
+    beta_bH = cgt.log(1 + cgt.exp(beta_bH)) # XXX not numerically stable
     g_bH = cgt.sigmoid(g_bH)
-    s_bH3 = cgt.sigmoid(s_bH3)
+    s_bH3 = sum_normalize2(cgt.exp(s_bH3))
     gamma_bH = cgt.sigmoid(gamma_bH)+1
     e_bhm = cgt.sigmoid(e_bhm)
     a_bhm = cgt.tanh(a_bhm)
@@ -94,13 +109,13 @@ def make_ff_controller(opt):
     assert infer_shape(y_bp) == (b,p)
 
     return nn.Module([r_bhm, X_bk], [k_bHm, beta_bH, g_bH, s_bH3, gamma_bH, e_bhm, a_bhm, y_bp])
-# return M_bnm, w_bHn, r_bhm, y_bp
+
 def make_ntm_initial_states(opt):
     n, m, h, b = opt.n, opt.m, opt.h, opt.b
-    M_1nm = cgt.shared(.01*nr.randn(1,n,m))
-    winit_1Hn = cgt.shared(.01*nr.rand(1,2*h,n))
+    M_1nm = cgt.shared(.1*nr.randn(1,n,m))
+    winit_1Hn = cgt.shared(.1*nr.rand(1,2*h,n))
     winit_1Hn = sum_normalize2(cgt.exp(winit_1Hn))
-    rinit_1hm = cgt.shared(.01*nr.randn(1,h,m))
+    rinit_1hm = cgt.shared(np.zeros((1,h,m)))
     return [cgt.repeat(arr, b, axis=0) for arr in (M_1nm, winit_1Hn, rinit_1hm)]
 
 def ntm_address(opt, wprev_bhn, M_bnm, k_bhm, beta_bh, g_bh, s_bh3, gamma_bh):
@@ -108,14 +123,17 @@ def ntm_address(opt, wprev_bhn, M_bnm, k_bhm, beta_bh, g_bh, s_bh3, gamma_bh):
     # Content addressing
 
     # Cosine similarity
-    numer = cgt.einsum("bhm,bnm->bhn", k_bhm, M_bnm)
-    denom = cgt.broadcast("*",
-        cgt.norm(k_bhm, axis=2, keepdims=True),
-        cgt.norm(M_bnm, axis=2, keepdims=True).transpose([0,2,1]),
+    # take inner product along memory axis k * M
+    numer_bhn = cgt.einsum("bhm,bnm->bhn", k_bhm, M_bnm) 
+    # compute denominator |k| * |m|
+    denom_bhn = cgt.broadcast("*",
+        cgt.norm(k_bhm, axis=2, keepdims=True), # -> shape bh1
+        cgt.norm(M_bnm, axis=2, keepdims=True).transpose([0,2,1]), # -> bn1 -> b1n
         "xx1,x1x"
     )
-    csim_bhn =  numer / denom
+    csim_bhn =  numer_bhn / denom_bhn
     assert infer_shape(csim_bhn) == (opt.b, 2*opt.h, opt.n)
+    # scale by beta
     tmp_bhn = cgt.broadcast("*", beta_bh[:,:,None], csim_bhn, "xx1,xxx")
     wc_bhn = sum_normalize2(cgt.exp( tmp_bhn ))
     # Interpolation
@@ -138,11 +156,24 @@ def ntm_read(M_bnm, w_bhn):
     return r_bhm
 
 def ntm_write(M_bnm, w_bhn, e_bhm, a_bhm):
-    we_bhmn = cgt.broadcast("*", w_bhn[:,:,:,None], e_bhm[:,:,None,:], "xxx1,xx1x")
-    mult_bmn = (1 - we_bhmn).prod(axis=1)
-    M_bnm = M_bnm * mult_bmn
-    a_b1m = a_bhm.sum(axis=1,keepdims=True)
-    M_bnm = cgt.broadcast("+", M_bnm, a_b1m, 'xxx,x1x')
+
+    if False: # Here's the version that's faithful to the paper
+        # weighted erases                  bhn1                bh1m
+        # ideally we wouldn't create this big 4-tensor but this operation 
+        # requires a more general kind of contraction than is provided by einsum
+        we_bhmn = cgt.broadcast("*", w_bhn[:,:,:,None], e_bhm[:,:,None,:], "xxx1,xx1x")
+        # take produce of erasing factors
+        mult_bmn = (1 - we_bhmn).prod(axis=1)
+        M_bnm = M_bnm * mult_bmn # Equation 3 http://arxiv.org/pdf/1410.5401v2.pdf
+    else: # This version just does a regular contraction
+        erase_bnm = cgt.einsum( "bhn,bhm->bnm", w_bhn, e_bhm)
+        M_bnm = M_bnm*(1-erase_bnm)
+
+    # Now do the same thing with adds
+    # But now it's just a regular contraction since we are adding rather than taking product
+    add_bnm = cgt.einsum( "bhn,bhm->bnm", w_bhn, a_bhm)
+    M_bnm = M_bnm + add_bnm
+
     return M_bnm
 
 def ntm_step(opt, Mprev_bnm, X_bk, wprev_bHn, rprev_bhm, controller):
@@ -171,8 +202,9 @@ def make_ntm(opt):
     ntm = nn.Module([X_bk, Mprev_bnm, wprev_bHn, rprev_bhm], [y_bp, M_bnm, w_bHn, r_bhm])
     return ntm
 
-def bernoulli_loglik(bins, probs):
-    return -(bins*cgt.log(probs) + (1-bins)*cgt.log(1-probs))
+def bernoulli_crossentropy(bins, probs):
+    "bins = binary values. probs = Pr(b=1)"
+    return -( bins*cgt.log(probs) + (1-bins)*cgt.log(1-probs))
 
 def make_funcs(opt, ntm, total_time, loss_timesteps):    
     x_tbk = cgt.tensor3("x", fixed_shape=(total_time, opt.b, opt.k))
@@ -180,10 +212,11 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
     loss_timesteps = set(loss_timesteps)
 
     initial_states = make_ntm_initial_states(opt)
-    # params = ntm.get_parameters() + get_parameters(initial_states)
-    params = ntm.get_parameters()
+    params = ntm.get_parameters() + get_parameters(initial_states)
+    # params = ntm.get_parameters()
 
-    loss = 0
+    lossCE = 0
+    loss01 = 0
 
     state_arrs = initial_states
     for t in xrange(total_time):
@@ -193,18 +226,24 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
 
         if t in loss_timesteps:
             p_pred = cgt.sigmoid(raw_pred)
-            negloglik = bernoulli_loglik(y_tbp[t] , p_pred).sum() # cross-entropy of bernoulli distribution
-            loss = loss + negloglik
+            ce = bernoulli_crossentropy(y_tbp[t] , p_pred).sum() # cross-entropy of bernoulli distribution
+            lossCE = lossCE + ce
+            loss01 = loss01 + cgt.cast(cgt.equal(y_tbp[t], round01(p_pred)),cgt.floatX).sum()
 
-    loss = loss / (len(loss_timesteps) * opt.k * opt.b)
-    gradloss = cgt.grad(loss, params)
+
+    lossCE = lossCE / (len(loss_timesteps) * opt.p * opt.b) / np.log(2)
+    loss01 = loss01 / (len(loss_timesteps) * opt.p * opt.b)
+    gradloss = cgt.grad(lossCE, params)
 
     flatgrad = cgt.flatcat(gradloss)
 
-    f_loss = cgt.function([x_tbk, y_tbp], loss)
-    f_loss_and_grad = cgt.function([x_tbk, y_tbp], [loss, flatgrad])
+    f_loss = cgt.function([x_tbk, y_tbp], lossCE)
+    f_loss_and_grad = cgt.function([x_tbk, y_tbp], [lossCE, loss01, flatgrad])
 
     return f_loss, f_loss_and_grad, params
+
+def round01(x):
+    return cgt.cast(x>.5,cgt.floatX)
 
 class CopyTask(object):
     def __init__(self, batch_size, seq_length, output_dim):
@@ -216,8 +255,8 @@ class CopyTask(object):
         assert self.k == self.p + 2
         x_tbk = np.zeros((2*self.t + 2, self.b, self.k),cgt.floatX)
         x_tbk[0, :, 0] = 1 # start symbol
-        # message = (nr.rand(self.t, self.b, self.p) > .5).astype(cgt.floatX)
-        message = (nr.rand(self.t, self.b, self.p)).astype(cgt.floatX)
+        message = (nr.rand(self.t, self.b, self.p) > .5).astype(cgt.floatX)
+        # message = (nr.rand(self.t, self.b, self.p)).astype(cgt.floatX)
 
         x_tbk[1:self.t+1,:,2:] = message
         x_tbk[self.t+1, :, 1] = 1 # end symbol
@@ -295,15 +334,15 @@ def main():
         opt = NTMOpts(
             b = 64, # batch size
             h = 1, # number of heads
-            n = 10, # number of memory sites
-            m = 16, # dimension at each memory site
+            n = 128, # number of memory sites
+            m = 20, # dimension at each memory site
             k = 3, # dimension of input
             p = 1, # dimension of output
-            ff_hid_sizes = [16]
+            ff_hid_sizes = [128,128]
         )
 
     # task parameters
-        seq_length = 4
+        seq_length = 10
 
     ntm = make_ntm(opt)
 
@@ -337,16 +376,16 @@ def main():
         ax.set_xticks(edges-.5)
         ax.set_xticklabels(["k","beta","g","s","gamma","e","a","y"])
         plt.show()
-
-
         return
 
-
-    state = make_rmsprop_state(th, .01, .95)
+    seq_num = 0
+    state = make_rmsprop_state(th, .001, .95)
+    print fmt_row(13, ["seq num", "CE (bits)", "0-1 loss", "|g|_inf"], header=True)
     while True:
         x,y = task.gen_batch()
-        l,g = f_loss_and_grad(x,y)
-        print l
+        seq_num += x.shape[1]
+        l,l01,g = f_loss_and_grad(x,y)
+        print fmt_row(13, [seq_num, l,l01,np.abs(g).max()])
         rmsprop_update(g, state)        
 
 
