@@ -45,7 +45,6 @@ Installation
 - CUDA (Optional)
 
 
-
 Option 1: Python (NumPy) only
 -----------------------------
 
@@ -90,7 +89,9 @@ Running unit tests
 
 You can run our suite of unit tests to verify your installation. In the source directory::
 
-    python test/run_all_tests.py
+    nosetests
+
+Note that you'll have to install the ``nose`` python module.
 
 Tutorial
 ========

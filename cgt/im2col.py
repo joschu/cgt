@@ -22,6 +22,7 @@ def info2closure(info):
 
 
 class Im2Col(core.Op):
+    available_impls = ("native_cpu",)        
     def __init__(self, info):
         assert info.stride_h>0 and info.stride_w>0
         self.info = info
@@ -40,26 +41,26 @@ class Im2Col(core.Op):
     def typ_apply(self, inputs):
         assert inputs[0].ndim == 4
         return core.TensorType(inputs[0].dtype, 4)
-    def get_closure(self, _inputs):
-        return info2closure(self.info)
-    def get_c_impl(self, inputs):
+    def get_native_compile_info(self, input_types, devtype):
+        assert devtype == "cpu"
         code = r"""
-extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
-    cgtArray* im = reads[0];
-    const size_t* imshape = im->shape();
-    int batchsize = imshape[0],
-        channels = imshape[1],
-        height = imshape[2],
-        width = imshape[3];
-    for (int i=0; i < batchsize; ++i) {
-        im2col_cpu((%(cdtype)s*)im->data() + im->stride(0)*i, channels, height, width,
-            cl->kernel_h, cl->kernel_w, cl->pad_h, cl->pad_w, cl->stride_h, 
-            cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
-    }
-}"""%dict(cdtype=core.np2c[inputs[0].dtype])
-        return core.CImpl(code=code, includes=["im2col.h"])
+            CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
+                cgtArray* im = reads[0];
+                const size_t* imshape = im->shape();
+                int batchsize = imshape[0],
+                    channels = imshape[1],
+                    height = imshape[2],
+                    width = imshape[3];
+                for (int i=0; i < batchsize; ++i) {
+                    im2col_cpu((%(cdtype)s*)im->data() + im->stride(0)*i, channels, height, width,
+                        cl->kernel_h, cl->kernel_w, cl->pad_h, cl->pad_w, cl->stride_h, 
+                        cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
+                }
+            }"""%dict(cdtype=core.np2c[input_types[0].dtype])
+        return core.NativeCompileInfo(self, 1, "c++", code, includes=["im2col.h"], closure_triples=info2closure(self.info))
 
 class Col2Im(core.Op):
+    available_impls = ("python",)            
     def __init__(self, info):
         self.info = info
     def get_diff(self, _):
@@ -72,7 +73,7 @@ class Col2Im(core.Op):
         return core.TensorType(inputs[0].dtype, 4)
     def get_closure(self, _inputs):
         return info2closure(self.info)
-    def get_c_impl(self, inputs):
+    def get_native_compile_info(self, inputs):
         code = r"""
 extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
     cgtArray* col = reads[0];
@@ -86,7 +87,7 @@ extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
             cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
     }
 }"""%dict(cdtype=core.np2c[inputs[0].dtype])
-        return core.CImpl(code=code, includes=["im2col.h"])
+        return core.NativeCompileInfo(self, 1, code, includes=["im2col.h"], closure_triples=info2closure(self.info))
 
 def test():
     np.random.seed(0)

@@ -1,9 +1,8 @@
 import cgt
 from cgt import core
 import numpy as np
-import unittest
 import numpy.random as nr
-
+from cgt.tests import reset_config
 
 DISPLAY = False
 
@@ -63,10 +62,11 @@ def check_affine(f, *nu_inputs):
     grads_true = gradients_affine(f_cgt, nu_inputs, h=1e-4 if "max" in f.__name__ else 1e-1)
     grads_cgt = gradf_cgt(*nu_inputs)
 
-    np.testing.assert_allclose(out_cgt, out_true, rtol=1e-5)
+    rtol = {"single":1e-3,"double":1e-5}[cgt.get_precision()]
+    np.testing.assert_allclose(out_cgt, out_true, rtol=rtol)
 
     for (g_cgt, g_true) in zip(grads_cgt, grads_true):
-        np.testing.assert_allclose(g_cgt, g_true,rtol=1e-5)
+        np.testing.assert_allclose(g_cgt, g_true,rtol=rtol)
 
     result_count = core.count_nodes(sy_result_simple)
     grad_count = core.count_nodes(sy_grads_simple)
@@ -215,86 +215,85 @@ def flip1(x, y):
 ### Tests 
 ################################################################
 
-class AffineTestCase(unittest.TestCase):
-    def setUp(self):
-        cgt.set_precision('double')
-        nr.seed(303)
-    def runTest(self):
 
-        sA = np.array(nr.rand())
-        sB = np.array(nr.rand())
-        sC = np.array(nr.rand())
-        mA = nr.randn(2,3)
-        mB = nr.randn(2,3)
-        mC = nr.randn(2,3)
+def test_affine():
+    for backend in ("python","native"):
+        for precision in ("double",):
+            yield check_affine_funcs, precision, backend
 
-        for fn in [xplusx, _2x_plus_3x, xm1, onemx]:
-            for arg in [sA, mA]:
-                check_affine(fn, arg)
+@reset_config
+def check_affine_funcs(precision, backend):
+    np.random.seed(0)
+    cgt.set_precision(precision)
+    cgt.core.modify_config(backend=backend)
 
-        check_affine(elem_mult2, mA, mB, mC)
-        check_affine(elem_mult2, sA, sB, sC)
-        check_affine(pyramid, sA, sB, sC)
-        check_affine(pyramid, mA, mB, mC)
-        check_affine(slisum1, mA)
-        check_affine(slisum2, mA)
-        check_affine(slisum3, mA)
-        check_affine(slisum4, mA)
-        check_affine(max0, mA)
-        check_affine(max1, mA)
-        check_affine(max2, mA)
-        check_affine(fancysli0, mA)
-        check_affine(sum10, mA)
-        check_affine(sum01, mA)
-        check_affine(repeat0, mA[0:1, :], nr.randn(7,3))
-        check_affine(repeat1, mA[:, 0:1], nr.randn(2,7))
+    sA = np.array(nr.rand())
+    sB = np.array(nr.rand())
+    sC = np.array(nr.rand())
+    mA = nr.randn(2,3)
+    mB = nr.randn(2,3)
+    mC = nr.randn(2,3)
 
-        M23 = mA
-        M35 = nr.randn(3,5)
-        v3 = nr.randn(3)
-        v13 = v3.reshape(1,3) #XXX
-        v5 = nr.randn(5)
-        v15 = v5.reshape(1,5) #XXX
-        v3b = nr.randn(3)
+    for fn in [xplusx, _2x_plus_3x, xm1, onemx]:
+        for arg in [sA, mA]:
+            check_affine(fn, arg)
 
-        check_affine(matmat00, M23, M35)
-        check_affine(matmat01, M23, M35.T)
-        check_affine(matmat10, M23.T, M35)
-        check_affine(matmat11, M23.T, M35.T)
-        check_affine(matvec, M23, v3)
-        check_affine(vecvec, v3, v3b)
-        check_affine(bcadd, M23, v13)
-        check_affine(matmatplusvec, M23, M35, v15)
-        check_affine(transpose, M23, nr.randn(3,2))
+    check_affine(elem_mult2, mA, mB, mC)
+    check_affine(elem_mult2, sA, sB, sC)
+    check_affine(pyramid, sA, sB, sC)
+    check_affine(pyramid, mA, mB, mC)
+    check_affine(slisum1, mA)
+    check_affine(slisum2, mA)
+    check_affine(slisum3, mA)
+    check_affine(slisum4, mA)
+    check_affine(max0, mA)
+    check_affine(max1, mA)
+    check_affine(max2, mA)
+    check_affine(fancysli0, mA)
+    check_affine(sum10, mA)
+    check_affine(sum01, mA)
+    check_affine(repeat0, mA[0:1, :], nr.randn(7,3))
+    check_affine(repeat1, mA[:, 0:1], nr.randn(2,7))
 
+    M23 = mA
+    M35 = nr.randn(3,5)
+    v3 = nr.randn(3)
+    v13 = v3.reshape(1,3) #XXX
+    v5 = nr.randn(5)
+    v15 = v5.reshape(1,5) #XXX
+    v3b = nr.randn(3)
 
-        T235 = nr.randn(2,3,5)
-        T257 = nr.randn(2,5,7)
-        check_affine(transpose012, T235)
-        check_affine(transpose021, T235)
-        check_affine(transpose102, T235)
-        check_affine(batchedmatmul, T235, T257)
-
-        check_affine(flip0, M23, nr.randn(2,3))
-        check_affine(flip1, M23, nr.randn(2,3))
-
-        # check_affine(rfft, M35)
+    check_affine(matmat00, M23, M35)
+    check_affine(matmat01, M23, M35.T)
+    check_affine(matmat10, M23.T, M35)
+    check_affine(matmat11, M23.T, M35.T)
+    check_affine(matvec, M23, v3)
+    check_affine(vecvec, v3, v3b)
+    check_affine(bcadd, M23, v13)
+    check_affine(matmatplusvec, M23, M35, v15)
+    check_affine(transpose, M23, nr.randn(3,2))
 
 
-        # TODO: examples with constants
-        # TODO: examples that mix scalar and matrix types
+    T235 = nr.randn(2,3,5)
+    T257 = nr.randn(2,5,7)
+    check_affine(transpose012, T235)
+    check_affine(transpose021, T235)
+    check_affine(transpose102, T235)
+    check_affine(batchedmatmul, T235, T257)
 
-        if DISPLAY:
-            from thirdparty.tabulate import tabulate
-            print tabulate([[key,val["fn"],val["grad"]] for (key,val) in sorted(PROB2RESULT.items())],headers=["funcname","fncount","gradcount"])
+    check_affine(flip0, M23, nr.randn(2,3))
+    check_affine(flip1, M23, nr.randn(2,3))
+
+    # check_affine(rfft, M35)
+
+
+    # TODO: examples with constants
+    # TODO: examples that mix scalar and matrix types
+
+    if DISPLAY:
+        from thirdparty.tabulate import tabulate
+        print tabulate([[key,val["fn"],val["grad"]] for (key,val) in sorted(PROB2RESULT.items())],headers=["funcname","fncount","gradcount"])
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-v","--verbose",action="store_true")
-    args = parser.parse_args()
-    if args.verbose: DISPLAY = True
-    case = AffineTestCase()
-    case.setUp()
-    case.runTest()
+    for fargs in test_affine(): fargs[0](*fargs[1:])

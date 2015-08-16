@@ -75,6 +75,9 @@ def main():
     Xdata = (mnist["X"]/255.).astype(cgt.floatX)
     ydata = mnist["y"]
 
+    np.random.seed(0)
+
+
     if args.convnet:
         Xdata = Xdata.reshape(-1, 1, 28, 28)
     Xtrain = Xdata[0:60000]
@@ -87,12 +90,8 @@ def main():
     Xtrain = Xtrain[sortinds]
     ytrain = ytrain[sortinds]
 
-    np.random.seed(0)
-
     X = cgt.tensor4("X",fixed_shape=(None,1,28,28)) if args.convnet else cgt.matrix("X", fixed_shape=(None,28*28))
     y = cgt.vector("y",dtype='i8')
-
-
 
     if args.convnet:
         p_drop_conv,p_drop_hidden = (0.2, 0.5) if args.dropout else (0,0)            

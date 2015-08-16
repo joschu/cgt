@@ -1,6 +1,6 @@
 from .api import *
 from .display import print_tree, print_expr, print_text, as_dot
-from .execution import function, numeric_eval, numeric_eval1
+from .execution import function, numeric_eval
 from .core import grad, load_config, modify_config, simplify
 from .ez import EasyCustomOp
 

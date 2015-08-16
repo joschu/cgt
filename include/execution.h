@@ -9,23 +9,23 @@ using std::vector;
 
 // note: no-args initializers are only here because they're required by cython
 
-class ByRefFunCl {
+class ByRefCallable {
 public:
     cgtByRefFun fptr;
     void* data;
-    ByRefFunCl(cgtByRefFun fptr, void* data) : fptr(fptr), data(data) {}
-    ByRefFunCl() : fptr(NULL), data(NULL) {}
+    ByRefCallable(cgtByRefFun fptr, void* data) : fptr(fptr), data(data) {}
+    ByRefCallable() : fptr(NULL), data(NULL) {}
     void operator()(cgtObject ** reads, cgtObject * write) {
         (*fptr)(data, reads, write);
     }
 };
 
-struct ByValFunCl {
+struct ByValCallable {
 public:
     cgtByValFun fptr;
     void* data;
-    ByValFunCl(cgtByValFun fptr, void* data) : fptr(fptr), data(data) {}
-    ByValFunCl() : fptr(NULL), data(NULL) {}
+    ByValCallable(cgtByValFun fptr, void* data) : fptr(fptr), data(data) {}
+    ByValCallable() : fptr(NULL), data(NULL) {}
     cgtObject * operator()(cgtObject ** args) {
         return (*fptr)(data, args);
     }
@@ -125,28 +125,28 @@ private:
 
 class ReturnByRef : public Instruction  {
 public:
-    ReturnByRef(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc, ByRefFunCl closure)
-    : Instruction(repr), readlocs(readlocs), writeloc(writeloc), closure(closure) {}
+    ReturnByRef(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc, ByRefCallable callable)
+    : Instruction(repr), readlocs(readlocs), writeloc(writeloc), callable(callable) {}
     void fire(Interpreter*);
     const vector<MemLocation>& get_readlocs() const { return readlocs; }
     const MemLocation& get_writeloc() const { return writeloc; }
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    ByRefFunCl closure;
+    ByRefCallable callable;
 };
 
 class ReturnByVal : public Instruction  {
 public:
-    ReturnByVal(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc, ByValFunCl closure)
-    : Instruction(repr), readlocs(readlocs), writeloc(writeloc), closure(closure) {}
+    ReturnByVal(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc, ByValCallable callable)
+    : Instruction(repr), readlocs(readlocs), writeloc(writeloc), callable(callable) {}
     void fire(Interpreter*);
     const vector<MemLocation>& get_readlocs() const { return readlocs; }
     const MemLocation& get_writeloc() const { return writeloc; }
 private:
     vector<MemLocation> readlocs;
     MemLocation writeloc;
-    ByValFunCl closure;
+    ByValCallable callable;
 };
 
 

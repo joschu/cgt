@@ -202,7 +202,7 @@ void ReturnByRef::fire(Interpreter* interp) {
         reads[i] = interp->get(readlocs[i]);
     }
     cgtObject * write = interp->get(writeloc);
-    closure(reads, write);
+    callable(reads, write);
 }
 
 // TODO actually allocate tuple
@@ -212,7 +212,7 @@ void ReturnByVal::fire(Interpreter* interp) {
     for (int i = 0; i < n_inputs; ++i) {
         args[i] = interp->get(readlocs[i]);
     }    
-    interp->set(writeloc, closure(args.data())); // XXX
+    interp->set(writeloc, callable(args.data())); // XXX
 }
 
 }

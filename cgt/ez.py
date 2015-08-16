@@ -2,7 +2,7 @@ import cgt
 from cgt import core
 
 class EasyCustomOp(core.Op):
-    call_type = "valret"
+    call_type = "byval"
     def __init__(self, input_types, output_type, forward_impl, pullback_impl=None,shapefun=None):
         assert all(isinstance(typ, core.TensorType) for typ in input_types)
         assert isinstance(output_type, core.Type)

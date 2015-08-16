@@ -24,8 +24,8 @@ class CudnnConvForward(Op):
 
     def get_closure(self, _inputs):
         return make_closure(self.ph, self.pw, self.sv, self.sh)
-    def get_c_impl(self, inputs):
-        return CImpl(
+    def get_cuda_impl(self, inputs):
+        return CUDAImpl(
             code = """
 extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
     if (!closure->handle) setupConv(closure);
@@ -52,8 +52,8 @@ class CudnnConvBackwardData(Op):
         self.pw = pw
         self.sv = sv
         self.sh = sh    
-    def get_c_impl(self, _inputs):
-        return CImpl(code="""
+    def get_cuda_impl(self, _inputs):
+        return CUDAImpl(code="""
 extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
     if (!closure->handle) setupConv(closure);
     performConvBackwardData(closure, reads[1], reads[2], write);
@@ -70,8 +70,8 @@ class CudnnConvBackwardFilter(Op):
         self.pw = pw
         self.sv = sv
         self.sh = sh        
-    def get_c_impl(self, _inputs):
-        return CImpl("""
+    def get_cuda_impl(self, _inputs):
+        return CUDAImpl("""
 extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
     if (!closure->handle) setupConv(closure);
     performConvBackwardFilter(closure, reads[1], reads[2], write);
@@ -87,8 +87,8 @@ class CudnnConvBackwardBias(Op):
         self.pw = pw
         self.sv = sv
         self.sh = sh    
-    def get_c_impl(self, _inputs):
-        return CImpl("""
+    def get_cuda_impl(self, _inputs):
+        return CUDAImpl("""
 extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
     if (!closure->handle) setupConv(closure);
     performConvBackwardBias(closure, reads[1], write);

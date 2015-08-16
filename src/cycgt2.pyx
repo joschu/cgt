@@ -12,7 +12,7 @@ import traceback
 
 
 import cgt
-from cgt import core, execution, impls
+from cgt import core, execution
 
 cnp.import_array()
 
@@ -24,7 +24,9 @@ cnp.import_array()
 cdef extern from "cgt_common.h":
 
     cppclass IRC[T]:
-        pass
+        IRC()
+        IRC(T*)
+        T* get()
 
     cppclass cgtObject:
         pass
@@ -85,19 +87,23 @@ cdef extern from "cgt_common.h":
 
 ctypedef cnp.Py_intptr_t npy_intp_t
 
-cdef object cgt2py_object(cgtObject* o):
-    if cgt_is_array(o): return cgt2py_array(<cgtArray*>o)
-    elif cgt_is_tuple(o): return cgt2py_tuple(<cgtTuple*>o)
+cdef object cgt2py_object(cgtObject* o, bint view):
+    if cgt_is_array(o): return cgt2py_array(<cgtArray*>o, view)
+    elif cgt_is_tuple(o): return cgt2py_tuple(<cgtTuple*>o, view)
     else: raise RuntimeError("cgt object seems to be invalid")
 
-cdef object cgt2py_array(cgtArray* a):
-    cdef cnp.ndarray nparr = cnp.PyArray_SimpleNew(a.ndim(), <npy_intp_t*>a.shape(), a.dtype()) # XXX DANGEROUS CAST
-    cgt_memcpy(cgtCPU, a.devtype(), cnp.PyArray_DATA(nparr), a.data(), cnp.PyArray_NBYTES(nparr))
-    return nparr
+cdef object cgt2py_array(cgtArray* a, bint view):
+    cdef cnp.ndarray nparr
+    if view:
+        return cnp.PyArray_SimpleNewFromData(a.ndim(), <cnp.npy_intp*>a.shape(), a.dtype(), a.data())
+    else:
+        nparr = cnp.PyArray_SimpleNew(a.ndim(), <npy_intp_t*>a.shape(), a.dtype()) # XXX DANGEROUS CAST
+        cgt_memcpy(cgtCPU, a.devtype(), cnp.PyArray_DATA(nparr), a.data(), cnp.PyArray_NBYTES(nparr))
+        return nparr
 
-cdef object cgt2py_tuple(cgtTuple* t):
+cdef object cgt2py_tuple(cgtTuple* t, bint view):
     cdef int i
-    return tuple(cgt2py_object(t.getitem(i)) for i in xrange(t.len))
+    return tuple(cgt2py_object(t.getitem(i), view) for i in xrange(t.len))
     # why doesn't the following work:
     # out = cpython.PyTuple_New(t.len)
     # for i in xrange(t.len):
@@ -110,12 +116,21 @@ cdef cnp.ndarray _to_valid_array(object arr):
         out = out.copy()
     return out
 
-cdef cgtObject* py2cgt_object(object o) except *:
+cdef bint _is_valid_array(cnp.ndarray arr):
+    return arr.flags.c_contiguous
+
+
+cdef cgtObject* py2cgt_object(object o, bint view) except *:
     if isinstance(o, tuple):
-        return py2cgt_tuple(o)
+        return py2cgt_tuple(o, view)
     else:
-        o = _to_valid_array(o)
-        return py2cgt_array(o, cgtCPU)
+        if view and o.flags.c_contiguous:  
+        # TODO add a warning if not contiguous
+        # Doing a copy here could cause wrong behavior for inplace operation
+            return py2cgt_arrayview(o)
+        else:
+            o = _to_valid_array(o)
+            return py2cgt_array(o, cgtCPU)
 
 cdef cgtArray* py2cgt_array(cnp.ndarray arr, cgtDevtype devtype):
     cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, devtype)
@@ -128,11 +143,11 @@ cdef cgtArray* py2cgt_arrayview(cnp.ndarray arr):
     assert arr.flags.c_contiguous
     return out
 
-cdef cgtTuple* py2cgt_tuple(object o):
+cdef cgtTuple* py2cgt_tuple(object o, bint view):
     cdef cgtTuple* out = new cgtTuple(len(o))
     cdef int i
     for i in xrange(len(o)):
-        out.setitem(i, py2cgt_object(o[i]))
+        out.setitem(i, py2cgt_object(o[i], view))
     return out
 
 
@@ -208,57 +223,16 @@ cdef cgtDevtype devtype_fromstr(object s):
 
 
 ################################################################
-### Dynamic loading 
-################################################################
- 
-
-cdef extern from "dlfcn.h":
-    void *dlopen(const char *filename, int flag)
-    char *dlerror()
-    void *dlsym(void *handle, const char *symbol)
-    int dlclose(void *handle) 
-    int RTLD_GLOBAL
-    int RTLD_LAZY
-    int RTLD_NOW
-
-LIB_DIRS = None
-LIB_HANDLES = {}
-
-def initialize_lib_dirs():
-    global LIB_DIRS
-    if LIB_DIRS is None:
-        LIB_DIRS = [".cgt/build/lib"]
-
-cdef void* get_or_load_lib(libname) except NULL:
-    cdef void* handle
-    initialize_lib_dirs()
-    if libname in LIB_HANDLES:
-        return <void*><size_t>LIB_HANDLES[libname]
-    else:
-        for ld in LIB_DIRS:
-            libpath = osp.join(ld,libname)
-            if osp.exists(libpath):
-                handle = dlopen(libpath, RTLD_NOW | RTLD_GLOBAL)
-            else:
-                raise IOError("tried to load non-existent library %s"%libpath)
-        if handle == NULL:
-            raise ValueError("couldn't load library named %s: %s"%(libname, <bytes>dlerror()))
-        else:
-            LIB_HANDLES[libname] = <object><size_t>handle
-        return handle
-
-
-################################################################
 ### Execution graph 
 ################################################################
  
 cdef extern from "execution.h" namespace "cgt":
-    cppclass ByRefFunCl:
-        ByRefFunCl(cgtByRefFun, void*)
-        ByRefFunCl()
-    cppclass ByValFunCl:
-        ByValFunCl(cgtByValFun, void*)
-        ByValFunCl()
+    cppclass ByRefCallable:
+        ByRefCallable(cgtByRefFun, void*)
+        ByRefCallable()
+    cppclass ByValCallable:
+        ByValCallable(cgtByValFun, void*)
+        ByValCallable()
     cppclass MemLocation:
         MemLocation()
         MemLocation(size_t, cgtDevtype)
@@ -274,9 +248,9 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass BuildTup(Instruction):
         BuildTup(const string&, vector[MemLocation], const MemLocation&)
     cppclass ReturnByRef(Instruction):
-        ReturnByRef(const string&, vector[MemLocation], const MemLocation&, ByRefFunCl)
+        ReturnByRef(const string&, vector[MemLocation], const MemLocation&, ByRefCallable)
     cppclass ReturnByVal(Instruction):
-        ReturnByVal(const string&, vector[MemLocation], const MemLocation&, ByValFunCl)
+        ReturnByVal(const string&, vector[MemLocation], const MemLocation&, ByValCallable)
 
     cppclass Interpreter:
         cgtTuple* run(cgtTuple*)
@@ -288,82 +262,70 @@ cdef vector[size_t] _tovectorlong(object xs):
     for x in xs: out.push_back(<size_t>x)
     return out
 
-cdef void* _ctypesstructptr(object o) except NULL:
-    if o is None: return NULL
-    else: return <void*><size_t>ctypes.cast(ctypes.pointer(o), ctypes.c_voidp).value    
+cdef void* _getstructptr(object o) except NULL: # XXX except NULL causes unnecessary exception check
+    if o is None: 
+        return NULL
+    else: 
+        return <void*><size_t>ctypes.cast(ctypes.pointer(o), ctypes.c_voidp).value    
+    # XXX be more careful about what's coming into this fn
+
+cdef void* _getfuncptr(object o) except NULL:
+    cdef void* out= <void*><size_t>ctypes.cast(o, ctypes.c_void_p).value
+    assert out != NULL
+    return out
+
+
 
 # TODO inplace op can operate on views of data
-cdef void _pyfunc_inplace(void* cldata, cgtObject** reads, cgtObject* write):
-    (pyfun, nin, nout) = <object>cldata
-    pyread = [cgt2py_object(reads[i]) for i in xrange(nin)]
-    pywrite = cgt2py_object(write)
+cdef void _pyfunc_byref(void* cldata, cgtObject** reads, cgtObject* write):
+    (pyfun, nin) = <object>cldata
+    pyread = [cgt2py_object(reads[i], True) for i in xrange(nin)]
+    pywrite = cgt2py_object(write, True)
     try:
         pyfun(pyread, pywrite)
     except Exception:
         traceback.print_exc()
         abort()
-    cdef cgtTuple* tup
-    cdef cgtArray* a
-    if cgt_is_array(write):
-        npout = <cnp.ndarray>pywrite
-        cgt_memcpy(cgtCPU, cgtCPU, (<cgtArray*>write).data(), npout.data, (<cgtArray*>write).nbytes())
-    else:
-        tup = <cgtTuple*> write
-        for i in xrange(tup.size()):
-            npout = <cnp.ndarray>pywrite[i]
-            a = <cgtArray*>tup.getitem(i)
-            assert cgt_is_array(a)
-            cgt_memcpy(cgtCPU, cgtCPU, a.data(), npout.data, a.nbytes())
+    # cdef cgtTuple* tup
+    # cdef cgtArray* a
+    # if cgt_is_array(write):
+    #     npout = <cnp.ndarray>pywrite
+    #     cgt_memcpy(cgtCPU, cgtCPU, (<cgtArray*>write).data(), npout.data, (<cgtArray*>write).nbytes())
+    # else:
+    #     tup = <cgtTuple*> write
+    #     for i in xrange(tup.size()):
+    #         npout = <cnp.ndarray>pywrite[i]
+    #         a = <cgtArray*>tup.getitem(i)
+    #         assert cgt_is_array(a)
+    #         cgt_memcpy(cgtCPU, cgtCPU, a.data(), npout.data, a.nbytes())
 
-
-cdef cgtObject* _pyfunc_valret(void* cldata, cgtObject** args):
-    (pyfun, nin, nout) = <object>cldata
-    pyread = [cgt2py_object(args[i]) for i in xrange(nin)]
+cdef cgtObject* _pyfunc_byval(void* cldata, cgtObject** args):
+    (pyfun, nin) = <object>cldata
+    pyread = [cgt2py_object(args[i], True) for i in xrange(nin)]
     try:
         pyout = pyfun(pyread)
     except Exception:
         traceback.print_exc()
         abort()
-    return py2cgt_object(pyout)
+    return py2cgt_object(pyout, False)
 
-
-shit2 = [] # XXX this is a memory leak, will fix later
-
-cdef void* _getfun(libname, funcname) except *:
-    cdef void* lib_handle = get_or_load_lib(libname)
-    cdef void* out = dlsym(lib_handle, funcname)
-    if out == NULL:
-        raise RuntimeError("couldn't load function %s from %s. maybe you forgot extern C"%(libname, funcname))
-    return out
-
-
-cdef ByRefFunCl _node2inplaceclosure(oplib, node, node2impltype) except *:
-    binary = oplib.fetch_binary(node, node2impltype[node])
-    if binary.pyimpl is not None:
-        assert binary.pyimpl.valret_func is None
-        pyfun = binary.pyimpl.inplace_func        
-        py_closure = (pyfun, len(node.parents), 1)
-        shit2.append(py_closure)
-        return ByRefFunCl(&_pyfunc_inplace, <PyObject*>py_closure)
+cdef ByRefCallable _toocppbyrefcallable(callable, storage) except *:
+    storage.append(callable)
+    if callable.kind == "native":
+        return ByRefCallable(<cgtByRefFun>_getfuncptr(callable.fptr), _getstructptr(callable.cldata))
     else:
-        cfun = _getfun(binary.c_libpath, binary.c_funcname)
-        closure = oplib.fetch_closure(node)
-        shit2.append(closure)  # XXX
-        return ByRefFunCl(<cgtByRefFun>cfun, _ctypesstructptr(closure))
+        py_cldata = (callable.func, callable.n_in)
+        storage.append(py_cldata)
+        return ByRefCallable(&_pyfunc_byref, <PyObject*>py_cldata)
 
-cdef ByValFunCl _node2valretclosure(oplib, node, node2impltype) except *:
-    binary = oplib.fetch_binary(node, node2impltype[node])
-    if binary.pyimpl is not None:
-        assert binary.pyimpl.inplace_func is None
-        pyfun = binary.pyimpl.valret_func        
-        py_closure = (pyfun, len(node.parents), 1)
-        shit2.append(py_closure)
-        return ByValFunCl(&_pyfunc_valret, <PyObject*>py_closure)
+cdef ByValCallable _tocppbyvalcallable(callable, storage) except *:
+    storage.append(callable)
+    if callable.kind == "native":
+        return ByValCallable(<cgtByValFun>_getfuncptr(callable.fptr), _getstructptr(callable.cldata))
     else:
-        cfun = _getfun(binary.c_libpath, binary.c_funcname)
-        closure = oplib.fetch_closure(node)
-        shit2.append(closure)  # XXX
-        return ByValFunCl(<cgtByValFun>cfun, _ctypesstructptr(closure))
+        py_cldata = (callable.func, callable.n_in)
+        storage.append(py_cldata)
+        return ByValCallable(&_pyfunc_byval, <PyObject*>py_cldata)
 
 cdef MemLocation _tocppmem(object pymem):
     return MemLocation(<size_t>pymem.index, devtype_fromstr(pymem.devtype))
@@ -374,7 +336,7 @@ cdef vector[MemLocation] _tocppmemvec(object pymemlist) except *:
         out.push_back(_tocppmem(pymem))
     return out
 
-cdef Instruction* _tocppinstr(object oplib, object pyinstr, object node2impltype) except *:
+cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     t = type(pyinstr)
     cdef Instruction* out
     cdef MemLocation wloc = _tocppmem(pyinstr.write_loc)
@@ -385,50 +347,56 @@ cdef Instruction* _tocppinstr(object oplib, object pyinstr, object node2impltype
     elif t == execution.BuildTup:
         out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == execution.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _node2inplaceclosure(oplib, pyinstr.node, node2impltype))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _toocppbyrefcallable(pyinstr.get_callable(), storage))
     elif t == execution.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _node2valretclosure(oplib, pyinstr.node, node2impltype))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out
+
 
 ################################################################
 ### Wrapper classes
 ################################################################
 
-cdef ExecutionGraph* make_cpp_execution_graph(pyeg, oplib, node2impltype) except *:
+cdef ExecutionGraph* make_cpp_execution_graph(pyeg, storage) except *:
     "make an execution graph object"
     cdef vector[Instruction*] instrs
     for instr in pyeg.instrs:
-        instrs.push_back(_tocppinstr(oplib, instr, node2impltype))
+        instrs.push_back(_tocppinstr(instr, storage))
     return new ExecutionGraph(instrs,pyeg.n_args, pyeg.n_locs)
 
 cdef class CppArrayWrapper:
-    cdef cgtArray* arr
+    cdef IRC[cgtArray] arr
     def to_numpy(self):
-        return cnp.PyArray_SimpleNewFromData(self.arr.ndim(), <cnp.npy_intp*>self.arr.shape(), self.arr.dtype(), self.arr.data())
+        return cgt2py_array(self.arr.get(),True)
     @staticmethod
-    def from_numpy(cnp.ndarray nparr, object pydevtype="cpu"):
+    def from_numpy(cnp.ndarray nparr, object pydevtype="cpu", view=True):
         cdef cgtDevtype devtype = devtype_fromstr(pydevtype)
         out = CppArrayWrapper()
-        out.arr = py2cgt_array(nparr, devtype)
+        if view:
+            out.arr = IRC[cgtArray](py2cgt_arrayview(nparr))
+        else:
+            out.arr = IRC[cgtArray](py2cgt_array(nparr, devtype))
         return out
     @property
     def ndim(self):
-        return self.arr.ndim()
+        return self.arr.get().ndim()
     @property
     def shape(self):
-        return [self.arr.shape()[i] for i in range(self.arr.ndim())]
+        return [self.arr.get().shape()[i] for i in range(self.arr.get().ndim())]
     @property
     def size(self):
-        return self.arr.size()
+        return self.arr.get().size()
     @property
     def dtype(self):
-        return dtype_tostr(self.arr.dtype())
-    def get_pointer(self):
-        return <size_t>self.arr
-    def __dealloc__(self):
-        del self.arr
+        return dtype_tostr(self.arr.get().dtype())
+    @property
+    def ptr(self):
+        return <size_t>self.arr.get()
+    @property
+    def data(self):
+        return <size_t>self.arr.get().data()
 
 
 cdef class CppInterpreterWrapper:
@@ -440,8 +408,10 @@ cdef class CppInterpreterWrapper:
     cdef ExecutionGraph* eg # owned
     cdef Interpreter* interp # owned
     cdef object input_types
-    def __init__(self, pyeg, oplib, node2impltype, input_types, output_locs, parallel):
-        self.eg = make_cpp_execution_graph(pyeg, oplib, node2impltype)
+    cdef object storage
+    def __init__(self, pyeg, input_types, output_locs, parallel):
+        self.storage = []
+        self.eg = make_cpp_execution_graph(pyeg, self.storage)
         cdef vector[MemLocation] cpp_output_locs = _tocppmemvec(output_locs)
         self.interp = create_interpreter(self.eg, cpp_output_locs, parallel)
         self.input_types = input_types
@@ -450,13 +420,13 @@ cdef class CppInterpreterWrapper:
         if self.eg != NULL: del self.eg
     def __call__(self, *pyargs):
         assert len(pyargs) == len(self.input_types)
-        pyargs = tuple(execution.as_valid_array(arg,typ) for (arg,typ) in zip(pyargs,self.input_types)) 
+        pyargs = tuple(core.as_valid_array(arg,typ) for (arg,typ) in zip(pyargs,self.input_types)) 
         # execution.typecheck_args(pyargs, self.input_types)
 
         # TODO: much better type checking on inputs
         cdef cgtTuple* cargs = new cgtTuple(len(pyargs))
         for (i,pyarg) in enumerate(pyargs):
-            cargs.setitem(i, py2cgt_object(pyarg))
-        cdef cgtTuple* ret = self.interp.run(cargs)
+            cargs.setitem(i, py2cgt_object(pyarg, True))
+        cdef IRC[cgtTuple] ret = IRC[cgtTuple](self.interp.run(cargs))
         del cargs
-        return list(cgt2py_object(ret))
+        return list(cgt2py_object(ret.get(), False)) # TODO maybe allow returning view?
