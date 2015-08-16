@@ -41,6 +41,8 @@ def setup_contiguous_storage(shareds):
     and return a view on that vector.
     This facilitates writing optimization code that acts on flat vectors.
     """
+    if core.load_config()["backend"]=="native":
+        utils.warn("setup_contiguous_storage is broken for backend=native. this will probably fail")
     dtype = cgt.floatX
     # assert utils.allsame([s.get_device() for s in shareds])
     tot_size = sum(s.get_size() for s in shareds)

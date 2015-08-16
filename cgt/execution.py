@@ -36,7 +36,7 @@ def _function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
 # Execution
 # ================================================================
 
-def determine_devices(nodes_sorted, node2memowner, analysis, repl):
+def determine_devices(nodes_sorted, updatetarg2src):
     # Op definitions (available impls, inplace-ness, etc) define constraints
     # on possible devices for a node
 
@@ -53,8 +53,8 @@ def determine_devices(nodes_sorted, node2memowner, analysis, repl):
     for node in nodes_sorted:
 
         default_device = node.props.get("default_device", home_device)
-        if node2memowner[node] is not node: 
-            node2dev[node] = node2dev[node2memowner[node]]
+        if node in updatetarg2src:
+            device = node2dev[updatetarg2src[node]]
         elif node.is_data():
             device = node.device
         elif node.is_argument():
@@ -87,11 +87,10 @@ def create_interpreter(inputs, outputs, eg, node2memloc):
         else:
             return SequentialInterpreter(eg, output_locs, input_types)
     elif backend == "native":
-        import cycgt2 #pylint: disable=F0401
         if parallel_interp:
-            return cycgt2.CppInterpreterWrapper(eg, input_types, output_locs, True)
+            return cgt.cycgt.CppInterpreterWrapper(eg, input_types, output_locs, True)
         else:
-            return cycgt2.CppInterpreterWrapper(eg, input_types, output_locs, False)
+            return cgt.cycgt.CppInterpreterWrapper(eg, input_types, output_locs, False)
     else:
         raise NotImplementedError("invalid backend %s"%backend)
 
@@ -136,7 +135,7 @@ def topsorted_shapes_first(outputs, node2shape):
                 stack.append((j,0))
     return out
 
-def determine_memowner(nodes_sorted, updates):
+def determine_memowner(nodes_sorted, updates, node2dev):
     # First determine how many "child" nodes each node has
     node2child = defaultdict(list)
     for node in nodes_sorted:
@@ -194,33 +193,14 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
     node2memloc = {}
 
     for node in nodes_sorted:
+        if node not in node2dev: node2dev[node] = Device(devtype="cpu",idx=node2dev[node.parents[0]].idx if len(node.parents)>0 else 0)
         if node.is_argument():
             write_loc = counter.new_memloc(node2dev[node].devtype)
             node2memloc[node] = write_loc
             i = inputs.index(node)
             instrs.append(LoadArgument(i, write_loc))
         else:
-            # Transports for reads
-            read_locs = []
-            for parent in node.parents:
-                read_loc = node2memloc[parent]
-                if read_loc.devtype != node2dev[node].devtype:
-                    print read_loc.devtype, node2dev[node].devtype
-                    # Allocation instr for the transport destination
-                    transported_loc = counter.new_memloc(node2dev[node].devtype)
-                    parent_shape = node2shape[parent] if parent.ndim > 0 else []
-                    parent_shape_locs = [node2memloc[shpel] for shpel in parent_shape]
-                    instrs.append(Alloc(node.dtype, parent_shape_locs, transported_loc))
-                    # The transport instruction
-                    tmp_transport_node = Result(TransportToOutputDevice(), [parent])
-                    assert read_loc.devtype != transported_loc.devtype
-                    instrs.append(ReturnByRef(tmp_transport_node.op, [parent.typ], [read_loc], transported_loc))
-                    read_locs.append(transported_loc)
-                    node2dev[tmp_transport_node] = Device(devtype="cpu")
-                else:
-                    read_locs.append(read_loc)
-            assert len(read_locs) == len(node.parents)
-
+            read_locs = [node2memloc[parent] for parent in node.parents]
             if node.op.call_type == "byref":
                 if node2memowner[node] is node:
                     if is_tensor(node): # just make one memory location for output
@@ -262,6 +242,37 @@ def get_callable(op, input_types, devtype):
         nci = op.get_native_compile_info(input_types, devtype)
         return impls.nci2callable(nci)
 
+def add_transports(nodelist, node2dev, node2shape):
+
+    node2child = defaultdict(list)
+    for node in nodelist:
+        for par in node.parents:
+            node2child[par].append(node)
+
+    # XXX look at native compilation info, gpu deref mask
+    for node in nodelist:
+        dev = node2dev[node]
+        dev2copy = {}
+        for child in node2child[node]:
+            childdev = node2dev[child]
+            if not childdev == dev:
+                print node,dev,child,childdev
+                if childdev not in dev2copy:
+                    print "dpoing a new transport"
+                    nodecopy = Result(Transport(childdev), [node])
+                    node2dev[nodecopy] = childdev
+                    dev2copy[childdev] = nodecopy
+                    node2shape[nodecopy] = node2shape[node]
+                else:
+                    print "already did it"
+                replace_parents(child, node, dev2copy[childdev])
+
+
+def replace_parents(node, before, after):
+    for (i,p) in enumerate(node.parents):
+        if p is before:
+            node.parents[i] = after
+
 def run_compilation_pipeline(inputs, outputs, updates, givens):
     """
     Compiles the expression graph into an execution graph. 
@@ -274,29 +285,34 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     outputs_updatetargs = outputs + [after for (_before, after) in updates]
     if givens: outputs_updatetargs = clone(outputs_updatetargs, dict(givens))
     # Do simplification + analysis pass on expression graph
-    outputs_updatetargs_simple, analysis, repl = \
+    outputs_updatetargs_simple, analysis, _ = \
         simplify_and_analyze(outputs_updatetargs) if config["enable_simplification"] \
-        else (outputs_updatetargs, analyze(outputs_updatetargs))
+        else (outputs_updatetargs, analyze(outputs_updatetargs), {})
 
-    # Phase 2: build execution graph
+
+    # Phase 2: device targeting
+    # ------------------------------------------------------
+    nodelist = topsorted(outputs_updatetargs_simple)
+    updatesrcs = [before for (before, _) in updates]    
+    updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
+    node2dev = determine_devices(nodelist, {targ:src for (src,targ) in zip(updatesrcs, updatetargs_simple)})
+    add_transports(nodelist, node2dev, analysis["node2shape"])
+
+    # Phase 3: build execution graph
     # ------------------------------------------------------
     # Sort nodes so that shape elements appear before a given node
     nodes_sorted = topsorted_shapes_first(outputs_updatetargs_simple, analysis["node2shape"])
     # For each node, figure out if its output should be written to a previous node's memory
     # (memowner : "memory owner")
     updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
-    updatesrcs = [before for (before, _) in updates]
-    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple))
-    # Determine location and device of nodes
-    node2dev = determine_devices(nodes_sorted, node2memowner, analysis, repl)
+    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple), node2dev)
     # Find the outputs we want to return
     outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
     # Generate execution graph
     eg, node2memloc = create_execution_graph(
         inputs, nodes_sorted, analysis["node2shape"], node2memowner, node2dev)
 
-    # Print execution graph
-    # TODO: reintroduce with better logging system
+    # print execution graph
     if config["verbose"]:
         print 'begin'
         print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
@@ -420,13 +436,13 @@ class ReturnByRef(Instr):
         self.write_loc = write_loc
         self._callable = None
     def fire(self, interp):
-        self.get_callable().call(
+        self.get_callable("cpu").call(
             [interp.get(mem) for mem in self.read_locs],
             interp.get(self.write_loc))
     def __repr__(self):
         return "%s = ReturnByRef op:%s args:%s" % (self.write_loc, str(self.op), str(self.read_locs))
-    def get_callable(self):
-        if self._callable is None: self._callable = get_callable(self.op, self.input_types, "cpu")
+    def get_callable(self, devtype):
+        if self._callable is None: self._callable = get_callable(self.op, self.input_types, devtype)
         return self._callable
 
 class ReturnByVal(Instr):
@@ -437,9 +453,9 @@ class ReturnByVal(Instr):
         self.write_loc = write_loc
         self._callable = None
     def fire(self, interp):
-        interp.set(self.write_loc, self.get_callable().call([interp.get(mem) for mem in self.read_locs]))
-    def get_callable(self):
-        if self._callable is None: self._callable = get_callable(self.op, self.input_types, "cpu")
+        interp.set(self.write_loc, self.get_callable("cpu").call([interp.get(mem) for mem in self.read_locs]))
+    def get_callable(self, devtype):
+        if self._callable is None: self._callable = get_callable(self.op, self.input_types, devtype)
         return self._callable
     def __repr__(self):
         return "%s = ReturnByVal op:%s args:%s" % (self.write_loc, str(self.op), str(self.read_locs))

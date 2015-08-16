@@ -158,11 +158,11 @@ class Node(object):
     """
     Node in the computation graph    
     """
-    def __init__(self, typ, op, parents):
+    def __init__(self, typ, op, parents, props=None):
         self.typ = typ
         self.op = op
         self.parents = parents        
-        self.props = {}
+        self.props = props or {}
     def is_input(self):
         return False
     def is_argument(self):
@@ -393,12 +393,12 @@ class Result(Node):
     (TODO: be more precise about semantics. Does it depend ONLY on the parents, or can it depend on 
     some exogenous input too? What about random variables?)
     """
-    def __init__(self, op, parents, typ = None):
+    def __init__(self, op, parents, typ = None, props=None):
         parents = map(as_node, parents)
         typ = op.typ_apply([parent.typ for parent in parents]) if typ is None else typ
         assert op is not None
         # self.stackinfo = traceback.extract_stack()
-        Node.__init__(self, typ, op, parents)
+        Node.__init__(self, typ, op, parents, props=props)
         
         self.props["default_device"] = _CONFIG["default_device"]
         if _CONFIG["debug"]: self.props["stack"] = traceback.extract_stack()[:-2]
@@ -409,6 +409,8 @@ class Result(Node):
         return hashobj.hexdigest()
     def __repr__(self):
         return "Result{%s}"%(str(self.op))
+    def clone(self,newparents):
+        return Result(self.op, newparents, typ=self.typ, props = self.props)
 
 class Input(Node):
     """
@@ -453,9 +455,9 @@ class Argument(Input):
 # Just here as a temporary  hack so node.op does the right thing in cython
 class GetData(Op):
     call_type="byval"
+    available_impls=("python","native_cpu","native_gpu")
     def __init__(self, datanode):
         self.datanode = datanode
-        self._available_impls = ["python", "native_"+self.datanode.device.devtype]
     def get_py_func(self, _):
         def f(_): 
             return self.datanode.get_value()
@@ -468,9 +470,6 @@ class GetData(Op):
         ptr = self.datanode._value.ptr
         return NativeCompileInfo(self, 0, "c++", code, closure_triples=[("ptr", ctypes.c_void_p, ptr)], 
             store_objects=self.datanode._value)
-    @property
-    def available_impls(self):
-        return self._available_impls
     
 
 class Data(Input):
@@ -481,16 +480,13 @@ class Data(Input):
     """
     def __init__(self, value,name=None,device=None, fixed_shape_mask=None):
         value = as_valid_array(value)
-        if device is None:
-            self.device = Device()
-        import cycgt2
+        self.device = device or _CONFIG["default_device"]
 
         self.use_numpy = cgt.load_config()["backend"] == "python"
-
         if self.use_numpy:
-            self._value = value
-        else:
-            self._value = cycgt2.CppArrayWrapper.from_numpy(value, self.device.devtype, False)
+            assert self.device.devtype=="cpu","can only use numpy for cpu"
+
+        self.set_value(value)
 
         self.name = "unnamed" if name is None else name
         assert self._value.dtype != object
@@ -499,6 +495,8 @@ class Data(Input):
         else: self.fixed_shape_mask = fixed_shape_mask
         Input.__init__(self, _ndarray_type(value), name)
         self.op = GetData(self)
+    def clone(self,*_):
+        return self
     def is_data(self):
         return True
     def __repr__(self):
@@ -515,10 +513,11 @@ class Data(Input):
         return self._value.shape
     def get_size(self):
         return self._value.size
-    def set_value(self, x):
-        assert isinstance(x, np.ndarray) and self.use_numpy # XXX what is this?
-        assert x.dtype == self._value.dtype
-        self._value = x
+    def set_value(self, value):
+        if self.use_numpy:
+            self._value = value
+        else:
+            self._value = cgt.cycgt.CppArrayWrapper.from_numpy(value, self.device.devtype, False)
 
 
     # TODO: remove external accesses to .value
@@ -735,15 +734,13 @@ class NativeCallable(object):
     def n_in(self):
         return self._n_in
     def _call_byval(self, inputs):
-        import cycgt2
-        inputs = [cycgt2.CppArrayWrapper.from_numpy(x,view=True) for x in inputs]
+        inputs = [cgt.cycgt.CppArrayWrapper.from_numpy(x,view=True) for x in inputs]
         assert all(isinstance(x, np.ndarray) for x in inputs)
         read_ptrs = (ctypes.c_void_p*len(inputs))(*(x.ptr for x in inputs))
         return self.fptr(ctypes.pointer(self.cldata), read_ptrs)
     def _call_byref(self, inputs, output):
-        import cycgt2 # XXX
-        inputs = [cycgt2.CppArrayWrapper.from_numpy(x,view=True) for x in inputs]
-        output = cycgt2.CppArrayWrapper.from_numpy(output, view=True)
+        inputs = [cgt.cycgt.CppArrayWrapper.from_numpy(x,view=True) for x in inputs]
+        output = cgt.cycgt.CppArrayWrapper.from_numpy(output, view=True)
         read_ptrs = (ctypes.c_void_p*len(inputs))(*(x.ptr for x in inputs))
         write_ptr = ctypes.c_void_p(output.ptr)
         self.fptr(ctypes.pointer(self.cldata), read_ptrs, write_ptr)
@@ -777,7 +774,7 @@ class ConstantTensor(Constant):
     def get_expr(self, parent_exprs):
         return self._value_str()
     def __str__(self):
-        return "const{%s}"%self._value_str()
+        return "Const{%s}"%self._value_str()
     def _value_str(self):
         ndim = self.value.ndim
         return "%g"%self.value if ndim==0 else "%s%g...%s"%("["*ndim, self.value.flat[0], "]"*ndim)        
@@ -843,7 +840,7 @@ class ConstantTuple(Constant):
     def get_expr(self, parent_exprs):
         return str(self.value)
     def __str__(self):
-        return "const{%s}"%str(self.value)
+        return "Const{%s}"%str(self.value)
     def get_py_func(self, input_types):
         def f(_):
             return self.value
@@ -876,7 +873,7 @@ class Fill(Op):
     def get_diff(self, num_inputs):
         return [False]*num_inputs
     def __str__(self):
-        return "fill{%g}"%self.value
+        return "Fill{%g}"%self.value
     def get_py_func(self, input_types):
         def f(reads, write):
             write[...] = self.value
@@ -939,7 +936,7 @@ class ScalarRng(Op):
     def get_diff(self, num_inputs):
         return [False]*num_inputs
     def __str__(self):
-        return "rng{%s}"%self.kind
+        return "Rng{%s}"%self.kind
     def get_py_func(self, input_types):
         def f(reads, write):
             if self.kind == "uniform": write[...] = np.random.rand(*reads)
@@ -984,21 +981,21 @@ def _nu_divide(x, y, out=None):
 UnaryInfo = namedtuple("UnaryInfo", ("short","pyfunc","diff","typeinfo", "gradexpr", "cexpr"))
 
 UNARY_INFO = {
-    "abs" : UnaryInfo(   "abs", np.abs,  True,   's', lambda x, y, gy: gy*cgt.sign(x), "fabs(x)"),
-    "ceil" : UnaryInfo(  "ceil", np.ceil, False,  'i',  lambda x, y, gy: _no_grad(), "ceil(x)"),
-    "cos" : UnaryInfo(   "cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*cgt.sin(x), "cos(x)"),
-    "exp" : UnaryInfo(   "exp", np.exp,  True,   'f',   lambda x, y, gy: gy*cgt.exp(x), "exp(x)"),
-    "iceil" : UnaryInfo( "iceil", _nu_iceil, False, 'i',   lambda x, y, gy: _no_grad(), "(int)ceil(x)"),
-    "ifloor" : UnaryInfo( "ifloor", _nu_ifloor, False, 'i',   lambda x, y, gy: _no_grad(), "(int)floor(x)"),
-    "log" : UnaryInfo(   "log", np.log,  True,   'f', lambda x, y, gy: gy/x, "log(x)"),
-    "neg" : UnaryInfo(   "negative", np.negative, True, 's', lambda x, y, gy: -gy, "(-x)"),
-    "sign" : UnaryInfo(   "sign", np.sign, False,   's',  lambda x, y, gy: _no_grad(), "2*(x>0)-1"),
-    "sin" : UnaryInfo(    "sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cgt.cos(x), "sin(x)"),
-    "square" : UnaryInfo( "square", np.square, True, 's',  lambda x, y, gy: 2.0*gy*x, "x*x"),
-    "sqrt" : UnaryInfo( "sqrt", np.sqrt, True, 'f', lambda x, y, gy: gy/(2.0*y), "sqrt(x)"),
-    "tanh" : UnaryInfo(   "tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-cgt.square(y)), "tanh(x)"),
-    "sigmoid" : UnaryInfo( "sigmoid", _nu_sigmoid, True, 'f', lambda x, y, gy: gy*y*(1-y), "1.0/(1.0+exp(-x))"),
-    "conj" : UnaryInfo( "conj", np.conj, True, 'c', lambda x, y, gy: cgt.conj(gy), "conj(x)")
+    "abs" : UnaryInfo(   "Abs", np.abs,  True,   's', lambda x, y, gy: gy*cgt.sign(x), "fabs(x)"),
+    "ceil" : UnaryInfo(  "Ceil", np.ceil, False,  'i',  lambda x, y, gy: _no_grad(), "ceil(x)"),
+    "cos" : UnaryInfo(   "Cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*cgt.sin(x), "cos(x)"),
+    "exp" : UnaryInfo(   "Exp", np.exp,  True,   'f',   lambda x, y, gy: gy*cgt.exp(x), "exp(x)"),
+    "iceil" : UnaryInfo( "Iceil", _nu_iceil, False, 'i',   lambda x, y, gy: _no_grad(), "(int)ceil(x)"),
+    "ifloor" : UnaryInfo( "Ifloor", _nu_ifloor, False, 'i',   lambda x, y, gy: _no_grad(), "(int)floor(x)"),
+    "log" : UnaryInfo(   "Log", np.log,  True,   'f', lambda x, y, gy: gy/x, "log(x)"),
+    "neg" : UnaryInfo(   "Negative", np.negative, True, 's', lambda x, y, gy: -gy, "(-x)"),
+    "sign" : UnaryInfo(   "Sign", np.sign, False,   's',  lambda x, y, gy: _no_grad(), "2*(x>0)-1"),
+    "sin" : UnaryInfo(    "Sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cgt.cos(x), "sin(x)"),
+    "square" : UnaryInfo( "Square", np.square, True, 's',  lambda x, y, gy: 2.0*gy*x, "x*x"),
+    "sqrt" : UnaryInfo( "Sqrt", np.sqrt, True, 'f', lambda x, y, gy: gy/(2.0*y), "sqrt(x)"),
+    "tanh" : UnaryInfo(   "Tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-cgt.square(y)), "tanh(x)"),
+    "sigmoid" : UnaryInfo( "Sigmoid", _nu_sigmoid, True, 'f', lambda x, y, gy: gy*y*(1-y), "1.0/(1.0+exp(-x))"),
+    "conj" : UnaryInfo( "Conj", np.conj, True, 'c', lambda x, y, gy: cgt.conj(gy), "conj(x)")
 }
 
 BinaryInfo = namedtuple("BinaryInfo", ("short","pyfunc","commutes","diff","typeinfo","gradexpr", "cexpr"))
@@ -1006,17 +1003,17 @@ BinaryInfo = namedtuple("BinaryInfo", ("short","pyfunc","commutes","diff","typei
 
 BINARY_INFO = {
     #infix             short      pyfunc    commutes     diff        typeinfo
-    "*"   : BinaryInfo("multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
-    "+"   : BinaryInfo("add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
-    "-"   : BinaryInfo("subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
-    "/"   : BinaryInfo("divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(x+0.0)/y"),
-    "<"   : BinaryInfo("less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
-    ">"   : BinaryInfo("greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
-    "<="   : BinaryInfo("less_equal",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
-    ">="   : BinaryInfo("greater_equal",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
-    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), 
-    "=="  : BinaryInfo("equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
-    "!="  : BinaryInfo("not_equal", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
+    "*"   : BinaryInfo("Multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
+    "+"   : BinaryInfo("Add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
+    "-"   : BinaryInfo("Subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
+    "/"   : BinaryInfo("Divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(x+0.0)/y"),
+    "<"   : BinaryInfo("Less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
+    ">"   : BinaryInfo("Greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
+    "<="   : BinaryInfo("LessEqual",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
+    ">="   : BinaryInfo("GreaterEqual",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
+    "**"   : BinaryInfo("Power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), 
+    "=="  : BinaryInfo("Equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
+    "!="  : BinaryInfo("NotEqual", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
 }
 
 
@@ -1036,7 +1033,7 @@ class ElwiseUnary(Op):
     def get_diff(self, _):
         return [self.info.diff]
     def __str__(self):
-        return self.opname
+        return self.info.short
     def get_hash(self):
         return utils.hash_seq1(self.opname)
     def get_replacement(self, _newparents, _analysis):
@@ -1095,7 +1092,7 @@ class ElwiseUnary(Op):
                     cgt_get_bt(n, &num_blocks, &num_threads);
                     ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)read->data(), (%(cdtype1)s*)write->data());
                 }"""%dict(cdtype0=np2c[input_types[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
-            return NativeCompileInfo(self, 1, "cuda", code, includes=["math.h"], link_flags="-lm")
+            return NativeCompileInfo(self, 1, "cuda", code, includes=["math.h"], link_flags="-lm",gpu_deref_mask=(True,))
         else:
             raise Unreachable
 
@@ -1248,7 +1245,7 @@ class Size(Op):
     def get_diff(self, _):
         return [False]
     def __str__(self):
-        return "size{%i}"%self.axis
+        return "Size{%i}"%self.axis
     def get_py_func(self, input_types):
         def f(reads):
             return np.array(reads[0].shape[self.axis])
@@ -1432,7 +1429,9 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
 }"""%d
         return CImpl(code)
 
-class TransportToOutputDevice(Op):
+class Transport(Op):
+    def __init__(self, dev):
+        self.dev = dev
     available_impls = ("native_cpu","native_gpu")
     def typ_apply(self, input_types):
         return input_types[0]
@@ -1441,7 +1440,7 @@ class TransportToOutputDevice(Op):
     def get_native_compile_info(self, _inputs, _devtype):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
-        code = """
+        code = r"""
 CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgt_assert(write->devtype() != reads[0]->devtype());
     cgt_assert(write->data() != reads[0]->data());
@@ -1506,7 +1505,7 @@ class Sum(Op):
     def get_diff(self, _):
         return [True]
     def __str__(self):
-        return "sum{%s}"%(",".join(map(str,self.axes)))
+        return "Sum{%s}"%(",".join(map(str,self.axes)))
     def get_py_func(self, input_types):
         def f(reads, write):
             reads[0].sum(axis = self.axes or None, out=write, keepdims=True)
@@ -1546,7 +1545,7 @@ class Max(Op):
     def get_diff(self, _):
         return [True]
     def __str__(self):
-        return "max{%s}"%(",".join(map(str,self.axes)))
+        return "Max{%s}"%(",".join(map(str,self.axes)))
     def get_py_func(self, input_types):
         def f(reads, write):
             reads[0].max(axis=self.axes or None,keepdims=True, out=write)
@@ -1572,7 +1571,7 @@ class Argmax(Op):
     def get_diff(self, _):
         return [False]
     def __str__(self):
-        return "argmax{%s}"%self.axis
+        return "Argmax{%s}"%self.axis
     def get_py_func(self, input_types):
         def f(reads, write):
             write.flat[:] = reads[0].argmax(axis=self.axis)
@@ -2136,8 +2135,7 @@ def process_top_stack_item_and_maybe_get_replacement(stack, analysis, repl): #py
                 stack.append((par,par))
                 return
         newparents = [repl[p] for p in node.parents]
-        newnode = Result(node.op, newparents, typ=node.get_type())
-        newnode.props = node.props
+        newnode = node.clone(newparents)
         newnewnode = maybe_replace(newnode, analysis, repl)
         if newnewnode is None:
             return (orig,newnode)
@@ -2389,8 +2387,7 @@ def clone(nodes, replace=None):
             if node not in replace:
                 replace[node] = node
         else:
-            replace[node] = Result(node.op, [replace[p] for p in node.parents], typ=node.get_type())
-            replace[node].props = node.props
+            replace[node] = node.clone([replace[p] for p in node.parents])
     return [replace[node] for node in nodes]
 
 def alloc_from_shp(shp, typ):

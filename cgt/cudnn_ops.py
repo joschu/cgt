@@ -27,7 +27,7 @@ class CudnnConvForward(Op):
     def get_cuda_impl(self, inputs):
         return CUDAImpl(
             code = """
-extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
     if (!closure->handle) setupConv(closure);
     performConvForward(closure, reads[0], reads[1], reads[2], write);
 }""", 
@@ -54,7 +54,7 @@ class CudnnConvBackwardData(Op):
         self.sh = sh    
     def get_cuda_impl(self, _inputs):
         return CUDAImpl(code="""
-extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
     if (!closure->handle) setupConv(closure);
     performConvBackwardData(closure, reads[1], reads[2], write);
 }
@@ -72,7 +72,7 @@ class CudnnConvBackwardFilter(Op):
         self.sh = sh        
     def get_cuda_impl(self, _inputs):
         return CUDAImpl("""
-extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
     if (!closure->handle) setupConv(closure);
     performConvBackwardFilter(closure, reads[1], reads[2], write);
 }""", includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")
@@ -89,7 +89,7 @@ class CudnnConvBackwardBias(Op):
         self.sh = sh    
     def get_cuda_impl(self, _inputs):
         return CUDAImpl("""
-extern "C" void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
     if (!closure->handle) setupConv(closure);
     performConvBackwardBias(closure, reads[1], write);
 }""", includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")

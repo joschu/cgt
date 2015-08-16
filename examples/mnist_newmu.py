@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--dropout",action="store_true")
     parser.add_argument("--stepsize",type=float, default=.001)
     parser.add_argument("--convnet",action="store_true")
+    parser.add_argument("--test",action="store_true")
     args = parser.parse_args()
 
     # from mldata.org http://mldata.org/repository/data/viewslug/mnist-original/
@@ -115,7 +116,7 @@ def main():
     cost_drop = -cgt.mean(categorical.loglik(y, pofy_drop))
     updates = rmsprop_updates(cost_drop, params, stepsize=args.stepsize)
 
-    y_nodrop = cgt.argmax(pofy_drop, axis=1)
+    y_nodrop = cgt.argmax(pofy_nodrop, axis=1)
     cost_nodrop = -cgt.mean(categorical.loglik(y, pofy_nodrop))
     err_nodrop = cgt.cast(cgt.not_equal(y_nodrop, y), cgt.floatX).mean()
 
@@ -130,10 +131,9 @@ def main():
     for i_epoch in xrange(args.epochs):
         tstart = time.time()
         for start in xrange(0, Xtrain.shape[0], batch_size):
-            sys.stdout.write("."); sys.stdout.flush()
             end = start+batch_size
             train(Xtrain[start:end], ytrain[start:end])
-        print
+            if args.test: return
         elapsed = time.time() - tstart
         trainerr, trainloss = computeloss(Xtrain[:len(Xtest)], ytrain[:len(Xtest)])
         testerr, testloss = computeloss(Xtest, ytest)

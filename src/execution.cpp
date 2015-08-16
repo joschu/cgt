@@ -35,7 +35,6 @@ public:
         cgt_assert(newargs != NULL);
         cgt_assert(newargs->len == eg_->n_args());
         for (Instruction* instr : eg_->instrs()) {
-            // printf("Firing %s\n", instr->repr().c_str());
             instr->fire(this);
         }
         args_ = NULL;

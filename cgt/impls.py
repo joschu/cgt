@@ -1,13 +1,14 @@
 import subprocess
 import os.path as osp, os
 from StringIO import StringIO
+import cgt
 from cgt import core
 import sys, ctypes, hashlib
 import string #pylint: disable=W0402
     
 def nci2callable(nci):
     common_includes =["cgt_common.h","cgt_cuda.h"] if nci.involves_gpu() else ["cgt_common.h"]
-    code = _gen_code(nci.includes + common_includes, nci.closure_triples, nci.func_code)
+    code = _gen_code(common_includes + nci.includes, nci.closure_triples, nci.func_code)
     tu = TranslationUnit(nci.lang, code, nci.link_flags)
     compile_info = get_compile_info()
     CACHE_ROOT = compile_info["CACHE_ROOT"]
@@ -23,6 +24,7 @@ def nci2callable(nci):
     setup_fptr = getattr(lib, _setupname(prefix)) if nci.setup else None
     teardown_fptr = getattr(lib, _teardownname(prefix)) if nci.teardown else None
     cldata = _build_closure(nci.closure_triples)
+    if nci.lang == "cuda": assert nci.gpu_deref_mask is not None
     return core.NativeCallable(nci.n_in, nci.call_type, nci.op_str, fptr, cldata=cldata, setup_fptr=setup_fptr, teardown_fptr=teardown_fptr,
         store_objects=nci.store_objects)
 
@@ -101,8 +103,7 @@ def get_compile_info():
 
         config = core.load_config()
 
-        import cycgt2 #pylint: disable=F0401
-        CGT_BUILD_ROOT = osp.dirname(osp.dirname(osp.realpath(cycgt2.__file__)))
+        CGT_BUILD_ROOT = cgt.cycgt.cgt_build_root()
 
         cmake_info = {}
         with open(osp.join(CGT_BUILD_ROOT,"build_info.txt")) as fh:

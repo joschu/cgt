@@ -236,6 +236,8 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass MemLocation:
         MemLocation()
         MemLocation(size_t, cgtDevtype)
+        size_t index()
+        cgtDevtype devtype()
     cppclass Instruction:
         pass
     cppclass ExecutionGraph:
@@ -347,9 +349,9 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     elif t == execution.BuildTup:
         out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == execution.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _toocppbyrefcallable(pyinstr.get_callable(), storage))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _toocppbyrefcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
     elif t == execution.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out

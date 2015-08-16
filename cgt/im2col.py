@@ -60,7 +60,7 @@ class Im2Col(core.Op):
         return core.NativeCompileInfo(self, 1, "c++", code, includes=["im2col.h"], closure_triples=info2closure(self.info))
 
 class Col2Im(core.Op):
-    available_impls = ("python",)            
+    available_impls = ("native_cpu",)            
     def __init__(self, info):
         self.info = info
     def get_diff(self, _):
@@ -73,9 +73,9 @@ class Col2Im(core.Op):
         return core.TensorType(inputs[0].dtype, 4)
     def get_closure(self, _inputs):
         return info2closure(self.info)
-    def get_native_compile_info(self, inputs):
+    def get_native_compile_info(self, input_types, devtype):
         code = r"""
-extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
     cgtArray* col = reads[0];
     size_t batchsize = reads[1]->at<size_t>(0),
            channels  = reads[2]->at<size_t>(0),
@@ -86,8 +86,8 @@ extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
             cl->kernel_h, cl->kernel_w, cl->pad_h, cl->pad_w, cl->stride_h, 
             cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
     }
-}"""%dict(cdtype=core.np2c[inputs[0].dtype])
-        return core.NativeCompileInfo(self, 1, code, includes=["im2col.h"], closure_triples=info2closure(self.info))
+}"""%dict(cdtype=core.np2c[input_types[0].dtype])
+        return core.NativeCompileInfo(self, 1, "c++", code, includes=["im2col.h"], closure_triples=info2closure(self.info))
 
 def test():
     np.random.seed(0)
