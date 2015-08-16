@@ -1,9 +1,8 @@
 import numpy as np
 import cgt
-from . import reset_config
 
-@reset_config
 def test_linreg():
+    cgt.reset_config()
     cgt.set_precision('double')
     N = 10
     K = 3
@@ -23,7 +22,7 @@ def test_linreg():
     err = cgt.sum(cgt.square(ypred - y_n))
     g = cgt.grad(err, [w_k, b])
 
-    g_simple,an = cgt.core.simplify_and_analyze(g)
+    g_simple,an,_ = cgt.core.simplify_and_analyze(g)
 
 
     print "Loss function:"

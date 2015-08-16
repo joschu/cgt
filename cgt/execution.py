@@ -36,7 +36,7 @@ def _function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
 # Execution
 # ================================================================
 
-def determine_devices(nodes_sorted, node2memowner):
+def determine_devices(nodes_sorted, node2memowner, analysis, repl):
     # Op definitions (available impls, inplace-ness, etc) define constraints
     # on possible devices for a node
 
@@ -47,69 +47,26 @@ def determine_devices(nodes_sorted, node2memowner):
     if cuda_enabled:
         assert compile_info["CGT_ENABLE_CUDA"], "CUDA requested in configuration, but CGT is not compiled with CUDA support"
 
-    node2availabledevs = {}
-    node2availableimpltypes = {}
-    for node in nodes_sorted:
-        pass
-        # node2availabledevs
-        # devs = None
-        # if node2forceddev is not None and node in node2forceddev:
-        #     devs = [node2forceddev[node]]
-        # elif node.is_argument():
-        #     devs = [Device(devtype="cpu")]
-        # elif node.is_data():
-        #     devs = [node.get_device()]
-        # else:
-        #     XXX
-        #     available_impls = get_available_impls(node).keys()
-        #     node2availableimpltypes[node] = available_impls
-        #     devs = []
-        #     if "impl_py" in available_impls or "impl_c" in available_impls:
-        #         devs.append(Device(devtype="cpu"))
-        #     if "impl_cuda" in available_impls:
-        #         devs.append(Device(devtype="gpu"))
-        #     if not devs:
-        #         raise RuntimeError("Node %s has no implementations" % node)
-        # assert devs
-        # node2availabledevs[node] = devs
-
-    # Constraints on devices for output locations (given by node2memowner) must be satisfied
-    # so prune devices here
-    node2candidatedevs = {}
-    for node in node2availabledevs:
-        node2candidatedevs[node] = set(node2availabledevs[node])
-    for node in nodes_sorted:
-        node2candidatedevs[node] &= node2candidatedevs[node2memowner[node]]
-        if not node2candidatedevs[node]:
-            raise RuntimeError("No available device for node %s, because of memory owner %s" % (node, node2memowner[node]))
-
-    # Constraints on inputs can be satisfied by inserting Transports
-
-    # Greedy assignment: assign as many nodes to GPU as possible
     node2dev = {}
-    node2impltype = {}
+    home_device = Device(devtype="cpu", idx=0)
+
     for node in nodes_sorted:
-        # As nodes get assigned, we need to propagate constraints
-        if node2memowner[node] in node2dev:
-            node2candidatedevs[node] = [node2dev[node2memowner[node]]]
-        assert node2candidatedevs[node] # every node should have at least one device
-        best_dev = None
-        best_impl = None
-        for d in node2candidatedevs[node]:
-            if d.devtype == "gpu":
-                best_dev = d
-                best_impl = "impl_cuda"
-            elif d.devtype == "cpu" and best_dev is None:
-                best_dev = d
-                best_impl = None
-                if node in node2availableimpltypes:
-                    best_impl = "impl_c" if "impl_c" in node2availableimpltypes[node] else "impl_py"
-        node2dev[node] = best_dev
-        node2impltype[node] = best_impl
 
-    # In the future, the assignment can take constraints into account to minimze the number of needed transports
+        default_device = node.props.get("default_device", home_device)
+        if node2memowner[node] is not node: 
+            node2dev[node] = node2dev[node2memowner[node]]
+        elif node.is_data():
+            device = node.device
+        elif node.is_argument():
+            device = home_device
+        else:            
+            if default_device.devtype == "gpu" and "native_gpu" in node.op.available_impls:
+                device = Device(default_device.devtype, default_device.idx)
+            else:
+                device = Device(devtype="cpu", idx=default_device.idx)
+        node2dev[node] = device
 
-    return node2dev, node2impltype
+    return node2dev
 
 def is_tensor(x):
     return isinstance(x.typ, TensorType)
@@ -244,28 +201,28 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
             instrs.append(LoadArgument(i, write_loc))
         else:
             # Transports for reads
-            read_locs = [node2memloc[parent] for parent in node.parents]
-            # for parent in node.parents:
-            #     read_loc = node2memloc[parent]
-                # if read_loc.devtype != node2dev[node].devtype:
-                #     # Allocation instr for the transport destination
-                #     transported_loc = counter.new_memloc(node2dev[node].devtype)
-                #     parent_shape = node2shape[parent] if parent.ndim > 0 else []
-                #     parent_shape_locs = [node2memloc[shpel] for shpel in parent_shape]
-                #     instrs.append(Alloc(node.dtype, parent_shape_locs, transported_loc))
-                #     # The transport instruction
-                #     tmp_transport_node = Result(TransportToOutputDevice(), [parent])
-                #     assert read_loc.devtype != transported_loc.devtype
-                #     instrs.append(ReturnByRef(tmp_transport_node, [read_loc], transported_loc))
-                #     read_locs.append(transported_loc)
-                #     node2impltype[tmp_transport_node] = "impl_c"
-                #     # node2dev[tmp_transport_node] = Device(devtype="cpu")
-                # else:
-                #     read_locs.append(read_loc)
+            read_locs = []
+            for parent in node.parents:
+                read_loc = node2memloc[parent]
+                if read_loc.devtype != node2dev[node].devtype:
+                    print read_loc.devtype, node2dev[node].devtype
+                    # Allocation instr for the transport destination
+                    transported_loc = counter.new_memloc(node2dev[node].devtype)
+                    parent_shape = node2shape[parent] if parent.ndim > 0 else []
+                    parent_shape_locs = [node2memloc[shpel] for shpel in parent_shape]
+                    instrs.append(Alloc(node.dtype, parent_shape_locs, transported_loc))
+                    # The transport instruction
+                    tmp_transport_node = Result(TransportToOutputDevice(), [parent])
+                    assert read_loc.devtype != transported_loc.devtype
+                    instrs.append(ReturnByRef(tmp_transport_node.op, [parent.typ], [read_loc], transported_loc))
+                    read_locs.append(transported_loc)
+                    node2dev[tmp_transport_node] = Device(devtype="cpu")
+                else:
+                    read_locs.append(read_loc)
             assert len(read_locs) == len(node.parents)
 
             if node.op.call_type == "byref":
-                if node2memowner[node] == node:
+                if node2memowner[node] is node:
                     if is_tensor(node): # just make one memory location for output
                         nodeshape = node2shape[node] if node.ndim > 0 else []
                         shape_locs = [node2memloc[shpel] for shpel in nodeshape]
@@ -309,14 +266,16 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     """
     Compiles the expression graph into an execution graph. 
     """
+    config = load_config()
+
     # Phase 1: simplification and analysis of expression graph
     # ------------------------------------------------------
     # Add add update targets to outputs
     outputs_updatetargs = outputs + [after for (_before, after) in updates]
     if givens: outputs_updatetargs = clone(outputs_updatetargs, dict(givens))
     # Do simplification + analysis pass on expression graph
-    outputs_updatetargs_simple, analysis = \
-        simplify_and_analyze(outputs_updatetargs) if load_config()["enable_simplification"] \
+    outputs_updatetargs_simple, analysis, repl = \
+        simplify_and_analyze(outputs_updatetargs) if config["enable_simplification"] \
         else (outputs_updatetargs, analyze(outputs_updatetargs))
 
     # Phase 2: build execution graph
@@ -329,8 +288,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     updatesrcs = [before for (before, _) in updates]
     node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple))
     # Determine location and device of nodes
-    # node2dev, node2impltype = determine_devices(nodes_sorted, node2memowner)
-    node2dev = {node:Device() for node in nodes_sorted}
+    node2dev = determine_devices(nodes_sorted, node2memowner, analysis, repl)
     # Find the outputs we want to return
     outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
     # Generate execution graph
@@ -339,9 +297,10 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
 
     # Print execution graph
     # TODO: reintroduce with better logging system
-    # print 'begin'
-    # print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
-    # print 'end'
+    if config["verbose"]:
+        print 'begin'
+        print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
+        print 'end'
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------

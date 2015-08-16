@@ -1,7 +1,6 @@
 import numpy as np
 import cgt
 from cgt import nn
-from . import reset_config
 
 
 
@@ -28,8 +27,8 @@ def test_conv():
             for outchan in xrange(outchans):
                 out[b,outchan] += scipy.signal.convolve2d(x[b,inchan],filt[outchan,inchan][::-1,::-1],mode='full')
 
-    @reset_config
     def check_conv(precision):
+        cgt.reset_config()
         cgt.set_precision(precision)
         f = cgt.function([], nn.conv2d(cgt.constant(x), cgt.constant(filt), kernelshape=(filtrows,filtcols), pad=(filtrows-1, filtcols-1)))
         out1 = f()

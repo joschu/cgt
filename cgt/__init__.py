@@ -1,7 +1,7 @@
 from .api import *
 from .display import print_tree, print_expr, print_text, as_dot
 from .execution import function, numeric_eval
-from .core import grad, load_config, modify_config, simplify
+from .core import grad, load_config, update_config, simplify, reset_config
 from .ez import EasyCustomOp
 
 floatX = "f4"

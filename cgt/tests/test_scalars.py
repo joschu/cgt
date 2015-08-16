@@ -1,7 +1,6 @@
 import cgt, numpy as np, numpy.random as nr, itertools as it
 from cgt import core, utils
 from cgt.numeric_diff import numeric_grad
-from . import reset_config
 
 DISPLAY=False
 
@@ -12,11 +11,11 @@ def test_scalars():
         for precision in ("single","double"):
             yield check_scalar_grads, precision, backend
 
-@reset_config
 def check_scalar_grads(precision, backend):
+    cgt.reset_config()
     np.random.seed(0)
     cgt.set_precision(precision)
-    cgt.core.modify_config(backend=backend)
+    cgt.core.update_config(backend=backend)
     x = cgt.scalar('x')
     y = cgt.scalar('y')
     z = cgt.scalar('z')

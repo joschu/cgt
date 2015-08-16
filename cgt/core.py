@@ -93,21 +93,19 @@ class TupleType(Type):
 class Device(object):
     """
     Represents a location where a computation is performed
-    machine: which computer on a network
     devtype: cpu vs gpu
-    idx: which gpu, or possibly which process
+    idx: index of which device
     """
-    def __init__(self, machine="default", devtype="cpu", idx=0):
-        assert isinstance(machine,str) and isinstance(devtype,str) and isinstance(idx,int)
-        self.machine = machine
+    def __init__(self, devtype="cpu", idx=0):
+        assert isinstance(devtype,str) and isinstance(idx,int)
         self.devtype = devtype
         self.idx = idx
     def __eq__(self, other):
-        return self.machine == other.machine and self.devtype == other.devtype and self.idx == other.idx
+        return self.devtype == other.devtype and self.idx == other.idx
     def __hash__(self):
-        return hash((self.machine, self.devtype, self.idx))
+        return hash((self.devtype, self.idx))
     def __repr__(self):
-        return "%s/%s/%s"%(self.machine,self.devtype,self.idx)
+        return "%s/%s"%(self.devtype,self.idx)
 
 def _promote(typ1, typ2):
     """
@@ -163,7 +161,8 @@ class Node(object):
     def __init__(self, typ, op, parents):
         self.typ = typ
         self.op = op
-        self.parents = parents
+        self.parents = parents        
+        self.props = {}
     def is_input(self):
         return False
     def is_argument(self):
@@ -400,6 +399,10 @@ class Result(Node):
         assert op is not None
         # self.stackinfo = traceback.extract_stack()
         Node.__init__(self, typ, op, parents)
+        
+        self.props["default_device"] = _CONFIG["default_device"]
+        if _CONFIG["debug"]: self.props["stack"] = traceback.extract_stack()[:-2]
+
     def get_hash(self, node2hash):
         hashobj = hashlib.md5(self.op.get_hash())
         for p in self.parents: hashobj.update(node2hash[p])
@@ -841,13 +844,14 @@ class ConstantTuple(Constant):
         return str(self.value)
     def __str__(self):
         return "const{%s}"%str(self.value)
-    def py_apply_valret(self, reads):
-        return self.value
+    def get_py_func(self, input_types):
+        def f(_):
+            return self.value
+        return f
     def shp_apply(self, _inputs):
         return tuple(map(cgt.constant, x.shape) for x in self.value)
-        return cgt.shape(as_node(self.value))
     def typ_apply(self, input_types):
-        assert len(inputs_types)==0
+        assert len(input_types)==0
         return _get_value_type(self.value)
     def get_hash(self):
         return str(id(self))
@@ -1429,11 +1433,12 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         return CImpl(code)
 
 class TransportToOutputDevice(Op):
+    available_impls = ("native_cpu","native_gpu")
     def typ_apply(self, input_types):
         return input_types[0]
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
-    def get_c_impl(self, _inputs):
+    def get_native_compile_info(self, _inputs, _devtype):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
         code = """
@@ -1443,7 +1448,7 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgt_memcpy(write->devtype(), reads[0]->devtype(), write->data(), reads[0]->data(), reads[0]->nbytes());
 }
 """
-        return CImpl(code)
+        return NativeCompileInfo(self, 1, "c++", code)
 
 # TODO save computation by removing negative freq components
 class RFFT(Op):
@@ -2103,7 +2108,7 @@ def simplify_and_analyze(outputs):
     analysis = init_analysis()
     repl = {}
     for output in outputs: update_simplify_map(output, analysis, repl)
-    return [repl[node] for node in outputs], analysis
+    return [repl[node] for node in outputs], analysis, repl
 
 def process_top_stack_item_and_maybe_get_replacement(stack, analysis, repl): #pylint: disable=W0621
     """
@@ -2132,6 +2137,7 @@ def process_top_stack_item_and_maybe_get_replacement(stack, analysis, repl): #py
                 return
         newparents = [repl[p] for p in node.parents]
         newnode = Result(node.op, newparents, typ=node.get_type())
+        newnode.props = node.props
         newnewnode = maybe_replace(newnode, analysis, repl)
         if newnewnode is None:
             return (orig,newnode)
@@ -2384,6 +2390,7 @@ def clone(nodes, replace=None):
                 replace[node] = node
         else:
             replace[node] = Result(node.op, [replace[p] for p in node.parents], typ=node.get_type())
+            replace[node].props = node.props
     return [replace[node] for node in nodes]
 
 def alloc_from_shp(shp, typ):
@@ -2506,9 +2513,34 @@ def load_config(force_reload = False):
                 lhs,rhs = pair.split("=")
                 assert lhs in _CONFIG
                 _CONFIG[lhs] = rhs
+        _CONFIG["default_device"] = Device()
     return _CONFIG
+load_config()
 
-def modify_config(**kws):
+def reset_config():
+    global _CONFIG
+    _CONFIG = None
+    load_config()    
+
+def update_config(**kws):
     config = load_config()
     for (name,val) in kws.iteritems():
         config[name] = val
+
+class scoped_update_config(object):
+    def __init__(self, **kw):
+        config = load_config()
+        self.prevsettings = {}
+        self.delkeys = []
+        for k in kw.iterkeys(): 
+            if k in config: 
+                self.prevsettings[k] = config[k]
+            else:
+                self.delkeys.append(k)
+        config.update(kw)
+    def __enter__(self):
+        return
+    def __exit__(self, *args):
+        config = load_config()
+        config.update(self.prevsettings)
+        for k in self.delkeys: del config[k]

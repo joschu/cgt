@@ -1,12 +1,11 @@
 import numpy as np
 import cgt
 from cgt import nn, core
-from . import reset_config
 
-@reset_config
 def test_flatvec():
+    cgt.reset_config
     cgt.set_precision('double')
-    cgt.core.modify_config(backend="python") # XXX
+    cgt.core.update_config(backend="python") # XXX
 
     N = 10
     K = 3

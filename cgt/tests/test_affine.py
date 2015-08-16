@@ -2,7 +2,6 @@ import cgt
 from cgt import core
 import numpy as np
 import numpy.random as nr
-from cgt.tests import reset_config
 
 DISPLAY = False
 
@@ -221,11 +220,11 @@ def test_affine():
         for precision in ("double",):
             yield check_affine_funcs, precision, backend
 
-@reset_config
 def check_affine_funcs(precision, backend):
+    cgt.reset_config()
     np.random.seed(0)
     cgt.set_precision(precision)
-    cgt.core.modify_config(backend=backend)
+    cgt.core.update_config(backend=backend)
 
     sA = np.array(nr.rand())
     sB = np.array(nr.rand())
