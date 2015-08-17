@@ -367,7 +367,7 @@ class Op(object):
         func = self.get_py_func(input_types)
         return PyCallable(self, len(input_types), func)
 
-    def __str__(self):
+    def __repr__(self):
         """
         Get a human-readable description of the Op, including its attributes
         """
@@ -403,9 +403,10 @@ class Result(Node):
         self.props["default_device"] = _CONFIG["default_device"]
         if _CONFIG["debug"]: self.props["stack"] = traceback.extract_stack()[:-2]
 
-    def get_hash(self, node2hash):
+    def get_hash(self, node2hash):        
         hashobj = hashlib.md5(self.op.get_hash())
-        for p in self.parents: hashobj.update(node2hash[p])
+        for p in self.parents: 
+            hashobj.update(node2hash[p])
         return hashobj.hexdigest()
     def __repr__(self):
         return "Result{%s}"%(str(self.op))
@@ -424,9 +425,7 @@ class Input(Node):
     def is_input(self):
         return True
     def get_hash(self, _node2hash):
-        hashobj = hashlib.md5(str(id(self)))
-        # XXX
-        return hashobj.hexdigest()
+        return str(id(self))
     def __repr__(self):
         raise NotImplementedError
     def get_fixed_shape(self):
@@ -733,17 +732,11 @@ class NativeCallable(object):
     @property
     def n_in(self):
         return self._n_in
-    def _call_byval(self, inputs):
-        inputs = [cgt.cycgt.CppArrayWrapper.from_numpy(x,view=True) for x in inputs]
-        assert all(isinstance(x, np.ndarray) for x in inputs)
-        read_ptrs = (ctypes.c_void_p*len(inputs))(*(x.ptr for x in inputs))
-        return self.fptr(ctypes.pointer(self.cldata), read_ptrs)
+    def _call_byval(self, inputs):        
+        raise Todo
+        cgt.cycgt.apply_byval(self.fptr, self.cldata, inputs)
     def _call_byref(self, inputs, output):
-        inputs = [cgt.cycgt.CppArrayWrapper.from_numpy(x,view=True) for x in inputs]
-        output = cgt.cycgt.CppArrayWrapper.from_numpy(output, view=True)
-        read_ptrs = (ctypes.c_void_p*len(inputs))(*(x.ptr for x in inputs))
-        write_ptr = ctypes.c_void_p(output.ptr)
-        self.fptr(ctypes.pointer(self.cldata), read_ptrs, write_ptr)
+        cgt.cycgt.apply_byref(self.fptr, self.cldata, inputs, output)
     def call(self, *args):
         if self._call_type == "byval": self._call_byval(*args)
         elif self.call_type == "byref": self._call_byref(*args)
@@ -771,6 +764,7 @@ class ConstantTensor(Constant):
     # XXX for some reason valret version gives rare segfaults
     def __init__(self, value):
         Constant.__init__(self, as_valid_array(value))
+        self._hash = None
     def get_expr(self, parent_exprs):
         return self._value_str()
     def __str__(self):
@@ -800,7 +794,8 @@ class ConstantTensor(Constant):
         assert len(input_types)==0
         return _ndarray_type(self.value)
     def get_hash(self):
-        return str(id(self))
+        if self._hash is None: self._hash = cPickle.dumps(self.value, -1)
+        return self._hash
     def get_closure(self, _):
         assert isinstance(self.value, np.ndarray)
         shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
@@ -851,7 +846,8 @@ class ConstantTuple(Constant):
         assert len(input_types)==0
         return _get_value_type(self.value)
     def get_hash(self):
-        return str(id(self))
+        if self._hash is None: self._hash = cPickle.dumps(self.value, -1)
+        return self._hash
 
 
 
@@ -870,6 +866,10 @@ class Fill(Op):
         assert self.value.dtype != "O"
         self.dtype = self.value.dtype
         assert self.value.ndim==0
+    def get_hash(self):
+        return cPickle.dumps(self.value,-1)+str(id(self)) 
+        # XXX seems to be a bug somewhere that causes ntm grad check to
+        # fail when this CSE happens. Probably is a deeper bug :(
     def get_diff(self, num_inputs):
         return [False]*num_inputs
     def __str__(self):
@@ -1282,7 +1282,9 @@ class Reshape(Op):
         return [True] + [False]*(num_inputs-1)
     def get_py_func(self, input_types):
         def f(reads):
-            return reads[0].reshape(reads[1:])
+            out = reads[0].reshape(reads[1:])
+            if not out.flags.c_contiguous: out = out.copy()
+            return out
         return f
     def pullback(self, inputs, _out, gout):
         return [cgt.reshape(gout, cgt.shape(inputs[0]))] + [None]*(len(inputs)-1)
@@ -1411,6 +1413,8 @@ class Transpose(Op):
         return [inshape[ax] for ax in self.axes]
     def typ_apply(self, input_types):
         return input_types[0]
+    def __str__(self):
+        return "Transpose{%s}"%",".join(map(str, self.axes))
     def get_c_impl(self, inputs):
         x = inputs[0]
         d = {}
@@ -1824,8 +1828,39 @@ class Mul22(Op):
             x.dot(y, out=write)
         return f
     def pullback(self, inputs, output, goutput):
-        return [Result(Mul22(False, not self.tB), [goutput, inputs[1]]),
-                Result(Mul22(not self.tA, False), [inputs[0], goutput])]
+        """
+        mul(F,F) Aij Bjk -> Cik
+        g[0]: GAij = mul(F,T) GCik Bjk
+        g[1]: GBjk = mul(T,F) Aij GCik 
+
+        mul(F,T) Aij Bkj -> Cik
+        g[0]: GAij = mul(F,F) GCik Bkj
+        g[1]: GBkj = mul(T,F) GCik Aij
+
+        mul(T,F) Aji Bjk -> Cik
+        g[0]: GAji = mul(F,T) Bjk GCik
+        g[1]: GBjk = mul(F,F) Aji GCik 
+
+        mul(T,T) Aji Bkj -> Cik
+        g[0]: GAji = mul(T,T) Bkj GCik
+        g[1]: GBkj = mul(T,T) GCik Aji
+
+        """
+        A,B = inputs
+        GC = goutput
+        if (self.tA, self.tB) == (False,False):
+            return [Result(Mul22(False,True), [GC, B]),
+                    Result(Mul22(True,False), [A, GC])]
+        elif (self.tA, self.tB) == (False,True):
+            return [Result(Mul22(False,False), [GC, B]),
+                    Result(Mul22(True,False), [GC, A])]
+        elif (self.tA, self.tB) == (True,False):
+            return [Result(Mul22(False,True), [B, GC]),
+                    Result(Mul22(False,False), [A, GC])]
+        elif (self.tA, self.tB) == (True,True):
+            return [Result(Mul22(True,True), [B, GC]),
+                    Result(Mul22(True,True), [GC, A])]
+
     def shp_apply(self, inputs):
         return [cgt.size(inputs[0], 1 if self.tA else 0),cgt.size(inputs[1],0 if self.tB else 1)]
     def typ_apply(self, input_types):
@@ -1858,6 +1893,8 @@ CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
         return CImpl(code, includes=["cblas.h"], link_flags="-lblas")
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s%s"%(xexpr, u"\u1d57" if self.tA else "", yexpr, u"\u1d57" if self.tB else "")
+    def __repr__(self):
+        return "Mul22{%s,%s}"%("T" if self.tA else "N", "T" if self.tB else "N")
 
 class BatchedMul22(Op):
     available_impls = ("python",)        
@@ -1872,8 +1909,20 @@ class BatchedMul22(Op):
                 xmat.dot(ymat, out=zmat)
         return f
     def pullback(self, inputs, output, goutput):
-        return [Result(BatchedMul22(False, not self.tB), [goutput, inputs[1]]),
-                Result(BatchedMul22(not self.tA, False), [inputs[0], goutput])]
+        A,B = inputs
+        GC = goutput
+        if (self.tA, self.tB) == (False,False):
+            return [Result(BatchedMul22(False,True), [GC, B]),
+                    Result(BatchedMul22(True,False), [A, GC])]
+        elif (self.tA, self.tB) == (False,True):
+            return [Result(BatchedMul22(False,False), [GC, B]),
+                    Result(BatchedMul22(True,False), [GC, A])]
+        elif (self.tA, self.tB) == (True,False):
+            return [Result(BatchedMul22(False,True), [B, GC]),
+                    Result(BatchedMul22(False,False), [A, GC])]
+        elif (self.tA, self.tB) == (True,True):
+            return [Result(BatchedMul22(True,True), [B, GC]),
+                    Result(BatchedMul22(True,True), [GC, A])]    
     def shp_apply(self, inputs):
         return [cgt.size(inputs[0],0), cgt.size(inputs[0], 2 if self.tA else 1),cgt.size(inputs[1],1 if self.tB else 2)]
     def typ_apply(self, input_types):
@@ -1948,9 +1997,8 @@ class Composition(Op):
     def get_diff(self, _):
         return self._diff
     def get_py_func(self, input_types):
-        from . import execution # XXX
         # TODO testme
-        f = execution.function(self._inputs, self._outputs)
+        f = cgt.execution.function(self._inputs, self._outputs)
         def py_impl(num_inputs):
             return tuple(f(num_inputs))
         return py_impl
@@ -2225,8 +2273,8 @@ def maybe_replace(node, analysis, repl):
     node2hash = analysis["node2hash"]
     h = node.get_hash(node2hash)
     if h in analysis["hash2node"]:
-        if VERBOSE_OPTIMIZATION: print "Did CSE"
         newnode = analysis["hash2node"][h]
+        if VERBOSE_OPTIMIZATION: print "Did CSE", node
         assert newnode in repl and newnode.op.__class__ == node.op.__class__
         return newnode
     parents = node.parents
@@ -2234,6 +2282,7 @@ def maybe_replace(node, analysis, repl):
     # ASSUMPTION: the only type of nullary ops that we can propagate this way
     # are subclasses of Constant
     if len(parents) > 0 and all(isinstance(par.op, Constant) for par in parents):
+        c = cgt.execution.get_callable(node.op, [par.typ for par in parents], "cpu")
         try:
             out = cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
             if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
@@ -2375,9 +2424,11 @@ def count_nodes(outputs):
     return len(list(topsorted(outputs)))
 
 def clone(nodes, replace=None):
+    if isinstance(nodes, Node): return _clone_list([nodes], replace)[0]
+    else: return _clone_list(list(nodes), replace)
+
+def _clone_list(nodes, replace):
     assert isinstance(nodes, list)
-    if isinstance(nodes, tuple):
-        return tuple(clone(x,replace) for x in nodes)
     if replace is None: replace = {}
     else:
         assert isinstance(replace, dict)
@@ -2450,15 +2501,17 @@ def get_numeric_shape_fun(node):
 
 def py_numeric_apply(node, vals):
     try:
-        py_func = node.op.get_py_func(node.parents)
+        # py_func = node.op.get_py_func(node.parents)
+        callable = cgt.execution.get_callable(node.op, [par.typ for par in node.parents],"cpu")
+
     except MethodNotDefined:
         print 'Op %s has no Python implementation' % repr(node.op)
         raise
     if node.op.call_type == "byval":
-        out = py_func(vals)
+        out = callable.call(vals)
     else:
         out = alloc_output(node,vals)
-        py_func(vals, out)
+        callable.call(vals, out)
     return out
 
 class NonDifferentiable(Exception):

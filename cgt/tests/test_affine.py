@@ -121,6 +121,30 @@ def matmat11(X,Y):
     return sum(X.T.dot(Y.T))
 
 
+def matmat00a(X,Y):
+    if isinstance(X, np.ndarray):
+        return np.dot(X,Y).sum()
+    else:
+        return sum(core.Result(core.Mul22(False,False), [X, Y]))
+
+def matmat01a(X,Y):
+    if isinstance(X, np.ndarray):
+        return np.dot(X,Y.T).sum()
+    else:
+        return sum(core.Result(core.Mul22(False,True), [X, Y]))
+
+def matmat10a(X,Y):
+    if isinstance(X, np.ndarray):
+        return np.dot(X.T,Y).sum()
+    else:
+        return sum(core.Result(core.Mul22(True,False), [X, Y]))
+
+def matmat11a(X,Y):
+    if isinstance(X, np.ndarray):
+        return np.dot(X.T,Y.T).sum()
+    else:
+        return sum(core.Result(core.Mul22(True,True), [X, Y]))
+
 
 def matvec(X,y):
     return sum(X.dot(y))
@@ -180,14 +204,20 @@ def repeat1(x,y):
     return (repeat(x,7,1)*y).sum()
 
 
-def transpose021(x):
-    return sum(x.transpose([0,2,1]))
+def transpose021(x, y):
+    return (x.transpose([0,2,1])*y).sum()
 
-def transpose012(x):
-    return sum(x.transpose([0,1,2]))
+def transpose012(x, y):
+    return (x.transpose([0,1,2])*y).sum()
 
-def transpose102(x):
-    return sum(x.transpose([1,0,2]))
+def transpose102(x, y):
+    return (x.transpose([1,0,2])*y).sum()
+
+def transpose0312(x, y):
+    return (x.transpose([0,3,1,2])*y).sum()
+
+def transpose0231(x, y):
+    return (x.transpose([0,2,3,1])*y).sum()
 
 def batchedmatmul(x,y):
     return sum(einsum("nij,njk->nik", x, y))
@@ -209,6 +239,18 @@ def flip1(x, y):
         return (x[:, ::-1]*y).sum()
     else:
         return (cgt.flip(x, [1])*y).sum()
+
+
+def convlike(F_abcd, y_e_bcd, q_ae):
+    a,b,c,d = F_abcd.shape
+    F_a_bcd = F_abcd.reshape([a,b*c*d])
+    if isinstance(F_abcd, np.ndarray):
+        P_ae = F_a_bcd.dot(y_e_bcd.T)
+    else:
+        # P_ae = core.Result(core.Mul22(False,True), [F_a_bcd, y_e_bcd])
+        P_ae = F_a_bcd.dot(y_e_bcd.T)
+    return (P_ae*q_ae).sum()
+
 
 ################################################################
 ### Tests 
@@ -266,6 +308,12 @@ def check_affine_funcs(precision, backend):
     check_affine(matmat01, M23, M35.T)
     check_affine(matmat10, M23.T, M35)
     check_affine(matmat11, M23.T, M35.T)
+
+    check_affine(matmat00a, M23, M35)
+    check_affine(matmat01a, M23, M35.T)
+    # check_affine(matmat10a, M23.T, M35)
+    check_affine(matmat11a, M23.T, M35.T)
+
     check_affine(matvec, M23, v3)
     check_affine(vecvec, v3, v3b)
     check_affine(bcadd, M23, v13)
@@ -274,20 +322,25 @@ def check_affine_funcs(precision, backend):
 
 
     T235 = nr.randn(2,3,5)
+    T235a = nr.randn(2,3,5)
     T257 = nr.randn(2,5,7)
-    check_affine(transpose012, T235)
-    check_affine(transpose021, T235)
-    check_affine(transpose102, T235)
+    T2357 = nr.randn(2,3,5,7)
+    T2357a = nr.randn(2,3,5,7)
+
+    check_affine(transpose012, T235, T235a)
+    check_affine(transpose021, T235, T235a.transpose(0,2,1))
+    check_affine(transpose102, T235, T235a.transpose(1,0,2))
+    check_affine(transpose0312, T2357, T2357a.transpose(0,3,1,2))
+    check_affine(transpose0231, T2357, T2357a.transpose(0,2,3,1))
+
     check_affine(batchedmatmul, T235, T257)
 
     check_affine(flip0, M23, nr.randn(2,3))
     check_affine(flip1, M23, nr.randn(2,3))
 
     # check_affine(rfft, M35)
+    check_affine(convlike, T2357, nr.randn(11,3*5*7), nr.randn(2,11))
 
-
-    # TODO: examples with constants
-    # TODO: examples that mix scalar and matrix types
 
     if DISPLAY:
         from thirdparty.tabulate import tabulate

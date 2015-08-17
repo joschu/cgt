@@ -94,12 +94,13 @@ def test():
     cgt.set_precision("quad")
 
 
-    for settings in [ ((4,4),(0,0),(1,1)), ((3,3),(1,1),(2,2)) ]:
-        x = cgt.tensor4("x", fixed_shape=(2,3,15,17))
+    for settings in [ ((4,4),(0,0),(1,1)), ((3,3),(1,1),(2,2)), ((3,3),(1,1),(3,3)) ]:
+        xval = np.arange(2*1*28*28).reshape(2,1,28,28).astype(cgt.floatX)
+        x = cgt.tensor4("x", fixed_shape=xval.shape)
         y = im2col(x, *settings)
-        xval = np.arange(2*3*15*17).reshape(2,3,15,17).astype(cgt.floatX)
         h = cgt.constant(np.random.randn(*core.infer_shape(y)))
         cost = (y*h).sum()
+
         fcost = cgt.function([x],cost)
         fgrad = cgt.function([x], cgt.grad(cost, [x])[0])
 
@@ -107,7 +108,6 @@ def test():
         gnum = numeric_grad(fcost, xval,eps=1e-5)
         gana = fgrad(xval)
         assert np.allclose(gnum, gana)
-
         # fy = cgt.function([x],y)
         # yval = fy(xval)
         # assert np.allclose(yval[0,0,0] , xval[0,:,0:4,0:4].flatten())

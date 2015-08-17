@@ -91,7 +91,7 @@ def make_ff_controller(opt):
     y_bp = last_out[:,idx:idx+p];         idx += p
 
     k_bHm = cgt.tanh(k_bHm)
-    beta_bH = cgt.log(1 + cgt.exp(beta_bH)) # XXX not numerically stable
+    beta_bH = nn.softplus(beta_bH)
     g_bH = cgt.sigmoid(g_bH)
     s_bH3 = sum_normalize2(cgt.exp(s_bH3))
     gamma_bH = cgt.sigmoid(gamma_bH)+1
@@ -188,7 +188,6 @@ def ntm_step(opt, Mprev_bnm, X_bk, wprev_bHn, rprev_bhm, controller):
 
 def sum_normalize2(x):
     return cgt.broadcast("/", x, x.sum(axis=2,keepdims=True), "xxx,xx1")
-
 
 def make_ntm(opt):
     Mprev_bnm = cgt.tensor3("M", fixed_shape=(opt.b, opt.n, opt.m))
@@ -360,7 +359,7 @@ def main():
             return loss
         from cgt.numeric_diff import numeric_grad
         g_num = numeric_grad(f, th,eps=1e-8)
-        _, g_anal = f_loss_and_grad(x,y)
+        _, _, g_anal = f_loss_and_grad(x,y)
         assert np.allclose(g_num, g_anal, atol=1e-8)
         # print "Gradient check succeeded!"
         print "%i/%i elts of grad are nonzero"%( (g_anal != 0).sum(), g_anal.size )
@@ -379,7 +378,7 @@ def main():
         return
 
     seq_num = 0
-    state = make_rmsprop_state(th, .001, .95)
+    state = make_rmsprop_state(th, .01, .95)
     print fmt_row(13, ["seq num", "CE (bits)", "0-1 loss", "|g|_inf"], header=True)
     while True:
         x,y = task.gen_batch()

@@ -5,7 +5,7 @@ from .interpreter import SequentialInterpreter
 
 def function(inputs, outputs, dbg=None, updates=None, givens=None):
     assert isinstance(inputs, list), "Inputs must be a list"
-    assert all(isinstance(el, Node) for el in inputs), "Invalid input: should be a list of nodes"
+    assert all(isinstance(el, Argument) for el in inputs), "Invalid input: should be a list of Argument nodes"
 
     if isinstance(outputs, list): 
         assert all(isinstance(el, Node) for el in outputs), "Invalid output: should all be symbolic variables"
@@ -60,8 +60,8 @@ def determine_devices(nodes_sorted, updatetarg2src):
         elif node.is_argument():
             device = home_device
         else:            
-            if default_device.devtype == "gpu" and "native_gpu" in node.op.available_impls:
-                device = Device(default_device.devtype, default_device.idx)
+            if "native_gpu" in node.op.available_impls and (default_device.devtype == "gpu" or "native_cpu" not in node.op.available_impls):
+                device = Device("gpu", default_device.idx)
             else:
                 device = Device(devtype="cpu", idx=default_device.idx)
         node2dev[node] = device
@@ -258,13 +258,10 @@ def add_transports(nodelist, node2dev, node2shape):
             if not childdev == dev:
                 print node,dev,child,childdev
                 if childdev not in dev2copy:
-                    print "dpoing a new transport"
                     nodecopy = Result(Transport(childdev), [node])
                     node2dev[nodecopy] = childdev
                     dev2copy[childdev] = nodecopy
                     node2shape[nodecopy] = node2shape[node]
-                else:
-                    print "already did it"
                 replace_parents(child, node, dev2copy[childdev])
 
 
@@ -292,6 +289,9 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
 
     # Phase 2: device targeting
     # ------------------------------------------------------
+    outputs_updatetargs_simple = cgt.core.clone(outputs_updatetargs_simple)
+    analysis = analyze(outputs_updatetargs_simple) 
+    # XXX inefficient to just copy the graph and redo analysis
     nodelist = topsorted(outputs_updatetargs_simple)
     updatesrcs = [before for (before, _) in updates]    
     updatetargs_simple = outputs_updatetargs_simple[len(outputs):]

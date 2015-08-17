@@ -16,6 +16,8 @@ from cgt import core, execution
 
 cnp.import_array()
 
+# TODO use smart pointers instead of returning cgtObject*
+
 ################################################################
 ### CGT common datatypes 
 ################################################################
@@ -41,7 +43,7 @@ cdef extern from "cgt_common.h":
     cppclass cgtArray(cgtObject):
         cgtArray(size_t, const size_t*, cgtDtype, cgtDevtype)
         cgtArray(size_t, const size_t*, cgtDtype, cgtDevtype, void* fromdata, bint copy)
-        size_t ndim() const
+        int ndim() const
         const size_t* shape() const
         size_t size()
         size_t nbytes() const
@@ -97,7 +99,7 @@ cdef object cgt2py_array(cgtArray* a, bint view):
     if view:
         return cnp.PyArray_SimpleNewFromData(a.ndim(), <cnp.npy_intp*>a.shape(), a.dtype(), a.data())
     else:
-        nparr = cnp.PyArray_SimpleNew(a.ndim(), <npy_intp_t*>a.shape(), a.dtype()) # XXX DANGEROUS CAST
+        nparr = cnp.PyArray_SimpleNew(a.ndim(), <npy_intp_t*>a.shape(), a.dtype())
         cgt_memcpy(cgtCPU, a.devtype(), cnp.PyArray_DATA(nparr), a.data(), cnp.PyArray_NBYTES(nparr))
         return nparr
 
@@ -311,7 +313,7 @@ cdef cgtObject* _pyfunc_byval(void* cldata, cgtObject** args):
         abort()
     return py2cgt_object(pyout, False)
 
-cdef ByRefCallable _toocppbyrefcallable(callable, storage) except *:
+cdef ByRefCallable _tocppbyrefcallable(callable, storage) except *:
     storage.append(callable)
     if callable.kind == "native":
         return ByRefCallable(<cgtByRefFun>_getfuncptr(callable.fptr), _getstructptr(callable.cldata))
@@ -349,7 +351,7 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     elif t == execution.BuildTup:
         out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == execution.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _toocppbyrefcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
     elif t == execution.ReturnByVal:
         out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
     else:
@@ -435,3 +437,19 @@ cdef class CppInterpreterWrapper:
 
 def cgt_build_root():
     return osp.dirname(osp.dirname(osp.abspath(__file__)))
+
+def apply_byref(fptr, cldata, inputs, output):
+    cdef vector[IRC[cgtObject]] cgtinputs
+    for x in inputs:
+        cgtinputs.push_back(IRC[cgtObject](py2cgt_object(x,True)))
+    cdef IRC[cgtObject] cgtoutput = IRC[cgtObject](py2cgt_object(output,True))
+    cdef cgtByRefFun f = <cgtByRefFun>_getfuncptr(fptr)
+    cdef void* cldataptr = _getstructptr(cldata)
+    # Note: for IRC it is possible to cast the smart pointer into a regular pointer
+    # since there are no extra fields (see IRC.h)
+    # Yes, this is atrocious
+    f(cldataptr, <cgtObject**>cgtinputs.data(), cgtoutput.get())
+
+    # for (i,x) in enumerate(inputs): reads[i] = 
+    # <cgtByRefFun>_getfuncptr(fptr), _getstructptr(cldata), [py2cgt_object(x) for x in inputs]
+    # del[] reads

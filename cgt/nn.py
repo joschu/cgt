@@ -60,6 +60,14 @@ def setup_contiguous_storage(shareds):
 def rectify(x):
     return x * (x >= 0)
 
+def _nu_softplus(x,out):
+    absx = np.abs(x)
+    out[:] = (absx+x)/2 + np.log(1 + np.exp(-absx))
+
+def softplus(x):
+    op = core.ElwiseUnary("softplus",core.UnaryInfo("SoftPlus", _nu_softplus, True, 'f', lambda x, g, gy: gy/(cgt.exp(-x)+1.0), "(x > 0) ? (x + log(exp(-x) + 1)) : log(1+exp(x))"))
+    return core.Result(op, [x])
+
 def softmax(x,axis=1):
     # x = cgt.broadcast("-", x, x.max(axis=1,keepdims=True),"xx,x1")
     out = cgt.exp(x)
@@ -98,7 +106,7 @@ def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
     L,K,r,c = f_LKrc.shape
     f_LZ = f_LKrc.reshape([L, K*r*c])
     B,m,n,Z = col_BmnZ.shape
-    B,m,n,Z = col_BmnZ.shape
     col_Bmn_Z = col_BmnZ.reshape([B*m*n, Z])
     col_Bmn_L = core.Result(core.Mul22(False,True), [col_Bmn_Z, f_LZ])
     return col_Bmn_L.reshape([B,m,n,L]).transpose([0,3,1,2])
+

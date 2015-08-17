@@ -39,5 +39,5 @@ def test_conv():
     yield check_conv,"double"
 
 if __name__ == "__main__":
-    for (f,arg) in test_conv():
-        f(arg)
+    for (fn,arg) in test_conv():
+        fn(arg)
