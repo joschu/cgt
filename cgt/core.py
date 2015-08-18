@@ -38,6 +38,12 @@ def as_valid_array(x, dtype=None):
 def as_valid_tuple(x):
     return tuple(as_valid_array(a) for a in x)
 
+def as_valid_arg(x):
+    if isinstance(x, tuple):
+        return tuple(as_valid_arg(el) for el in x)
+    else:
+        return as_valid_array(x)
+
 class Type(object):
     """
     Represents a datatype for Nodes
@@ -87,21 +93,19 @@ class TupleType(Type):
 class Device(object):
     """
     Represents a location where a computation is performed
-    machine: which computer on a network
     devtype: cpu vs gpu
-    idx: which gpu, or possibly which process
+    idx: index of which device
     """
-    def __init__(self, machine="default", devtype="cpu", idx=0):
-        assert isinstance(machine,str) and isinstance(devtype,str) and isinstance(idx,int)
-        self.machine = machine
+    def __init__(self, devtype="cpu", idx=0):
+        assert isinstance(devtype,str) and isinstance(idx,int)
         self.devtype = devtype
         self.idx = idx
     def __eq__(self, other):
-        return self.machine == other.machine and self.devtype == other.devtype and self.idx == other.idx
+        return self.devtype == other.devtype and self.idx == other.idx
     def __hash__(self):
-        return hash((self.machine, self.devtype, self.idx))
+        return hash((self.devtype, self.idx))
     def __repr__(self):
-        return "%s/%s/%s"%(self.machine,self.devtype,self.idx)
+        return "%s/%s"%(self.devtype,self.idx)
 
 def _promote(typ1, typ2):
     """
@@ -154,10 +158,11 @@ class Node(object):
     """
     Node in the computation graph    
     """
-    def __init__(self, typ, op, parents):
+    def __init__(self, typ, op, parents, props=None):
         self.typ = typ
         self.op = op
-        self.parents = parents
+        self.parents = parents        
+        self.props = props or {}
     def is_input(self):
         return False
     def is_argument(self):
@@ -273,57 +278,9 @@ def _get_value_type(value):
     elif isinstance(value, tuple):
         return TupleType(*map(_get_value_type, value))
 
-def _get_value_device(value):
-    warnings.warn("todo: properly implement")
-    return Device()
-
-def _put_on_device(value, device):
-    warnings.warn("not putting value on device")
-    return value
-
 def num_components(node):
     return len(node.get_type()) if isinstance(node.get_type(), TupleType) else 1
 
-
-class OpImpl(object):
-    def is_py(self):
-        raise NotImplementedError
-    def is_c(self):
-        raise NotImplementedError
-    def is_cuda(self):
-        raise NotImplementedError
-
-class PyImpl(OpImpl):
-    def __init__(self, inplace_func=None, valret_func=None):
-        assert (inplace_func is None) != (valret_func is None)
-        self.inplace_func = inplace_func
-        self.valret_func = valret_func
-    def is_py(self):
-        return True
-    def is_c(self):
-        return False
-    def is_cuda(self):
-        return False
-
-class CImpl(OpImpl):
-    def __init__(self, code, includes=None, link_flags=""):
-        self.code = code
-        self.includes = [] if includes is None else includes
-        self.link_flags = link_flags
-    def is_py(self):
-        return False
-    def is_c(self):
-        return True
-    def is_cuda(self):
-        return False
-
-class CUDAImpl(CImpl):
-    def is_py(self):
-        return False
-    def is_c(self):
-        return False
-    def is_cuda(self):
-        return True
 
 class Op(object):
     """
@@ -331,9 +288,9 @@ class Op(object):
     """
 
     # attributes that can be overwritten in subclasses
-    call_type = 'inplace' # or valret
-    inplace_alias_ok = True
+    call_type = "byref" # or "byval"
     writes_to_input = -1
+    available_impls = () # python, native_cpu, native_gpu
 
     # pylint: disable=W0613
 
@@ -342,7 +299,7 @@ class Op(object):
         Return output shapes as a function of input nodes
         """
         raise NotImplementedError
-    def typ_apply(self, parent_typs):
+    def typ_apply(self, parent_types):
         """
         Return output types as a function of input types
         """
@@ -369,30 +326,7 @@ class Op(object):
         Get a human-readable description of the Op, including its attributes
         """
         return type(self).__name__
-    def get_py_impl(self):
-        raise MethodNotDefined
-    def get_c_impl(self, inputs):
-        raise MethodNotDefined
-    def get_cuda_impl(self, inputs):
-        raise MethodNotDefined
-    def get_closure(self, _inputs):
-        """        
-        Return a list (specifying the closure data) or None (indicating that no closure data is needed.)
 
-        For an Op with several attributes, some of them might be incorporated directly into the code of the Op,
-        whereas others can be provided at runtime. This function provides the data used to create a closure
-        containing the information that should be passed at runtime.
-        CGT will generate code for a struct with the desired field.
-
-        Closure data is specified in a list of triples of the form [(fieldname, fieldtype, fieldval)]
-        Fieldtype is a string
-        Fieldtypes is a ctypes type like ctypes.c_int or ctypes.c_void_p
-        Fieldval is the python value.
-
-        For example, let's say we want to store an int and a bool in the closure. Then we can return the triples
-        [("myint",ctypes.c_int, 3), ("mybool",ctypes.c_bool, True)]
-        """
-        return None
     def get_replacement(self, _newparents, _analysis):
         """
         Return the name of this node
@@ -425,8 +359,15 @@ class Op(object):
 
         """
         raise MethodNotDefined
+    def get_native_compile_info(self, inputs, devtype):
+        raise MethodNotDefined
+    def get_py_func(self, input_types):
+        raise MethodNotDefined
+    def get_py_callable(self, input_types):
+        func = self.get_py_func(input_types)
+        return PyCallable(self, len(input_types), func)
 
-    def __str__(self):
+    def __repr__(self):
         """
         Get a human-readable description of the Op, including its attributes
         """
@@ -452,18 +393,25 @@ class Result(Node):
     (TODO: be more precise about semantics. Does it depend ONLY on the parents, or can it depend on 
     some exogenous input too? What about random variables?)
     """
-    def __init__(self, op, parents, typ = None):
+    def __init__(self, op, parents, typ = None, props=None):
         parents = map(as_node, parents)
-        typ = op.typ_apply(parents) if typ is None else typ
+        typ = op.typ_apply([parent.typ for parent in parents]) if typ is None else typ
         assert op is not None
         # self.stackinfo = traceback.extract_stack()
-        Node.__init__(self, typ, op, parents)
-    def get_hash(self, node2hash):
+        Node.__init__(self, typ, op, parents, props=props)
+        
+        self.props["default_device"] = _CONFIG["default_device"]
+        if _CONFIG["debug"]: self.props["stack"] = traceback.extract_stack()[:-2]
+
+    def get_hash(self, node2hash):        
         hashobj = hashlib.md5(self.op.get_hash())
-        for p in self.parents: hashobj.update(node2hash[p])
+        for p in self.parents: 
+            hashobj.update(node2hash[p])
         return hashobj.hexdigest()
     def __repr__(self):
         return "Result{%s}"%(str(self.op))
+    def clone(self,newparents):
+        return Result(self.op, newparents, typ=self.typ, props = self.props)
 
 class Input(Node):
     """
@@ -477,9 +425,7 @@ class Input(Node):
     def is_input(self):
         return True
     def get_hash(self, _node2hash):
-        hashobj = hashlib.md5(str(id(self)))
-        # XXX
-        return hashobj.hexdigest()
+        return str(id(self))
     def __repr__(self):
         raise NotImplementedError
     def get_fixed_shape(self):
@@ -507,20 +453,23 @@ class Argument(Input):
 
 # Just here as a temporary  hack so node.op does the right thing in cython
 class GetData(Op):
-    call_type="valret"
+    call_type="byval"
+    available_impls=("python","native_cpu","native_gpu")
     def __init__(self, datanode):
         self.datanode = datanode
-    def get_py_impl(self):
-        def f(reads): return self.datanode.get_value()
-        return PyImpl(valret_func=f)
-    def get_c_impl(self, *args):
-        return CImpl(code=r"""
-extern "C" cgtArray* $function($closure* cldata, cgtArray** reads) {
-    return (cgtArray*)cldata->ptr;
-}""")
-    def get_closure(self, _):
-        ptr = self.datanode._value.get_pointer()
-        return [("ptr", ctypes.c_void_p, ptr)]
+    def get_py_func(self, _):
+        def f(_): 
+            return self.datanode.get_value()
+        return f
+    def get_native_compile_info(self, *_):
+        code=r"""
+            CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
+                return (cgtArray*)cldata->ptr;
+            }"""
+        ptr = self.datanode._value.ptr
+        return NativeCompileInfo(self, 0, "c++", code, closure_triples=[("ptr", ctypes.c_void_p, ptr)], 
+            store_objects=self.datanode._value)
+    
 
 class Data(Input):
     """
@@ -530,16 +479,13 @@ class Data(Input):
     """
     def __init__(self, value,name=None,device=None, fixed_shape_mask=None):
         value = as_valid_array(value)
-        if device is None:
-            self.device = Device()
-        import cycgt2
+        self.device = device or _CONFIG["default_device"]
 
         self.use_numpy = cgt.load_config()["backend"] == "python"
-
         if self.use_numpy:
-            self._value = value
-        else:
-            self._value = cycgt2.CppArrayWrapper.from_numpy(value, self.device.devtype)
+            assert self.device.devtype=="cpu","can only use numpy for cpu"
+
+        self.set_value(value)
 
         self.name = "unnamed" if name is None else name
         assert self._value.dtype != object
@@ -548,6 +494,8 @@ class Data(Input):
         else: self.fixed_shape_mask = fixed_shape_mask
         Input.__init__(self, _ndarray_type(value), name)
         self.op = GetData(self)
+    def clone(self,*_):
+        return self
     def is_data(self):
         return True
     def __repr__(self):
@@ -559,14 +507,16 @@ class Data(Input):
         return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
         return self._value if self.use_numpy else self._value.to_numpy()
+        # XXX use more explicit names
     def get_shape(self):
         return self._value.shape
     def get_size(self):
         return self._value.size
-    def set_value(self, x):
-        assert isinstance(x, np.ndarray) and self.use_numpy # XXX what is this?
-        assert x.dtype == self._value.dtype
-        self._value = x
+    def set_value(self, value):
+        if self.use_numpy:
+            self._value = value
+        else:
+            self._value = cgt.cycgt.CppArrayWrapper.from_numpy(value, self.device.devtype, False)
 
 
     # TODO: remove external accesses to .value
@@ -691,7 +641,109 @@ def grad(cost, wrt):
     gout = _singleton_ones(cost.dtype, 0)
     return pullback([cost], [gout], wrt)
 
+# ================================================================
+# Compilation 
+# ================================================================
 
+class NativeCompileInfo(object):
+    def __init__(self, op, n_in, lang, func_code, closure_triples = None, includes=(), link_flags="", 
+            setup=False, teardown=False, gpu_deref_mask=None, store_objects = ()):
+        self.call_type = op.call_type
+        self.op_str = str(op)
+        self.n_in = n_in
+        self.lang = lang
+        self.func_code = func_code
+        self.closure_triples = closure_triples
+        self.includes = list(includes)
+        self.link_flags = link_flags
+        self.setup = setup
+        self.teardown = teardown
+        self.gpu_deref_mask = gpu_deref_mask
+        self.store_objects = store_objects
+
+    def involves_gpu(self):
+        return self.gpu_deref_mask is not None
+
+class Callable(object):
+    def call(self, *args):
+        raise NotImplementedError
+    @property
+    def call_type(self):
+        raise NotImplementedError
+    @property
+    def op_str(self):
+        raise NotImplementedError
+    @property
+    def n_in(self):
+        raise NotImplementedError
+
+    
+class PyCallable(Callable):
+    def __init__(self, op,  n_in, func):
+        self._op_str = str(op)
+        self._call_type = op.call_type
+        self._n_in = n_in
+        self._func = func
+        self._kind = "py"
+    def call(self, *args):
+        return self._func(*args)    
+    @property
+    def op_str(self):
+        return self._op_str
+    @property
+    def call_type(self):
+        return self._call_type
+    @property
+    def kind(self):
+        return self._kind
+    @property
+    def func(self):
+        return self._func
+    @property
+    def n_in(self):
+        return self._n_in
+    
+    
+class NativeCallable(object):
+    def __init__(self, n_in, call_type, op_str, fptr, cldata=None, 
+            store_objects=None, setup_fptr=None, teardown_fptr=None):
+        self._n_in = n_in
+        self._call_type = call_type
+        self._op_str = op_str
+        self.fptr = fptr
+        self.cldata = cldata
+        self.store_objects = store_objects
+        self.teardown_fptr = teardown_fptr
+        if setup_fptr is not None:
+            setup_fptr()
+        self._kind = "native"
+    def __del__(self):
+        if self.teardown_fptr is not None:
+            self.teardown_fptr()
+    @property
+    def call_type(self):
+        return self._call_type
+    @property
+    def op_str(self):
+        return self._op_str
+    @property
+    def kind(self):
+        return self._kind
+    @property
+    def n_in(self):
+        return self._n_in
+    def _call_byval(self, inputs):        
+        raise Todo
+        cgt.cycgt.apply_byval(self.fptr, self.cldata, inputs)
+    def _call_byref(self, inputs, output):
+        cgt.cycgt.apply_byref(self.fptr, self.cldata, inputs, output)
+    def call(self, *args):
+        if self._call_type == "byval": self._call_byval(*args)
+        elif self.call_type == "byref": self._call_byref(*args)
+        else: raise Unreachable
+
+    
+    
 # ================================================================
 # Ops 
 # ================================================================
@@ -701,42 +753,49 @@ def grad(cost, wrt):
 # ----------------------------------------------------------------
 
 class Constant(Op): #pylint: disable=W0223
+    available_impls = ("python",)    
     def __init__(self, value):
         self.value = value
     def get_value(self):
         return self.value
 
 class ConstantTensor(Constant):
-    call_type = "inplace"
+    call_type = "byref"
     # XXX for some reason valret version gives rare segfaults
     def __init__(self, value):
         Constant.__init__(self, as_valid_array(value))
+        self._hash = None
     def get_expr(self, parent_exprs):
         return self._value_str()
     def __str__(self):
-        return "const{%s}"%self._value_str()
+        return "Const{%s}"%self._value_str()
     def _value_str(self):
         ndim = self.value.ndim
         return "%g"%self.value if ndim==0 else "%s%g...%s"%("["*ndim, self.value.flat[0], "]"*ndim)        
-    def get_py_impl(self):
-        def valret_func(reads):
-            return self.value
-        def inplace_func(reads, write):
-            if isinstance(write, tuple):
-                for (arrfrom,arrto) in utils.safezip(self.value,write):
-                    np.copyto(arrto, arrfrom)
-            else:
-                np.copyto(write,self.value)
-        return PyImpl(inplace_func=inplace_func)
+    def get_py_func(self, input_types):
+        def f(reads, write):
+            np.copyto(write, self.value)
+        return f
+    # def py_apply(reads, write)
+    # def valret_func(reads):
+    #     return self.value
+    # def inplace_func(reads, write):
+    #     if isinstance(write, tuple):
+    #         for (arrfrom,arrto) in utils.safezip(self.value,write):
+    #             np.copyto(arrto, arrfrom)
+    #     else:
+    #         np.copyto(write,self.value)
+    # return PyImpl(inplace_func=inplace_func)
     def pullback(self, _inps, _out, _gout):
         return []
     def shp_apply(self, _inputs):
         return [cgt.constant(x) for x in self.value.shape] 
-    def typ_apply(self, inputs):
-        assert len(inputs)==0
+    def typ_apply(self, input_types):
+        assert len(input_types)==0
         return _ndarray_type(self.value)
     def get_hash(self):
-        return str(id(self))
+        if self._hash is None: self._hash = cPickle.dumps(self.value, -1)
+        return self._hash
     def get_closure(self, _):
         assert isinstance(self.value, np.ndarray)
         shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
@@ -748,7 +807,7 @@ class ConstantTensor(Constant):
         ("data",ctypes.c_void_p,self.value.ctypes.data)]
     def get_c_impl(self, *args):
         code = None
-        if self.call_type == "valret": code = self._c_code_valret(*args)
+        if self.call_type == "byval": code = self._c_code_valret(*args)
         elif self.call_type == "inplace": code = self._c_code_inplace(*args)
         else: raise ValueError
         return CImpl(code=code)
@@ -756,37 +815,39 @@ class ConstantTensor(Constant):
         if isinstance(self.value, tuple):
             raise MethodNotDefined
         return r"""
-extern "C" void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
-    cgt_memcpy(cgtCPU, cgtCPU, write->data(), cldata->data, write->nbytes());
-}
-"""
+            CGT_EXPORT_C void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
+                cgt_memcpy(cgtCPU, cgtCPU, write->data(), cldata->data, write->nbytes());
+            }
+            """
     def _c_code_valret(self, inputs):
         return r"""
-extern "C" cgtArray* $function($closure* cldata, cgtArray** reads) {
-        auto out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
-            (cgtDtype)cldata->dtype, cgtCPU, (void*)cldata->data, false);
-        return out;
-}"""
+            CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
+                    auto out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
+                        (cgtDtype)cldata->dtype, cgtCPU, (void*)cldata->data, false);
+                    return out;
+            }"""
 
 
 class ConstantTuple(Constant):
-    call_type = "valret"
+    call_type = "byval"
     def __init__(self, value):
         Constant.__init__(value)
     def get_expr(self, parent_exprs):
         return str(self.value)
     def __str__(self):
-        return "const{%s}"%str(self.value)
-    def py_apply_valret(self, reads):
-        return self.value
+        return "Const{%s}"%str(self.value)
+    def get_py_func(self, input_types):
+        def f(_):
+            return self.value
+        return f
     def shp_apply(self, _inputs):
         return tuple(map(cgt.constant, x.shape) for x in self.value)
-        return cgt.shape(as_node(self.value))
-    def typ_apply(self, inputs):
-        assert len(inputs)==0
+    def typ_apply(self, input_types):
+        assert len(input_types)==0
         return _get_value_type(self.value)
     def get_hash(self):
-        return str(id(self))
+        if self._hash is None: self._hash = cPickle.dumps(self.value, -1)
+        return self._hash
 
 
 
@@ -798,34 +859,39 @@ class Fill(Op):
     """
     (value, shape...) -> array filled with `value`, with shape `shape`
     """
+    available_impls = ("python",)        
     def __init__(self, value):
         self.value = as_valid_array(value)
         assert self.value.ndim ==0
         assert self.value.dtype != "O"
         self.dtype = self.value.dtype
         assert self.value.ndim==0
+    def get_hash(self):
+        return cPickle.dumps(self.value,-1)+str(id(self)) 
+        # XXX seems to be a bug somewhere that causes ntm grad check to
+        # fail when this CSE happens. Probably is a deeper bug :(
     def get_diff(self, num_inputs):
         return [False]*num_inputs
     def __str__(self):
-        return "fill{%g}"%self.value
-    def get_py_impl(self):
+        return "Fill{%g}"%self.value
+    def get_py_func(self, input_types):
         def f(reads, write):
             write[...] = self.value
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         raise NonDifferentiable
     def shp_apply(self, inputs):
         return inputs
-    def typ_apply(self, inputs):
-        assert all(x.dtype == 'i8' for x in inputs)
-        return TensorType(self.dtype, len(inputs))
+    def typ_apply(self, input_types):
+        assert all(x.dtype == 'i8' for x in input_types)
+        return TensorType(self.dtype, len(input_types))
     def get_closure(self, inputs):
         typ = ctypes.c_long if self.value.dtype.kind=='i' else ctypes.c_double
         return [("value", typ, self.value.item())]
     def get_c_impl(self, inputs):
         outdtype = Dtype.canon(self.value.dtype)
         return CImpl(code=r"""
-extern "C" void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
     size_t s = write->size();
     %(cdtype)s value = cldata->value;
     for (int i=0; i < s; ++i) write->at<%(cdtype)s>(i) = value;
@@ -833,54 +899,56 @@ extern "C" void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
 def _is_int(node):
     return dtype_kind(node.dtype)=='i'
 
-def _list_is_valid_sli(inputs):
-    return len(inputs)==3 and all(x.ndim==0 and _is_int(x) for x in inputs)
+def _list_is_valid_sli(input_types):
+    return len(input_types)==3 and all(x.ndim==0 and dtype_kind(x.dtype)=='i' for x in input_types)
 
 class Arange(Op):
     """
     (start,stop,step) -> 1D array, just like numpy
     """
-    call_type='valret'
+    available_impls = ("python",)        
+    call_type="byval"
     def __init__(self, dtype='i8'):
         self.dtype = dtype
     def get_diff(self, num_inputs):
         return [False]*num_inputs
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f((start, stop, step)):
             return np.arange(start, stop, step, self.dtype)
-        return PyImpl(valret_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         raise NonDifferentiable
     def shp_apply(self, inputs):
         start,stop,step = inputs
         return [(stop - start)//step]
-    def typ_apply(self, inputs):
-        assert _list_is_valid_sli(inputs)
+    def typ_apply(self, input_types):
+        assert _list_is_valid_sli(input_types)
         return TensorType(self.dtype, 1)
 
 class ScalarRng(Op):
     """
     (shape...) -> array filled with iid random numbers, from either uniform or normal distribution
     """
+    available_impls = ("python",)        
     def __init__(self, kind):
         assert kind in ("uniform","gaussian")
         self.kind = kind
     def get_diff(self, num_inputs):
         return [False]*num_inputs
     def __str__(self):
-        return "rng{%s}"%self.kind
-    def get_py_impl(self):
+        return "Rng{%s}"%self.kind
+    def get_py_func(self, input_types):
         def f(reads, write):
             if self.kind == "uniform": write[...] = np.random.rand(*reads)
             elif self.kind == "gaussian": write[...] = np.random.randn(*reads)
             else: raise RuntimeError
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         raise NonDifferentiable
     def shp_apply(self, inputs):
         return inputs
-    def typ_apply(self, inputs):
-        return TensorType(cgt.floatX, len(inputs))
+    def typ_apply(self, input_types):
+        return TensorType(cgt.floatX, len(input_types))
 
 # Elementwise
 # ----------------------------------------------------------------
@@ -913,21 +981,21 @@ def _nu_divide(x, y, out=None):
 UnaryInfo = namedtuple("UnaryInfo", ("short","pyfunc","diff","typeinfo", "gradexpr", "cexpr"))
 
 UNARY_INFO = {
-    "abs" : UnaryInfo(   "abs", np.abs,  True,   's', lambda x, y, gy: gy*cgt.sign(x), "fabs(x)"),
-    "ceil" : UnaryInfo(  "ceil", np.ceil, False,  'i',  lambda x, y, gy: _no_grad(), "ceil(x)"),
-    "cos" : UnaryInfo(   "cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*cgt.sin(x), "cos(x)"),
-    "exp" : UnaryInfo(   "exp", np.exp,  True,   'f',   lambda x, y, gy: gy*cgt.exp(x), "exp(x)"),
-    "iceil" : UnaryInfo( "iceil", _nu_iceil, False, 'i',   lambda x, y, gy: _no_grad(), "(int)ceil(x)"),
-    "ifloor" : UnaryInfo( "ifloor", _nu_ifloor, False, 'i',   lambda x, y, gy: _no_grad(), "(int)floor(x)"),
-    "log" : UnaryInfo(   "log", np.log,  True,   'f', lambda x, y, gy: gy/x, "log(x)"),
-    "neg" : UnaryInfo(   "negative", np.negative, True, 's', lambda x, y, gy: -gy, "(-x)"),
-    "sign" : UnaryInfo(   "sign", np.sign, False,   's',  lambda x, y, gy: _no_grad(), "2*(x>0)-1"),
-    "sin" : UnaryInfo(    "sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cgt.cos(x), "sin(x)"),
-    "square" : UnaryInfo( "square", np.square, True, 's',  lambda x, y, gy: 2.0*gy*x, "x*x"),
-    "sqrt" : UnaryInfo( "sqrt", np.sqrt, True, 'f', lambda x, y, gy: gy/(2.0*y), "sqrt(x)"),
-    "tanh" : UnaryInfo(   "tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-cgt.square(y)), "tanh(x)"),
-    "sigmoid" : UnaryInfo( "sigmoid", _nu_sigmoid, True, 'f', lambda x, y, gy: gy*y*(1-y), "1.0/(1.0+exp(-x))"),
-    "conj" : UnaryInfo( "conj", np.conj, True, 'c', lambda x, y, gy: cgt.conj(gy), "conj(x)")
+    "abs" : UnaryInfo(   "Abs", np.abs,  True,   's', lambda x, y, gy: gy*cgt.sign(x), "fabs(x)"),
+    "ceil" : UnaryInfo(  "Ceil", np.ceil, False,  'i',  lambda x, y, gy: _no_grad(), "ceil(x)"),
+    "cos" : UnaryInfo(   "Cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*cgt.sin(x), "cos(x)"),
+    "exp" : UnaryInfo(   "Exp", np.exp,  True,   'f',   lambda x, y, gy: gy*cgt.exp(x), "exp(x)"),
+    "iceil" : UnaryInfo( "Iceil", _nu_iceil, False, 'i',   lambda x, y, gy: _no_grad(), "(int)ceil(x)"),
+    "ifloor" : UnaryInfo( "Ifloor", _nu_ifloor, False, 'i',   lambda x, y, gy: _no_grad(), "(int)floor(x)"),
+    "log" : UnaryInfo(   "Log", np.log,  True,   'f', lambda x, y, gy: gy/x, "log(x)"),
+    "neg" : UnaryInfo(   "Negative", np.negative, True, 's', lambda x, y, gy: -gy, "(-x)"),
+    "sign" : UnaryInfo(   "Sign", np.sign, False,   's',  lambda x, y, gy: _no_grad(), "2*(x>0)-1"),
+    "sin" : UnaryInfo(    "Sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cgt.cos(x), "sin(x)"),
+    "square" : UnaryInfo( "Square", np.square, True, 's',  lambda x, y, gy: 2.0*gy*x, "x*x"),
+    "sqrt" : UnaryInfo( "Sqrt", np.sqrt, True, 'f', lambda x, y, gy: gy/(2.0*y), "sqrt(x)"),
+    "tanh" : UnaryInfo(   "Tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-cgt.square(y)), "tanh(x)"),
+    "sigmoid" : UnaryInfo( "Sigmoid", _nu_sigmoid, True, 'f', lambda x, y, gy: gy*y*(1-y), "1.0/(1.0+exp(-x))"),
+    "conj" : UnaryInfo( "Conj", np.conj, True, 'c', lambda x, y, gy: cgt.conj(gy), "conj(x)")
 }
 
 BinaryInfo = namedtuple("BinaryInfo", ("short","pyfunc","commutes","diff","typeinfo","gradexpr", "cexpr"))
@@ -935,17 +1003,17 @@ BinaryInfo = namedtuple("BinaryInfo", ("short","pyfunc","commutes","diff","typei
 
 BINARY_INFO = {
     #infix             short      pyfunc    commutes     diff        typeinfo
-    "*"   : BinaryInfo("multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
-    "+"   : BinaryInfo("add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
-    "-"   : BinaryInfo("subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
-    "/"   : BinaryInfo("divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(x+0.0)/y"),
-    "<"   : BinaryInfo("less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
-    ">"   : BinaryInfo("greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
-    "<="   : BinaryInfo("less_equal",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
-    ">="   : BinaryInfo("greater_equal",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
-    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), # XXX only when x > 0
-    "=="  : BinaryInfo("equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
-    "!="  : BinaryInfo("not_equal", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
+    "*"   : BinaryInfo("Multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
+    "+"   : BinaryInfo("Add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
+    "-"   : BinaryInfo("Subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
+    "/"   : BinaryInfo("Divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(x+0.0)/y"),
+    "<"   : BinaryInfo("Less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
+    ">"   : BinaryInfo("Greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
+    "<="   : BinaryInfo("LessEqual",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
+    ">="   : BinaryInfo("GreaterEqual",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
+    "**"   : BinaryInfo("Power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), 
+    "=="  : BinaryInfo("Equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
+    "!="  : BinaryInfo("NotEqual", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
 }
 
 
@@ -958,29 +1026,25 @@ class ElwiseUnary(Op):
     """
     Elementwise unary operation
     """
-
+    available_impls = ("python","native_cpu","native_gpu")    
     def __init__(self, opname, info=None):
         self.opname = opname
         self.info = UNARY_INFO[opname] if info is None else info
     def get_diff(self, _):
         return [self.info.diff]
     def __str__(self):
-        return self.opname
+        return self.info.short
     def get_hash(self):
         return utils.hash_seq1(self.opname)
-    def get_py_impl(self):
-        def f(reads, write):
-            self.info.pyfunc(reads[0], out=write)
-        return PyImpl(inplace_func=f)
     def get_replacement(self, _newparents, _analysis):
         return None
     def pullback(self, (x,), y, gy): #pylint: disable=W0613
         return [self.info.gradexpr(x, y, gy)]
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
-    def typ_apply(self, inputs):
+    def typ_apply(self, input_types):
         typeinfo = self.info.typeinfo
-        intype = inputs[0].dtype
+        intype = input_types[0].dtype
         if typeinfo == 's':
             out_type = intype
         elif typeinfo == 'i':
@@ -992,47 +1056,48 @@ class ElwiseUnary(Op):
         else:
             assert typeinfo in (cgt.floatX, cgt.complexX, 'i1','i2','i4','i8')
             out_type = typeinfo
-        return TensorType(out_type, inputs[0].ndim)
-    def get_c_impl(self, inputs):
+        return TensorType(out_type, input_types[0].ndim)
+    def get_py_func(self,_):
+        def f(reads, write):
+            self.info.pyfunc(reads[0], out=write)
+        return f
+    def get_native_compile_info(self, input_types, devtype):
         info = self.info
-        out_dtype = self.typ_apply(inputs).dtype
-        code = r"""
-static inline %(cdtype1)s scalar_$function(%(cdtype0)s x) {return %(cexpr)s;}
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray* read = reads[0];
-    int s = read->size();
-    %(cdtype0)s* readdata = (%(cdtype0)s*)read->data();
-    %(cdtype1)s* writedata = (%(cdtype1)s*)write->data();
-    for (int i=0; i < s; ++i) {
-        writedata[i] = scalar_$function(readdata[i]);
-    }
-}
-"""%dict(cdtype0=np2c[inputs[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
-        return CImpl(code, includes=["math.h"], link_flags="-lm")
-    def cuda_code(self, inputs):
-        raise RuntimeError # move this to get_cuda_impl
-        info = self.info
-        npdtype = inputs[0].dtype
-        return """
-__forceinline__ __device__ %(cdtype)s $function(%(cdtype)s x) {return %(cexpr)s;}        
-__global__ void ${function}_kernel(const size_t n, const %(cdtype)s* in, %(cdtype)s* out) {
-  CUDA_KERNEL_LOOP(i, n) {
-    out[i] = $function(in[i]);
-  }
-}
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray* read = reads[0];
-    size_t n = read->size();
-    int num_blocks, num_threads;
-    cgt_get_bt(n, &num_blocks, &num_threads);
-    ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype)s*)read->data(), (%(cdtype)s*)write->data());
-}
-"""%dict(cdtype=np2c[npdtype],cexpr=info.cexpr)
-    def cuda_includes(self):
-        raise RuntimeError # move this to get_cuda_impl
-        return ["cgt_cuda.h","cgt_common.h"]
+        out_dtype = self.typ_apply(input_types).dtype
+        if devtype == "cpu":
+            code = r"""
+                static inline %(cdtype1)s scalar_$function(%(cdtype0)s x) {return %(cexpr)s;}
+                CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                    cgtArray* read = reads[0];
+                    int s = read->size();
+                    %(cdtype0)s* readdata = (%(cdtype0)s*)read->data();
+                    %(cdtype1)s* writedata = (%(cdtype1)s*)write->data();
+                    for (int i=0; i < s; ++i) {
+                        writedata[i] = scalar_$function(readdata[i]);
+                    }
+                }"""%dict(cdtype0=np2c[input_types[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
+            return NativeCompileInfo(self, 1, "c++", code, includes=["math.h"], link_flags="-lm")
+        elif devtype == "gpu":
+            code = """
+                __forceinline__ __device__ %(cdtype1)s $function(%(cdtype0)s x) {return %(cexpr)s;}        
+                __global__ void ${function}_kernel(const size_t n, const %(cdtype0)s* in, %(cdtype1)s* out) {
+                  CUDA_KERNEL_LOOP(i, n) {
+                    out[i] = $function(in[i]);
+                  }
+                }
+                CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                    cgtArray* read = reads[0];
+                    size_t n = read->size();
+                    int num_blocks, num_threads;
+                    cgt_get_bt(n, &num_blocks, &num_threads);
+                    ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)read->data(), (%(cdtype1)s*)write->data());
+                }"""%dict(cdtype0=np2c[input_types[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
+            return NativeCompileInfo(self, 1, "cuda", code, includes=["math.h"], link_flags="-lm",gpu_deref_mask=(True,))
+        else:
+            raise Unreachable
 
 class ElwiseBinary(Op):
+    available_impls = ("python",)        
     # +, -, *, /, <, ^, //
     def __init__(self, opname, scalar_mask, info=None):
         assert opname in BINARY_INFO        
@@ -1080,7 +1145,7 @@ class ElwiseBinary(Op):
             if r in node2sv and node2sv[r] == 0: out = l
 
         if out is not None:
-            outtyp = self.typ_apply(parents)
+            outtyp = self.typ_apply([p.typ for p in parents])
             out = cgt.cast(out, outtyp.dtype)
             if out.ndim==0 and outtyp.ndim>0:
                 ind4shape = 1 if self.scalar_mask[0] else 0
@@ -1095,76 +1160,68 @@ class ElwiseBinary(Op):
     def shp_apply(self, inputs):
         ind4shape = 1 if self.scalar_mask[0] else 0
         return cgt.shape(inputs[ind4shape])
-    def typ_apply(self, inputs):
-        assert ((inputs[0].ndim==0) == self.scalar_mask[0]) and ((inputs[1].ndim==0) == self.scalar_mask[1])
+    def typ_apply(self, input_types):
+        assert ((input_types[0].ndim==0) == self.scalar_mask[0]) and ((input_types[1].ndim==0) == self.scalar_mask[1])
         if self.scalar_mask==(False,False):
-            assert inputs[0].ndim == inputs[1].ndim
-            assertequaln(cgt.shape(inputs[0]),cgt.shape(inputs[1]),"shape mismatch at elementwise binary operation")
+            assert input_types[0].ndim == input_types[1].ndim
+            # assertequaln(cgt.shape(input_types[0]),cgt.shape(input_types[1]),"shape mismatch at elementwise binary operation")
         typeinfo = BINARY_INFO[self.opname].typeinfo
         if typeinfo == 'p':
-            out_dtype = _promote(inputs[0].dtype, inputs[1].dtype)
+            out_dtype = _promote(input_types[0].dtype, input_types[1].dtype)
         elif typeinfo == 'f':
             out_dtype = cgt.floatX
         else:
             out_dtype = typeinfo
         ind4shape = 1 if self.scalar_mask[0] else 0
-        return TensorType(out_dtype, inputs[ind4shape].ndim)
-    def get_py_impl(self):
+        return TensorType(out_dtype, input_types[ind4shape].ndim)
+    def get_py_func(self, input_types):
         def f(reads, write):
             x,y = reads
             if self.scalar_mask==(False,False):
                 if x.shape != y.shape:
                     raise RuntimeError("mismatched shapes %s %s. Note that implicit broadcasting isn't allowed. Use the broadcast(...) function"%(x.shape, y.shape))
             self.info.pyfunc(x,y, out=write)
-        return PyImpl(inplace_func=f)
-    def get_c_impl(self, inputs):
-        typ2 = self.typ_apply(inputs)
-        npdtype0 = inputs[0].dtype
-        npdtype1 = inputs[1].dtype
+        return f
+    def get_native_compile_info(self, input_types, devtype):
+        typ2 = self.typ_apply(input_types)
+        npdtype0 = input_types[0].dtype
+        npdtype1 = input_types[1].dtype
         npdtype2 = typ2.dtype
         ind4shape = 1 if self.scalar_mask[0] else 0
         index0 = "0" if self.scalar_mask[0] else "i"
         index1 = "0" if self.scalar_mask[1] else "i"
-        code = r"""
-static inline %(cdtype2)s scalar_$function(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    int s = reads[%(ind4shape)s]->size();
-    %(cdtype0)s* in0 = (%(cdtype0)s*)reads[0]->data();
-    %(cdtype1)s* in1 = (%(cdtype1)s*)reads[1]->data();
-    %(cdtype2)s* out = (%(cdtype2)s*)write->data();
-    cgt_check(write->size() == s, "Shape error in elementwise binary operation. You might be missing a call to cgt.broadcast(...)");
-    for (int i=0; i < s; ++i) {
-        out[i] = scalar_$function(in0[%(index0)s], in1[%(index1)s]);
-    }
-}
-"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
-    cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape) 
-        return CImpl(code=code, includes=["cgt_common.h", "math.h"])
+        if devtype == "cpu":
+            code = r"""
+                static inline %(cdtype2)s scalar_$function(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
+                CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                    int s = reads[%(ind4shape)s]->size();
+                    %(cdtype0)s* in0 = (%(cdtype0)s*)reads[0]->data();
+                    %(cdtype1)s* in1 = (%(cdtype1)s*)reads[1]->data();
+                    %(cdtype2)s* out = (%(cdtype2)s*)write->data();
+                    cgt_check(write->size() == s, "Shape error in elementwise binary operation. You might be missing a call to cgt.broadcast(...)");
+                    for (int i=0; i < s; ++i) {
+                        out[i] = scalar_$function(in0[%(index0)s], in1[%(index1)s]);
+                    }
+                }"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
+                cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape) 
+            return NativeCompileInfo(self, 2, "c++", code, includes=["math.h"])
 
-    def get_cuda_impl(self, inputs):
-        typ2 = self.typ_apply(inputs)
-        npdtype0 = inputs[0].dtype
-        npdtype1 = inputs[1].dtype
-        npdtype2 = typ2.dtype
-        ind4shape = 1 if self.scalar_mask[0] else 0
-        index0 = "0" if self.scalar_mask[0] else "i"
-        index1 = "0" if self.scalar_mask[1] else "i"
-        code = """
-__forceinline__ __device__ %(cdtype2)s $function(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
-__global__ void ${function}_kernel(const size_t n, const %(cdtype0)s* x, const %(cdtype1)s* y, %(cdtype2)s* z) {
-  CUDA_KERNEL_LOOP(i, n) {
-    z[i] = $function(x[%(index0)s], y[%(index1)s]);
-  }
-}
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    size_t n = reads[%(ind4shape)s]->size();
-    int num_blocks,num_threads;
-    cgt_get_bt(n, &num_blocks, &num_threads);
-    ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
-}
-"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
-    cexpr=self.info.cexpr,index0=index0,index1=index1,ind4shape=ind4shape) 
-        return CUDAImpl(code)
+        elif devtype == "gpu":
+            code = """
+                __forceinline__ __device__ %(cdtype2)s $function(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
+                __global__ void ${function}_kernel(const size_t n, const %(cdtype0)s* x, const %(cdtype1)s* y, %(cdtype2)s* z) {
+                  CUDA_KERNEL_LOOP(i, n) {
+                    z[i] = $function(x[%(index0)s], y[%(index1)s]);
+                  }
+                }
+                CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                    size_t n = reads[%(ind4shape)s]->size();
+                    int num_blocks,num_threads;
+                    cgt_get_bt(n, &num_blocks, &num_threads);
+                    ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
+                }"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
+            cexpr=self.info.cexpr,index0=index0,index1=index1,ind4shape=ind4shape) 
+            return NativeCompileInfo(self, 2, "cuda", code, includes=["math.h"], gpu_deref_mask=(True,True))
 
 def elwise_binary(opname, x, y):
     (x, y) = map(as_node, (x, y))
@@ -1181,22 +1238,23 @@ class Size(Op):
     """
     Return an element of the shape of a tensor
     """
-    call_type = "valret"
+    call_type = "byval"
+    available_impls = ("python",)        
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
         return [False]
     def __str__(self):
-        return "size{%i}"%self.axis
-    def get_py_impl(self):
+        return "Size{%i}"%self.axis
+    def get_py_func(self, input_types):
         def f(reads):
             return np.array(reads[0].shape[self.axis])
-        return PyImpl(valret_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         raise NonDifferentiable
     def shp_apply(self, _inputs):
         return []
-    def typ_apply(self, _inputs):
+    def typ_apply(self, _):
         return TensorType('i8',0)
     def get_replacement(self, inputs, _analysis):
         x = inputs[0]
@@ -1208,7 +1266,7 @@ class Size(Op):
         return [("ax",ctypes.c_int,self.axis)]
     def get_c_impl(self, _):
         code = r"""
-extern "C" cgtArray* $function(void* cl0, cgtArray** reads) {
+CGT_EXPORT_C cgtArray* $function(void* cl0, cgtArray** reads) {
 $closure* cl = ($closure*)cl0;
     cgtArray* in = reads[0];
     cgtArray* out = new cgtArray(0, NULL, cgt_i8, cgtCPU);
@@ -1218,24 +1276,27 @@ $closure* cl = ($closure*)cl0;
         return CImpl(code)
 
 class Reshape(Op):
-    call_type = "valret"
+    available_impls = ("python",)        
+    call_type = "byval"
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads):
-            return reads[0].reshape(reads[1:])
-        return PyImpl(valret_func=f)
+            out = reads[0].reshape(reads[1:])
+            if not out.flags.c_contiguous: out = out.copy()
+            return out
+        return f
     def pullback(self, inputs, _out, gout):
         return [cgt.reshape(gout, cgt.shape(inputs[0]))] + [None]*(len(inputs)-1)
     def shp_apply(self, inputs):
         return inputs[1:]
-    def typ_apply(self, inputs):
-        return TensorType(inputs[0].dtype, len(inputs)-1)
+    def typ_apply(self, input_types):
+        return TensorType(input_types[0].dtype, len(input_types)-1)
     def get_closure(self, parents):
         return [("ndim", ctypes.c_int,len(parents)-1)]
     def get_c_impl(self, _):
         code = r"""
-extern "C" cgtArray* $function($closure* cldata, cgtArray** reads) {
+CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
     cgtArray* in = reads[0];
     size_t* newshape = new size_t[cldata->ndim];
     for (int i=0; i < cldata->ndim; ++i) newshape[i] = static_cast<size_t*>(reads[i+1]->data())[0];
@@ -1246,14 +1307,15 @@ extern "C" cgtArray* $function($closure* cldata, cgtArray** reads) {
         return CImpl(code)
 
 class Concatenate(Op):
-    call_type = "valret"
+    available_impls = ("python",)        
+    call_type = "byval"
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, num_inputs):
         return [True]*num_inputs
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads): return np.concatenate(reads,axis=self.axis)
-        return PyImpl(valret_func=f)
+        return f
     def pullback(self, inputs, _output, gout):
         start = 0
         out = []
@@ -1266,10 +1328,11 @@ class Concatenate(Op):
         out = cgt.shape(inputs[0])
         out[self.axis] = cgt.add_multi([cgt.size(x,self.axis) for x in inputs])
         return out
-    def typ_apply(self, inputs):
-        return TensorType(_promote_multi([x.dtype for x in inputs]), inputs[0].ndim)
+    def typ_apply(self, input_types):
+        return TensorType(_promote_multi([x.dtype for x in input_types]), input_types[0].ndim)
 
 class Stack(Op):
+    available_impls = ("python",)        
     def get_diff(self, num_inputs):
         return [True for _ in xrange(num_inputs)]
     def get_numeric_py(self):
@@ -1281,16 +1344,17 @@ class Stack(Op):
         return [goutput[i] for i in xrange(len(inputs))]
     def shp_apply(self, inputs):
         return [cgt.constant(len(inputs))] + cgt.shape(inputs[0])
-    def typ_apply(self, inputs):
-        assert utils.allsame([x.get_type() for x in inputs])
-        return TensorType(inputs[0].dtype, inputs[0].ndim+1)
+    def typ_apply(self, input_types):
+        assert utils.allsame([x.typ for x in inputs])
+        return TensorType(input_types[0].dtype, input_types[0].ndim+1)
 
 class Repeat(Op):
+    available_impls = ("python",)        
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, num_inputs):
         return [True] + [False for _ in xrange(num_inputs-1)]
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             arr = reads[0]
             numreps = reads[1:]
@@ -1299,7 +1363,7 @@ class Repeat(Op):
             for (ax,numrep) in utils.safezip(self.axes, numreps):
                 arr = np.repeat(arr, numrep, ax)
             np.copyto(write, arr)
-        return PyImpl(inplace_func=f)
+        return f
     def get_c_impl(self, inputs):
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
@@ -1307,7 +1371,7 @@ class Repeat(Op):
         outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
         inidxexpr = ",".join(["0" if ax in self.axes else "i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
         code = r"""
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read=reads[0];
     %(openloops)s
         write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
@@ -1328,26 +1392,29 @@ extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         for (ax,rep) in utils.safezip(self.axes, inputs[1:]):
             out[ax] = rep
         return out
-    def typ_apply(self, inputs):
-        assert all(x.dtype == "i8" for x in inputs[1:])
-        return inputs[0].get_type()
+    def typ_apply(self, input_types):
+        assert all(x.dtype == "i8" for x in input_types[1:])
+        return input_types[0]
 
 class Transpose(Op):
+    available_impls = ("python",)        
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, _):
         return [True]
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             np.copyto(write, reads[0].transpose(self.axes))
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         return [cgt.transpose(goutput, utils.invert_perm(self.axes))]
     def shp_apply(self, inputs):
         inshape = cgt.shape(inputs[0])
         return [inshape[ax] for ax in self.axes]
-    def typ_apply(self, inputs):
-        return inputs[0].get_type()
+    def typ_apply(self, input_types):
+        return input_types[0]
+    def __str__(self):
+        return "Transpose{%s}"%",".join(map(str, self.axes))
     def get_c_impl(self, inputs):
         x = inputs[0]
         d = {}
@@ -1357,7 +1424,7 @@ class Transpose(Op):
         d["inidxexpr"] = ",".join(["i"+str(i) for i in utils.invert_perm(self.axes)])
         d["cdtype"] = np2c[x.dtype]
         code = r"""
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read = reads[0];
     %(cdtype)s* indata = (%(cdtype)s*)read->data(), *outdata = (%(cdtype)s*)write->data();
     %(openloops)s
@@ -1366,35 +1433,39 @@ extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
 }"""%d
         return CImpl(code)
 
-class TransportToOutputDevice(Op):
-    def typ_apply(self, inputs):
-        return inputs[0].get_type()
+class Transport(Op):
+    def __init__(self, dev):
+        self.dev = dev
+    available_impls = ("native_cpu","native_gpu")
+    def typ_apply(self, input_types):
+        return input_types[0]
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
-    def get_c_impl(self, _inputs):
+    def get_native_compile_info(self, _inputs, _devtype):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
-        code = """
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+        code = r"""
+CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgt_assert(write->devtype() != reads[0]->devtype());
     cgt_assert(write->data() != reads[0]->data());
     cgt_memcpy(write->devtype(), reads[0]->devtype(), write->data(), reads[0]->data(), reads[0]->nbytes());
 }
 """
-        return CImpl(code)
+        return NativeCompileInfo(self, 1, "c++", code)
 
 # TODO save computation by removing negative freq components
 class RFFT(Op):
+    available_impls = ("python",)        
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             x = reads[0]
             shp = map(int,reads[1:])
             np.copyto(write, np.fft.fftn(x,shp,self.axes))
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, _outputs, goutput):
         return cgt.real(Result(RFFT(self.axes),[goutput]+inputs[1:]))
     def shp_apply(self, inputs):
@@ -1402,23 +1473,25 @@ class RFFT(Op):
         for (ax,sz) in utils.safezip(self.axes, inputs[1:]):
             out[ax]=sz
         return out
-    def typ_apply(self, inputs):
-        assert inputs[0].dtype==cgt.floatX
-        return TensorType(cgt.complexX,inputs[0].ndim)
+    def typ_apply(self, input_types):
+        x = input_types[0]
+        assert x.dtype==cgt.floatX
+        return TensorType(cgt.complexX,x.ndim)
 
 class IRFFT(Op):
+    available_impls = ("python",)        
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, _):
         return [True]
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             x = reads[0]
             shp = map(int,reads[1:])
             slis = [slice(0,None) for _ in xrange(x.ndim)]
             for (ax,s) in zip(self.axes,shp): slis[ax] = slice(0, s)
             np.copyto(write, np.real(np.fft.ifftn(x,axes=self.axes)[slis]))
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, _outputs, goutput):
         return Result(IRFFT(self.axes),[goutput]) # XXX is this right?
     def shp_apply(self, inputs):
@@ -1430,24 +1503,25 @@ class IRFFT(Op):
 # ----------------------------------------------------------------
 
 class Sum(Op):
+    available_impls = ("python",)
     def __init__(self, axes):
         self.axes = tuple(axes)
     def get_diff(self, _):
         return [True]
     def __str__(self):
-        return "sum{%s}"%(",".join(map(str,self.axes)))
-    def get_py_impl(self):
+        return "Sum{%s}"%(",".join(map(str,self.axes)))
+    def get_py_func(self, input_types):
         def f(reads, write):
             reads[0].sum(axis = self.axes or None, out=write, keepdims=True)
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         return [Result(Repeat(self.axes), [goutput] + [cgt.size(inputs[0],ax) for ax in self.axes])]
     def shp_apply(self, inputs):
         x = inputs[0]
         s = cgt.shape(x)
         return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
-    def typ_apply(self, inputs):
-        return inputs[0].get_type()
+    def typ_apply(self, input_types):
+        return input_types[0]
     def get_c_impl(self, inputs):
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
@@ -1457,7 +1531,7 @@ class Sum(Op):
         outidxexpr = " + ".join(["i%(ax)s * write->stride(%(ax)s)"%dict(ax=ax) for ax in outdims])\
             if len(outdims)>0 else "0"
         code = r"""
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *read=reads[0];
     memset(write->data(), 0, write->nbytes());
     %(openloops)s
@@ -1469,16 +1543,17 @@ extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         return CImpl(code, includes=["string.h"])
 
 class Max(Op):
+    available_impls = ("python",)    
     def __init__(self, axes):
         self.axes = tuple(axes)
     def get_diff(self, _):
         return [True]
     def __str__(self):
-        return "max{%s}"%(",".join(map(str,self.axes)))
-    def get_py_impl(self):
+        return "Max{%s}"%(",".join(map(str,self.axes)))
+    def get_py_func(self, input_types):
         def f(reads, write):
             reads[0].max(axis=self.axes or None,keepdims=True, out=write)
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         x = inputs[0]
         inputpat = "x"*x.ndim
@@ -1490,20 +1565,21 @@ class Max(Op):
         x = inputs[0]
         s = cgt.shape(x)
         return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
-    def typ_apply(self, inputs):
-        return inputs[0].get_type()
+    def typ_apply(self, input_types):
+        return input_types[0]
 
 class Argmax(Op):
+    available_impls = ("python",)    
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
         return [False]
     def __str__(self):
-        return "argmax{%s}"%self.axis
-    def get_py_impl(self):
+        return "Argmax{%s}"%self.axis
+    def get_py_func(self, input_types):
         def f(reads, write):
             write.flat[:] = reads[0].argmax(axis=self.axis)
-        return PyImpl(inplace_func=f)
+        return f
     def shp_apply(self, inputs):
         x = inputs[0]
         s = cgt.shape(x)
@@ -1511,7 +1587,6 @@ class Argmax(Op):
     def typ_apply(self, inputs):
         return TensorType('i8', inputs[0].ndim)
 
-# TODO consider reducing code duplication for e.g. shp_apply
 
 # Casting / data movement
 # ----------------------------------------------------------------
@@ -1523,20 +1598,20 @@ class Argmax(Op):
 # ----------------------------------------------------------------
 
 class GetSli(Op):
-    call_type = "inplace"
+    available_impls = ("python",)
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
         return [True,False,False,False]
-    def get_py_impl(self):
-        def f(reads):
+    def get_py_func(self, input_types):
+        def f(reads, write):
             x,start,stop,step=reads
             slices = [slice(None,None,None) for _ in xrange(x.ndim)]
             slices[self.axis] = slice(start,stop,step)
             if step < 0:
                 raise NotImplementedError
-            return x[slices]
-        return PyImpl(valret_func=f)
+            write[:] = x[slices]
+        return f
     def pullback(self, inputs, output, goutput):
         ginput = cgt.zeros_like(inputs[0])
         return [Result(IncSli(self.axis), [ginput] + inputs[1:] + [goutput])] + [None]*3
@@ -1546,9 +1621,9 @@ class GetSli(Op):
         newshape = copy.copy(s)
         newshape[self.axis] = cgt.ceil_divide(stop - start, step)
         return newshape
-    def typ_apply(self, inputs):
-        assert inputs[1].dtype == inputs[2].dtype == inputs[3].dtype == 'i8'
-        return inputs[0].get_type()
+    def typ_apply(self, input_types):
+        assert input_types[1].dtype == input_types[2].dtype == input_types[3].dtype == 'i8'
+        return input_types[0]
     def get_c_impl(self, inputs):
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
@@ -1558,7 +1633,7 @@ class GetSli(Op):
         inidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
 
         code = r"""
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0];
     size_t start = reads[1]->at<size_t>(0);
     size_t step = reads[3]->at<size_t>(0);
@@ -1571,18 +1646,19 @@ extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         return CImpl(code)
 
 class IncSli(Op):
+    available_impls = ("python",)
     writes_to_input = 0
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
         return [True,False,True,True]
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             x, start, stop, step, y=reads
             slices = [slice(None,None,None) for _ in xrange(x.ndim)]
             slices[self.axis] = slice(start,stop,step)
             write[slices] += y # XXX check that it's incremental
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         _x, start, stop, step, _y = inputs
         gx = goutput
@@ -1590,8 +1666,8 @@ class IncSli(Op):
         return [gx, None, None, None, gy]
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
-    def typ_apply(self, inputs):
-        return inputs[0].get_type()
+    def typ_apply(self, input_types):
+        return input_types[0]
     def get_c_impl(self, inputs):
         x = inputs[0]
         openloops = " ".join(
@@ -1602,7 +1678,7 @@ class IncSli(Op):
         incidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
 
         code = r"""
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0], *inc = reads[4], *out=write;
     long start = reads[1]->at<size_t>(0);
     long step = reads[3]->at<size_t>(0);
@@ -1617,12 +1693,13 @@ extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         return CImpl(code)
 
 class GetFlatIndices(Op):
+    available_impls = ("python",)        
     def get_diff(self, _):
         return [True,False]
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             np.copyto(write, reads[0].flat[reads[1]])
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         x,inds = inputs
         ginput = cgt.zeros_like(x)
@@ -1633,40 +1710,40 @@ class GetFlatIndices(Op):
         assert inputs[1].ndim == 1 and dtype_kind(inputs[1].dtype) == 'i'
         return TensorType(inputs[0].dtype,1)
 
-
 class IncFlatIndices(Op):
+    available_impls = ("python",)        
     writes_to_input = 0
     def get_diff(self, _):
         return [True,False,True]
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             x,inds,y = reads
             write.flat[inds] += y # XXX
-        return PyImpl(inplace_func=f)
+        return f
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
-    def typ_apply(self, inputs):
-        return inputs[0].get_type()
-
+    def typ_apply(self, input_types):
+        return input_types[0]
 
 class Flip(Op):
+    available_impls = ("python",)        
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, _):
         return [True]
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             x = reads[0]
             slices = [slice(0,None,None) for _ in xrange(x.ndim)]
             for ax in self.axes: slices[ax] = slice(None,None,-1)
             np.copyto(write, x[slices])
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
         return [cgt.flip(goutput, self.axes)]
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
-    def typ_apply(self, inputs):
-        return inputs[0].typ
+    def typ_apply(self, input_types):
+        return input_types[0]
     def get_c_impl(self, inputs):
         x = inputs[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
@@ -1674,7 +1751,7 @@ class Flip(Op):
         inidxexpr =  ",".join(["i%i"%ax for ax in xrange(x.ndim)])
         outidxexpr =  ",".join([("shape[%(ax)s] - 1 - i%(ax)s" if ax in self.axes else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
         code = r"""
-extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgtArray *in=reads[0], *out=write;
     cgt_assert(in->size() == out->size());
     const size_t* shape = in->shape();
@@ -1693,14 +1770,15 @@ extern "C" void $function(void* cldata, cgtArray** reads, cgtArray* write) {
 
 
 class Mul21(Op):
+    available_impls = ("python",)        
     def __init__(self, tA):
         self.tA = tA
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             x,y = reads
             if self.tA: x = x.T
             x.dot(y, out=write)
-        return PyImpl(inplace_func=f)
+        return f
     def get_replacement(self, inputs, analysis):
         if inputs[1] in analysis["node2sv"]:
             return cgt.sum(inputs[0],0 if self.tA else 1) * analysis["node2sv"][inputs[1]]
@@ -1710,8 +1788,8 @@ class Mul21(Op):
         assertequal1(cgt.size(inputs[0],0 if self.tA else 1),cgt.size(inputs[1],0),
             "shape mismatch at matrix-vector multiplication")
         return [cgt.size(inputs[0], 1 if self.tA else 0)]
-    def typ_apply(self, inputs):
-        return TensorType(inputs[0].dtype, 1)
+    def typ_apply(self, input_types):
+        return TensorType(input_types[0].dtype, 1)
     def get_closure(self, inputs):
         return [("tA",ctypes.c_bool, self.tA)]
     # gemv docs: https://software.intel.com/en-us/node/520750
@@ -1722,7 +1800,7 @@ class Mul21(Op):
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         code = r"""
-extern "C" void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
+CGT_EXPORT_C void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
     cgtArray *A=Ax[0], *x=Ax[1];
     int lda = A->shape()[1];
     int M = A->shape()[0];
@@ -1738,26 +1816,59 @@ extern "C" void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
 class Mul22(Op):
+    available_impls = ("python",)        
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             x,y = reads
             if self.tA: x = x.T
             if self.tB: y = y.T
             x.dot(y, out=write)
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
-        return [Result(Mul22(False, not self.tB), [goutput, inputs[1]]),
-                Result(Mul22(not self.tA, False), [inputs[0], goutput])]
+        """
+        mul(F,F) Aij Bjk -> Cik
+        g[0]: GAij = mul(F,T) GCik Bjk
+        g[1]: GBjk = mul(T,F) Aij GCik 
+
+        mul(F,T) Aij Bkj -> Cik
+        g[0]: GAij = mul(F,F) GCik Bkj
+        g[1]: GBkj = mul(T,F) GCik Aij
+
+        mul(T,F) Aji Bjk -> Cik
+        g[0]: GAji = mul(F,T) Bjk GCik
+        g[1]: GBjk = mul(F,F) Aji GCik 
+
+        mul(T,T) Aji Bkj -> Cik
+        g[0]: GAji = mul(T,T) Bkj GCik
+        g[1]: GBkj = mul(T,T) GCik Aji
+
+        """
+        A,B = inputs
+        GC = goutput
+        if (self.tA, self.tB) == (False,False):
+            return [Result(Mul22(False,True), [GC, B]),
+                    Result(Mul22(True,False), [A, GC])]
+        elif (self.tA, self.tB) == (False,True):
+            return [Result(Mul22(False,False), [GC, B]),
+                    Result(Mul22(True,False), [GC, A])]
+        elif (self.tA, self.tB) == (True,False):
+            return [Result(Mul22(False,True), [B, GC]),
+                    Result(Mul22(False,False), [A, GC])]
+        elif (self.tA, self.tB) == (True,True):
+            return [Result(Mul22(True,True), [B, GC]),
+                    Result(Mul22(True,True), [GC, A])]
+
     def shp_apply(self, inputs):
         return [cgt.size(inputs[0], 1 if self.tA else 0),cgt.size(inputs[1],0 if self.tB else 1)]
-    def typ_apply(self, inputs):
-        assertequal1(cgt.size(inputs[0],0 if self.tA else 1),cgt.size(inputs[1],1 if self.tB else 0), 
-            "shape mismatch at matrix-matrix multiplication")         
-        assert inputs[0].dtype==cgt.floatX and inputs[1].dtype==cgt.floatX
-        return inputs[0].get_type()
+    def typ_apply(self, input_types):
+        # assertequal1(cgt.size(inputs[0],0 if self.tA else 1),cgt.size(inputs[1],1 if self.tB else 0), 
+        #     "shape mismatch at matrix-matrix multiplication")         
+        # TODO put shape check somewhere else
+        assert input_types[0].dtype==cgt.floatX and input_types[1].dtype==cgt.floatX
+        return input_types[0]
     def get_closure(self, inputs):
         return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB)]
     # best gemm docs: https://software.intel.com/en-us/node/520775
@@ -1768,7 +1879,7 @@ class Mul22(Op):
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         code = r"""
-extern "C" void $function($closure* cl, cgtArray** AB, cgtArray* C) {
+CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
     cgtArray *A=AB[0], *B=AB[1];
     int lda = A->shape()[1], ldb = B->shape()[1], ldc = C->shape()[1];
     int M = C->shape()[0];
@@ -1782,37 +1893,53 @@ extern "C" void $function($closure* cl, cgtArray** AB, cgtArray* C) {
         return CImpl(code, includes=["cblas.h"], link_flags="-lblas")
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s%s"%(xexpr, u"\u1d57" if self.tA else "", yexpr, u"\u1d57" if self.tB else "")
+    def __repr__(self):
+        return "Mul22{%s,%s}"%("T" if self.tA else "N", "T" if self.tB else "N")
 
 class BatchedMul22(Op):
+    available_impls = ("python",)        
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f((x,y), z):
             for (xmat, ymat, zmat) in zip(x,y, z):
                 if self.tA: xmat = xmat.T
                 if self.tB: ymat = ymat.T            
                 xmat.dot(ymat, out=zmat)
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, output, goutput):
-        return [Result(BatchedMul22(False, not self.tB), [goutput, inputs[1]]),
-                Result(BatchedMul22(not self.tA, False), [inputs[0], goutput])]
+        A,B = inputs
+        GC = goutput
+        if (self.tA, self.tB) == (False,False):
+            return [Result(BatchedMul22(False,True), [GC, B]),
+                    Result(BatchedMul22(True,False), [A, GC])]
+        elif (self.tA, self.tB) == (False,True):
+            return [Result(BatchedMul22(False,False), [GC, B]),
+                    Result(BatchedMul22(True,False), [GC, A])]
+        elif (self.tA, self.tB) == (True,False):
+            return [Result(BatchedMul22(False,True), [B, GC]),
+                    Result(BatchedMul22(False,False), [A, GC])]
+        elif (self.tA, self.tB) == (True,True):
+            return [Result(BatchedMul22(True,True), [B, GC]),
+                    Result(BatchedMul22(True,True), [GC, A])]    
     def shp_apply(self, inputs):
         return [cgt.size(inputs[0],0), cgt.size(inputs[0], 2 if self.tA else 1),cgt.size(inputs[1],1 if self.tB else 2)]
-    def typ_apply(self, inputs):
+    def typ_apply(self, input_types):
         # assert inputs[0].dtype==cgt.floatX and inputs[1].dtype==cgt.floatX
-        return inputs[0].get_type()
+        return input_types[0]
 
 class Outer(Op):
-    def get_py_impl(self):
+    available_impls = ("python",)        
+    def get_py_func(self, input_types):
         def f(reads, write):
             np.outer(reads[0], reads[1], out=write)
-        return PyImpl(inplace_func=f)
+        return f
     def pullback(self, inputs, _output, goutput):
         return [goutput.dot(inputs[0]), inputs[1].dot(goutput)]
     def shp_apply(self, inputs):
         return [cgt.size(inputs[0],0), cgt.size(inputs[1],0)]
-    def typ_apply(self, _inputs):
+    def typ_apply(self, input_types):
         return TensorType(cgt.floatX, 2)
 
 
@@ -1821,24 +1948,26 @@ class Outer(Op):
 # ----------------------------------------------------------------
 
 class Dot(Op):
-    call_type = "valret"
-    def get_py_impl(self):
+    available_impls = ("python",)    
+    call_type = "byval"
+    def get_py_func(self, input_types):
         def f(reads):
             return np.dot(reads[0], reads[1])
-        return PyImpl(valret_func=f)
+        return f
     def pullback(self, inputs, _output, goutput):
         x, y = inputs
         return [y*goutput, x*goutput]
-    def shp_apply(self, _inputs):
+    def shp_apply(self, _):
         return []
-    def typ_apply(self, _inputs):
+    def typ_apply(self, _):
         return TensorType(cgt.floatX, 0)
 
 # Composition
 # ----------------------------------------------------------------
 
 class Composition(Op):
-    call_type = "valret"
+    available_impls = ("python",)        
+    call_type = "byval"
     def __init__(self, inputs, outputs):
         self._inputs = inputs
         self._outputs = outputs
@@ -1867,12 +1996,12 @@ class Composition(Op):
 
     def get_diff(self, _):
         return self._diff
-    def get_py_impl(self):
-        from . import execution # XXX
-        f = execution.function(self._inputs, self._outputs)
+    def get_py_func(self, input_types):
+        # TODO testme
+        f = cgt.execution.function(self._inputs, self._outputs)
         def py_impl(num_inputs):
             return tuple(f(num_inputs))
-        return PyImpl(valret_func=py_impl)
+        return py_impl
     def pullback(self, inputs, output, goutput):
         # repl = {}
         # repl.update(utils.safezip(self._inputs, inputs))
@@ -1883,8 +2012,8 @@ class Composition(Op):
     def shp_apply(self, inputs):
         out = clone(self._shp, replace=dict(utils.safezip(self._inputs, inputs)))
         return out
-    def typ_apply(self, inputs):
-        assert [x.get_type() for x in inputs] == [x.get_type() for x in self._inputs]
+    def typ_apply(self, input_types):
+        assert input_types == [x.typ for x in self._inputs]
         return TupleType(*self._out_typs)
     @property
     def n_out(self):
@@ -1897,38 +2026,40 @@ class Composition(Op):
         return self._nodes
 
 class TupleIndex(Op):
-    call_type="valret"
+    available_impls = ("python",)        
+    call_type="byval"
     def __init__(self, idx):
         self.idx = idx
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads):
             return reads[0][self.idx]
-        return PyImpl(valret_func=f)
+        return f
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])[self.idx]
-    def typ_apply(self, inputs):
-        intype = inputs[0].get_type()
+    def typ_apply(self, input_types):
+        intype = input_types[0]
         assert isinstance(intype, TupleType)
-        return inputs[0].get_type()[self.idx]
+        return intype[self.idx]
     def get_closure(self, _inputs):
         return [("idx",ctypes.c_int, self.idx)]
     def get_c_impl(self, inputs):
         return CImpl(code=r"""
-extern "C" cgtObject* $function($closure* cldata, cgtTuple** reads) {
+CGT_EXPORT_C cgtObject* $function($closure* cldata, cgtTuple** reads) {
     return reads[0]->getitem(cldata->idx);
 }""")
 
 
 class MakeTuple(Op):
-    call_type="valret"
-    def get_py_impl(self):
+    available_impls = ("python",)        
+    call_type="byval"
+    def get_py_func(self, input_types):
         def f(inputs):
             return tuple(inputs)
-        return PyImpl(valret_func=f)
+        return f
     def shp_apply(self, inputs):
         return tuple(cgt.shape(x) for x in inputs)
-    def typ_apply(self, inputs):
-        return TupleType(*(x.get_type() for x in inputs))
+    def typ_apply(self, input_types):
+        return TupleType(*input_types)
     
 def unpack(tup):
     return [Result(TupleIndex(i),[tup]) for i in xrange(len(tup.get_type()))]
@@ -1939,21 +2070,22 @@ class Assertion(Op):
     """
     Assertion gets evaluated when the graph is executed, and it prints out a stack trace on failure
     """
+    available_impls = ("python",)        
     def __init__(self, msg):
         self.stack = traceback.extract_stack()[:-2]
         self.msg = msg
-    def typ_apply(self, inputs):
-        x, = inputs
+    def typ_apply(self, input_types):
+        x, = input_types
         assert x.ndim==0 and x.dtype=='i1'
         return TensorType('i8',0)
     def shp_apply(self, _):
         return []
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             x = reads[0]
             if not x.item():
                 self.display_error()
-        return PyImpl(inplace_func=f)
+        return f
     def display_error(self):
         print "Stack trace at failed assertion:"
         print "**************************"        
@@ -1965,17 +2097,18 @@ class DebugFunc(Op):
     """
     Call a function when the graph is executed
     """
+    available_impls = ("python",)    
     def __init__(self, yourfunc):
         self.yourfunc = yourfunc
     def typ_apply(self, _):
         return TensorType('i8',0)
     def shp_apply(self, _):
         return []
-    def get_py_impl(self):
+    def get_py_func(self, input_types):
         def f(reads, write):
             def fn(*reads):
                 self.yourfunc(*reads)
-        return PyImpl(inplace_func=f)
+        return f
 
 def assert_(x,msg=None):
     dbgnode = Result(Assertion(msg or "(empty)"), [x])
@@ -2022,7 +2155,7 @@ def simplify_and_analyze(outputs):
     analysis = init_analysis()
     repl = {}
     for output in outputs: update_simplify_map(output, analysis, repl)
-    return [repl[node] for node in outputs], analysis
+    return [repl[node] for node in outputs], analysis, repl
 
 def process_top_stack_item_and_maybe_get_replacement(stack, analysis, repl): #pylint: disable=W0621
     """
@@ -2050,7 +2183,7 @@ def process_top_stack_item_and_maybe_get_replacement(stack, analysis, repl): #py
                 stack.append((par,par))
                 return
         newparents = [repl[p] for p in node.parents]
-        newnode = Result(node.op, newparents, typ=node.get_type())
+        newnode = node.clone(newparents)
         newnewnode = maybe_replace(newnode, analysis, repl)
         if newnewnode is None:
             return (orig,newnode)
@@ -2140,8 +2273,8 @@ def maybe_replace(node, analysis, repl):
     node2hash = analysis["node2hash"]
     h = node.get_hash(node2hash)
     if h in analysis["hash2node"]:
-        if VERBOSE_OPTIMIZATION: print "Did CSE"
         newnode = analysis["hash2node"][h]
+        if VERBOSE_OPTIMIZATION: print "Did CSE", node
         assert newnode in repl and newnode.op.__class__ == node.op.__class__
         return newnode
     parents = node.parents
@@ -2149,6 +2282,7 @@ def maybe_replace(node, analysis, repl):
     # ASSUMPTION: the only type of nullary ops that we can propagate this way
     # are subclasses of Constant
     if len(parents) > 0 and all(isinstance(par.op, Constant) for par in parents):
+        c = cgt.execution.get_callable(node.op, [par.typ for par in parents], "cpu")
         try:
             out = cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
             if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
@@ -2290,9 +2424,11 @@ def count_nodes(outputs):
     return len(list(topsorted(outputs)))
 
 def clone(nodes, replace=None):
+    if isinstance(nodes, Node): return _clone_list([nodes], replace)[0]
+    else: return _clone_list(list(nodes), replace)
+
+def _clone_list(nodes, replace):
     assert isinstance(nodes, list)
-    if isinstance(nodes, tuple):
-        return tuple(clone(x,replace) for x in nodes)
     if replace is None: replace = {}
     else:
         assert isinstance(replace, dict)
@@ -2302,7 +2438,7 @@ def clone(nodes, replace=None):
             if node not in replace:
                 replace[node] = node
         else:
-            replace[node] = Result(node.op, [replace[p] for p in node.parents], typ=node.get_type())
+            replace[node] = node.clone([replace[p] for p in node.parents])
     return [replace[node] for node in nodes]
 
 def alloc_from_shp(shp, typ):
@@ -2365,15 +2501,17 @@ def get_numeric_shape_fun(node):
 
 def py_numeric_apply(node, vals):
     try:
-        py_impl = node.op.get_py_impl()
+        # py_func = node.op.get_py_func(node.parents)
+        callable = cgt.execution.get_callable(node.op, [par.typ for par in node.parents],"cpu")
+
     except MethodNotDefined:
         print 'Op %s has no Python implementation' % repr(node.op)
         raise
-    if node.op.call_type == "valret":
-        out = py_impl.valret_func(vals)
+    if node.op.call_type == "byval":
+        out = callable.call(vals)
     else:
         out = alloc_output(node,vals)
-        py_impl.inplace_func(vals, out)
+        callable.call(vals, out)
     return out
 
 class NonDifferentiable(Exception):
@@ -2394,16 +2532,18 @@ class AllocationError(Exception):
 class MethodNotDefined(Exception):
     pass
 
+class Unreachable(Exception):
+    pass
 
 def get_cgt_src_root():
     osp = os.path
     return osp.dirname(osp.dirname(osp.realpath(__file__)))
 
 _CONFIG = None
-def load_config():
+def load_config(force_reload = False):
     osp = os.path
     global _CONFIG
-    if _CONFIG is None:
+    if _CONFIG is None or force_reload:
         from thirdparty.configobj import ConfigObj
         from thirdparty.validate import Validator
         rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
@@ -2423,9 +2563,34 @@ def load_config():
                 lhs,rhs = pair.split("=")
                 assert lhs in _CONFIG
                 _CONFIG[lhs] = rhs
+        _CONFIG["default_device"] = Device()
     return _CONFIG
+load_config()
 
-def modify_config(**kws):
-    load_config()
+def reset_config():
+    global _CONFIG
+    _CONFIG = None
+    load_config()    
+
+def update_config(**kws):
+    config = load_config()
     for (name,val) in kws.iteritems():
-        _CONFIG[name] = val
+        config[name] = val
+
+class scoped_update_config(object):
+    def __init__(self, **kw):
+        config = load_config()
+        self.prevsettings = {}
+        self.delkeys = []
+        for k in kw.iterkeys(): 
+            if k in config: 
+                self.prevsettings[k] = config[k]
+            else:
+                self.delkeys.append(k)
+        config.update(kw)
+    def __enter__(self):
+        return
+    def __exit__(self, *args):
+        config = load_config()
+        config.update(self.prevsettings)
+        for k in self.delkeys: del config[k]

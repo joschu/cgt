@@ -26,6 +26,7 @@ def info2closure(info):
 # </Copied>
 
 class MaxPool(core.Op):
+    available_impls = ("native_cpu",)    
     def __init__(self, info):
         assert info.stride_h>0 and info.stride_w>0        
         self.info = info
@@ -50,14 +51,16 @@ class MaxPool(core.Op):
         return core.TupleType(core.TensorType(inputs[0].dtype, 4), core.TensorType('i4', 4))
     def get_closure(self, _inputs):
         return info2closure(self.info)
-    def get_c_impl(self, inputs):
+    def get_native_compile_info(self, input_types, devtype):
         code = r"""
-extern "C" void $function(conv_closure* cl, cgtArray** reads, cgtTuple* write) {
+CGT_EXPORT_C void $function(conv_closure* cl, cgtArray** reads, cgtTuple* write) {
     max_pool<%(cdtype)s>(cl, reads[0], static_cast<cgtArray*>(write->getitem(0)), static_cast<cgtArray*>(write->getitem(1)));
-}"""%dict(cdtype=core.np2c[inputs[0].dtype])
-        return core.CImpl(code=code, includes=["pooling.h"])
+}"""%dict(cdtype=core.np2c[input_types[0].dtype])
+        return core.NativeCompileInfo(self, 1, "c++", code, 
+            closure_triples=info2closure(self.info), includes=["pooling.h"])
 
 class MaxPoolPullback(core.Op):
+    available_impls = ("native_cpu",)
     def __init__(self, info):
         self.info = info
     def get_py_impl(self):
@@ -68,12 +71,13 @@ class MaxPoolPullback(core.Op):
         return core.TensorType(inputs[0].dtype, 4)
     def get_closure(self, _inputs):
         return info2closure(self.info)
-    def get_c_impl(self, inputs):
+    def get_native_compile_info(self, input_types, devtype):
         code = r"""
-extern "C" void $function(conv_closure* cl, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function(conv_closure* cl, cgtArray** reads, cgtArray* write) {
     max_pool_pullback<%(cdtype)s>(reads[0], reads[1], reads[2], reads[3], write);
-}"""%dict(cdtype=core.np2c[inputs[0].dtype])
-        return core.CImpl(code=code, includes=["pooling.h"])
+}"""%dict(cdtype=core.np2c[input_types[0].dtype])
+        return core.NativeCompileInfo(self, 4, "c++", code, 
+            closure_triples=info2closure(self.info), includes=["pooling.h"])
 
 def test():
     np.random.seed(0)

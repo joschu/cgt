@@ -338,6 +338,9 @@ def set_precision(prec):
         cgt.floatX = 'f16'
         cgt.complexX = 'c32'
 
+def get_precision():
+    return {"f2":"half","f4":"single","f8":"double","f16":"quad"}[cgt.floatX]
+
 def shape(x):
     x = core.as_node(x)
     typ = x.get_type()

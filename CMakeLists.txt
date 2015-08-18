@@ -49,6 +49,7 @@ message(
     "*****************************\n"
     "OPTIONS: \n"
     "   CGT_ENABLE_CUDA:    ${CGT_ENABLE_CUDA}\n"
+    "   CGT_ENABLE_CUDNN:    ${CGT_ENABLE_CUDNN}\n"
     # "   CGT_DEVEL_MODE:     ${CGT_DEVEL_MODE}\n"
     "   CMAKE_BUILD_TYPE:   ${CMAKE_BUILD_TYPE}\n"
     "*****************************\n"
@@ -76,13 +77,13 @@ target_link_libraries(cgt ${CUDA_CUDART_LIBRARY})
 target_include_directories(cgt PRIVATE ${CUDA_INCLUDE_DIRS} ${CGT_INCLUDE_DIR})
 
 
-cython_add_module(cycgt2 ${CMAKE_SOURCE_DIR}/src/cycgt2.pyx 
+cython_add_module(cycgt ${CMAKE_SOURCE_DIR}/src/cycgt.pyx 
   ${CMAKE_SOURCE_DIR}/include/execution.h
   ${CMAKE_SOURCE_DIR}/src/execution.cpp
 )
-set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cycgt2.pyx PROPERTIES CYTHON_IS_CXX TRUE)
-target_include_directories(cycgt2 PRIVATE ${NUMPY_INCLUDE_DIR} ${CGT_INCLUDE_DIR})
-target_link_libraries(cycgt2 cgt)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cycgt.pyx PROPERTIES CYTHON_IS_CXX TRUE)
+target_include_directories(cycgt PRIVATE ${NUMPY_INCLUDE_DIR} ${CGT_INCLUDE_DIR})
+target_link_libraries(cycgt cgt)
 
 
 # add_custom_command(

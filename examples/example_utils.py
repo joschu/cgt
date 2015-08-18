@@ -12,12 +12,14 @@ def fmt_item(x, l):
     if isinstance(x, np.ndarray):
         assert x.ndim==0
         x = x.item()
-    if isinstance(x, (str,int)): rep = str(x)
-    elif isinstance(x, float): rep = "%g"%x
+    if isinstance(x, float): rep = "%g"%x
+    else: rep = str(x)
     return " "*(l - len(rep)) + rep
 
-def fmt_row(width, row):
-    return " | ".join(fmt_item(x, width) for x in row)
+def fmt_row(width, row, header=False):
+    out = " | ".join(fmt_item(x, width) for x in row)
+    if header: out = out + "\n" + "-"*len(out)
+    return out
 
 def fetch_dataset(url):    
     fname = osp.basename(url)

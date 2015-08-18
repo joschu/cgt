@@ -22,6 +22,7 @@ def info2closure(info):
 
 
 class Im2Col(core.Op):
+    available_impls = ("native_cpu",)        
     def __init__(self, info):
         assert info.stride_h>0 and info.stride_w>0
         self.info = info
@@ -40,26 +41,26 @@ class Im2Col(core.Op):
     def typ_apply(self, inputs):
         assert inputs[0].ndim == 4
         return core.TensorType(inputs[0].dtype, 4)
-    def get_closure(self, _inputs):
-        return info2closure(self.info)
-    def get_c_impl(self, inputs):
+    def get_native_compile_info(self, input_types, devtype):
+        assert devtype == "cpu"
         code = r"""
-extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
-    cgtArray* im = reads[0];
-    const size_t* imshape = im->shape();
-    int batchsize = imshape[0],
-        channels = imshape[1],
-        height = imshape[2],
-        width = imshape[3];
-    for (int i=0; i < batchsize; ++i) {
-        im2col_cpu((%(cdtype)s*)im->data() + im->stride(0)*i, channels, height, width,
-            cl->kernel_h, cl->kernel_w, cl->pad_h, cl->pad_w, cl->stride_h, 
-            cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
-    }
-}"""%dict(cdtype=core.np2c[inputs[0].dtype])
-        return core.CImpl(code=code, includes=["im2col.h"])
+            CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
+                cgtArray* im = reads[0];
+                const size_t* imshape = im->shape();
+                int batchsize = imshape[0],
+                    channels = imshape[1],
+                    height = imshape[2],
+                    width = imshape[3];
+                for (int i=0; i < batchsize; ++i) {
+                    im2col_cpu((%(cdtype)s*)im->data() + im->stride(0)*i, channels, height, width,
+                        cl->kernel_h, cl->kernel_w, cl->pad_h, cl->pad_w, cl->stride_h, 
+                        cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
+                }
+            }"""%dict(cdtype=core.np2c[input_types[0].dtype])
+        return core.NativeCompileInfo(self, 1, "c++", code, includes=["im2col.h"], closure_triples=info2closure(self.info))
 
 class Col2Im(core.Op):
+    available_impls = ("native_cpu",)            
     def __init__(self, info):
         self.info = info
     def get_diff(self, _):
@@ -72,9 +73,9 @@ class Col2Im(core.Op):
         return core.TensorType(inputs[0].dtype, 4)
     def get_closure(self, _inputs):
         return info2closure(self.info)
-    def get_c_impl(self, inputs):
+    def get_native_compile_info(self, input_types, devtype):
         code = r"""
-extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
+CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
     cgtArray* col = reads[0];
     size_t batchsize = reads[1]->at<size_t>(0),
            channels  = reads[2]->at<size_t>(0),
@@ -85,20 +86,21 @@ extern "C" void $function($closure* cl, cgtArray** reads, cgtArray* write) {
             cl->kernel_h, cl->kernel_w, cl->pad_h, cl->pad_w, cl->stride_h, 
             cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
     }
-}"""%dict(cdtype=core.np2c[inputs[0].dtype])
-        return core.CImpl(code=code, includes=["im2col.h"])
+}"""%dict(cdtype=core.np2c[input_types[0].dtype])
+        return core.NativeCompileInfo(self, 1, "c++", code, includes=["im2col.h"], closure_triples=info2closure(self.info))
 
 def test():
     np.random.seed(0)
     cgt.set_precision("quad")
 
 
-    for settings in [ ((4,4),(0,0),(1,1)), ((3,3),(1,1),(2,2)) ]:
-        x = cgt.tensor4("x", fixed_shape=(2,3,15,17))
+    for settings in [ ((4,4),(0,0),(1,1)), ((3,3),(1,1),(2,2)), ((3,3),(1,1),(3,3)) ]:
+        xval = np.arange(2*1*28*28).reshape(2,1,28,28).astype(cgt.floatX)
+        x = cgt.tensor4("x", fixed_shape=xval.shape)
         y = im2col(x, *settings)
-        xval = np.arange(2*3*15*17).reshape(2,3,15,17).astype(cgt.floatX)
         h = cgt.constant(np.random.randn(*core.infer_shape(y)))
         cost = (y*h).sum()
+
         fcost = cgt.function([x],cost)
         fgrad = cgt.function([x], cgt.grad(cost, [x])[0])
 
@@ -106,7 +108,6 @@ def test():
         gnum = numeric_grad(fcost, xval,eps=1e-5)
         gana = fgrad(xval)
         assert np.allclose(gnum, gana)
-
         # fy = cgt.function([x],y)
         # yval = fy(xval)
         # assert np.allclose(yval[0,0,0] , xval[0,:,0:4,0:4].flatten())

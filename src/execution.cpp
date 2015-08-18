@@ -36,7 +36,6 @@ public:
         cgt_assert(newargs != NULL);
         cgt_assert(newargs->len == eg_->n_args());
         for (Instruction* instr : eg_->instrs()) {
-            // printf("Firing %s\n", instr->repr().c_str());
             instr->fire(this);
         }
         args_ = NULL;
@@ -204,7 +203,7 @@ void ReturnByRef::fire(Interpreter* interp) {
         reads[i] = interp->get(readlocs[i]);
     }
     cgtObject * write = interp->get(writeloc);
-    closure(reads, write);
+    callable(reads, write);
 }
 
 // TODO actually allocate tuple
@@ -214,7 +213,7 @@ void ReturnByVal::fire(Interpreter* interp) {
     for (int i = 0; i < n_inputs; ++i) {
         args[i] = interp->get(readlocs[i]);
     }    
-    interp->set(writeloc, closure(args.data())); // XXX
+    interp->set(writeloc, callable(args.data())); // XXX
 }
 
 }

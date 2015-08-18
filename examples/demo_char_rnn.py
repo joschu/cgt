@@ -123,7 +123,7 @@ def make_loss_and_grad_and_step(arch, size_input, size_output, size_mem, size_ba
     flatgrad = flatcat(gradloss)
 
     f_loss_and_grad = cgt.function([x_tnk, targ_tnk] + init_hiddens, [loss, flatgrad] + final_hiddens)
-    f_loss = cgt.function1([x_tnk, targ_tnk] + init_hiddens, loss)
+    f_loss = cgt.function([x_tnk, targ_tnk] + init_hiddens, loss)
 
     assert len(init_hiddens) == len(final_hiddens)
 

@@ -6,6 +6,13 @@
 #include <cassert>
 
 // ================================================================
+// Visibility 
+// ================================================================
+ 
+#define CGT_EXPORT __attribute__((visibility("default")))
+#define CGT_EXPORT_C extern "C" __attribute__((visibility("default")))
+
+// ================================================================
 // Basic structs and enums
 // ================================================================
 
@@ -93,13 +100,13 @@ public:
     return s;
   }
   size_t nbytes() const { return size() * cgt_itemsize(dtype_); }
-  size_t stride(size_t i) const {
+  size_t stride(int i) const {
     if (ndim_ == 0) {
       return 0;
     }
     assert(0 <= i && i < ndim_ && ndim_ >= 1);
-    size_t s = 1;
-    for (size_t j = i; j < ndim_ - 1; ++j) { // note that (ndim_-1) >= 0, which is important because ndim_ is unsigned
+    int s = 1;
+    for (int j = i; j < ndim_ - 1; ++j) { // note that (ndim_-1) >= 0, which is important because ndim_ is unsigned
       s *= shape_[j + 1];
     }
     return s;
@@ -120,7 +127,7 @@ public:
   void print();
 
 private:
-  const size_t ndim_;
+  const int ndim_;
   const size_t* shape_;
   const cgtDtype dtype_;
   const cgtDevtype devtype_;
