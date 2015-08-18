@@ -57,7 +57,7 @@ class Im2Col(core.Op):
                         cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
                 }
             }"""%dict(cdtype=core.np2c[input_types[0].dtype])
-        return core.NativeCompileInfo(self, 1, "c++", code, includes=["im2col.h"], closure_triples=info2closure(self.info))
+        return core.NativeCompileInfo(code, includes=["im2col.h"], closure_triples=info2closure(self.info))
 
 class Col2Im(core.Op):
     available_impls = ("native_cpu",)            
@@ -87,7 +87,7 @@ CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
             cl->stride_w, (%(cdtype)s*)write->data() + write->stride(0)*i);
     }
 }"""%dict(cdtype=core.np2c[input_types[0].dtype])
-        return core.NativeCompileInfo(self, 1, "c++", code, includes=["im2col.h"], closure_triples=info2closure(self.info))
+        return core.NativeCompileInfo(code, includes=["im2col.h"], closure_triples=info2closure(self.info))
 
 def test():
     np.random.seed(0)

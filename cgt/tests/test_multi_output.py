@@ -54,7 +54,7 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtTuple* write) {
         z[i] = cosf(x[i]);    
     }
 }"""
-        return core.NativeCompileInfo(self, 1, "c++", code, includes=["math.h"], link_flags="-lm")
+        return core.NativeCompileInfo(code, includes=["math.h"], link_flags="-lm")
 
 def test_multi_output():
     cgt.reset_config()

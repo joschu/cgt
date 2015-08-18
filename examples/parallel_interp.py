@@ -1,5 +1,5 @@
 import cgt
-from cgt.core import load_config
+from cgt.core import get_config
 from time import time
 import numpy as np
 from numpy.random import randn, seed
@@ -38,7 +38,7 @@ def main():
 
     # construct parallel/sequential interpreter
 
-    load_config()["parallel_interp"] = not args.seq
+    get_config()["parallel_interp"] = not args.seq
     f = cgt.execution.function(inputs, outputs)
 
     # test things out!

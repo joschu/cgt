@@ -75,7 +75,7 @@ class TranslationUnit(object):
         self.template_code = template_code
         self.link_flags = link_flags
         if compile_flags is None:
-            compile_flags = "-fPIC -O0 -g" if core.load_config()["debug_cpp"] else "-O3 -DNDEBUG -ffast-math"
+            compile_flags = "-fPIC -O0 -g" if core.get_config()["debug_cpp"] else "-O3 -DNDEBUG -ffast-math"
         self.compile_flags = compile_flags
 
     def hash(self):
@@ -101,7 +101,7 @@ def get_compile_info():
     
     if _COMPILE_CONFIG is None:
 
-        config = core.load_config()
+        config = core.get_config()
 
         CGT_BUILD_ROOT = cgt.cycgt.cgt_build_root()
 

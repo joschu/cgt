@@ -43,7 +43,7 @@ def determine_devices(nodes_sorted, updatetarg2src):
     # (1) Get available devices for nodes, determined by which impls are available and node types
     compile_info = impls.get_compile_info()
 
-    cuda_enabled = load_config()["enable_cuda"]
+    cuda_enabled = get_config()["enable_cuda"]
     if cuda_enabled:
         assert compile_info["CGT_ENABLE_CUDA"], "CUDA requested in configuration, but CGT is not compiled with CUDA support"
 
@@ -78,8 +78,8 @@ def create_interpreter(inputs, outputs, eg, node2memloc):
     input_types = [input.get_type() for input in inputs] #pylint: disable=W0622
     output_locs = [node2memloc[node] for node in outputs]
 
-    backend = load_config()["backend"]
-    parallel_interp = load_config()["parallel_interp"]
+    backend = get_config()["backend"]
+    parallel_interp = get_config()["parallel_interp"]
     if backend == "python":
         if parallel_interp:
             raise NotImplementedError
@@ -148,7 +148,7 @@ def determine_memowner(nodes_sorted, updates, node2dev):
     # For updates, memlocation(RHS) = memlocation(LHS)
     after2before = {after:before for (before,after) in updates}
 
-    enable_inplace_opt = load_config()["enable_inplace_opt"]
+    enable_inplace_opt = get_config()["enable_inplace_opt"]
 
     for node in nodes_sorted:
 
@@ -236,10 +236,13 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
 
 def get_callable(op, input_types, devtype):
     assert op.available_impls, "need to set op.available_impls"
-    if load_config()["backend"] == "python" and "python" in op.available_impls or devtype=="cpu" and "native_cpu" not in op.available_impls:
+    if get_config()["backend"] == "python" and "python" in op.available_impls or devtype=="cpu" and "native_cpu" not in op.available_impls:
         return op.get_py_callable(input_types)
     else:
         nci = op.get_native_compile_info(input_types, devtype)
+        nci.op_str = str(op)
+        nci.call_type = op.call_type
+        nci.n_in = len(input_types)
         return impls.nci2callable(nci)
 
 def add_transports(nodelist, node2dev, node2shape):
@@ -256,7 +259,6 @@ def add_transports(nodelist, node2dev, node2shape):
         for child in node2child[node]:
             childdev = node2dev[child]
             if not childdev == dev:
-                print node,dev,child,childdev
                 if childdev not in dev2copy:
                     nodecopy = Result(Transport(childdev), [node])
                     node2dev[nodecopy] = childdev
@@ -274,7 +276,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     """
     Compiles the expression graph into an execution graph. 
     """
-    config = load_config()
+    config = get_config()
 
     # Phase 1: simplification and analysis of expression graph
     # ------------------------------------------------------

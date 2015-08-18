@@ -1,4 +1,4 @@
-import sys, numpy as np, hashlib, copy, cPickle, ctypes, warnings, os
+import sys, numpy as np, hashlib, copy, cPickle, ctypes, warnings, os, os.path as osp
 from collections import defaultdict,namedtuple
 import __builtin__
 import traceback
@@ -418,14 +418,17 @@ class Input(Node):
     Abstract class representing an input to the graph -- a node with no parents, which does not
     correspond to a computation.
     """
+    counter = 0
     def __init__(self, typ, name=None):
         self.name = "" if name is None else name
         assert isinstance(self.name, (str,unicode))
         Node.__init__(self, typ, None, [])
+        self.counter = Input.counter
+        Input.counter += 1
     def is_input(self):
         return True
     def get_hash(self, _node2hash):
-        return str(id(self))
+        return str(self.counter)
     def __repr__(self):
         raise NotImplementedError
     def get_fixed_shape(self):
@@ -461,13 +464,13 @@ class GetData(Op):
         def f(_): 
             return self.datanode.get_value()
         return f
-    def get_native_compile_info(self, *_):
+    def get_native_compile_info(self, input_types, devtype):
         code=r"""
             CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
                 return (cgtArray*)cldata->ptr;
             }"""
         ptr = self.datanode._value.ptr
-        return NativeCompileInfo(self, 0, "c++", code, closure_triples=[("ptr", ctypes.c_void_p, ptr)], 
+        return NativeCompileInfo(code, closure_triples=[("ptr", ctypes.c_void_p, ptr)], 
             store_objects=self.datanode._value)
     
 
@@ -481,7 +484,7 @@ class Data(Input):
         value = as_valid_array(value)
         self.device = device or _CONFIG["default_device"]
 
-        self.use_numpy = cgt.load_config()["backend"] == "python"
+        self.use_numpy = cgt.get_config()["backend"] == "python"
         if self.use_numpy:
             assert self.device.devtype=="cpu","can only use numpy for cpu"
 
@@ -646,11 +649,13 @@ def grad(cost, wrt):
 # ================================================================
 
 class NativeCompileInfo(object):
-    def __init__(self, op, n_in, lang, func_code, closure_triples = None, includes=(), link_flags="", 
+    def __init__(self, func_code, lang="c++", closure_triples = None, includes=(), link_flags="", 
             setup=False, teardown=False, gpu_deref_mask=None, store_objects = ()):
-        self.call_type = op.call_type
-        self.op_str = str(op)
-        self.n_in = n_in
+        # To be filled in by caller of constructor
+        self.op_str = None
+        self.call_type = None
+        self.n_in = None
+        #####
         self.lang = lang
         self.func_code = func_code
         self.closure_triples = closure_triples
@@ -753,7 +758,7 @@ class NativeCallable(object):
 # ----------------------------------------------------------------
 
 class Constant(Op): #pylint: disable=W0223
-    available_impls = ("python",)    
+    available_impls = ("python","native_cpu")    
     def __init__(self, value):
         self.value = value
     def get_value(self):
@@ -796,7 +801,7 @@ class ConstantTensor(Constant):
     def get_hash(self):
         if self._hash is None: self._hash = cPickle.dumps(self.value, -1)
         return self._hash
-    def get_closure(self, _):
+    def get_closure(self):
         assert isinstance(self.value, np.ndarray)
         shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
         shit.append(self.value)
@@ -805,12 +810,12 @@ class ConstantTensor(Constant):
         ("shape",ctypes.c_void_p,shapeptr),
         ("dtype",ctypes.c_byte,self.value.dtype.num),
         ("data",ctypes.c_void_p,self.value.ctypes.data)]
-    def get_c_impl(self, *args):
+    def get_native_compile_info(self, input_types, devtype):
         code = None
-        if self.call_type == "byval": code = self._c_code_valret(*args)
-        elif self.call_type == "inplace": code = self._c_code_inplace(*args)
+        if self.call_type == "byval": code = self._c_code_valret(input_types)
+        elif self.call_type == "byref": code = self._c_code_inplace(input_types)
         else: raise ValueError
-        return CImpl(code=code)
+        return NativeCompileInfo(func_code=code, closure_triples=self.get_closure())
     def _c_code_inplace(self, inputs):
         if isinstance(self.value, tuple):
             raise MethodNotDefined
@@ -859,15 +864,16 @@ class Fill(Op):
     """
     (value, shape...) -> array filled with `value`, with shape `shape`
     """
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def __init__(self, value):
         self.value = as_valid_array(value)
         assert self.value.ndim ==0
         assert self.value.dtype != "O"
         self.dtype = self.value.dtype
         assert self.value.ndim==0
+        self.tag = -1 # XXX tag hack
     def get_hash(self):
-        return cPickle.dumps(self.value,-1)+str(id(self)) 
+        return cPickle.dumps((self.value,self.tag) ,-1)
         # XXX seems to be a bug somewhere that causes ntm grad check to
         # fail when this CSE happens. Probably is a deeper bug :(
     def get_diff(self, num_inputs):
@@ -885,17 +891,18 @@ class Fill(Op):
     def typ_apply(self, input_types):
         assert all(x.dtype == 'i8' for x in input_types)
         return TensorType(self.dtype, len(input_types))
-    def get_closure(self, inputs):
+    def get_closure(self):
         typ = ctypes.c_long if self.value.dtype.kind=='i' else ctypes.c_double
         return [("value", typ, self.value.item())]
-    def get_c_impl(self, inputs):
+    def get_native_compile_info(self, input_types, devtype):
         outdtype = Dtype.canon(self.value.dtype)
-        return CImpl(code=r"""
-CGT_EXPORT_C void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
-    size_t s = write->size();
-    %(cdtype)s value = cldata->value;
-    for (int i=0; i < s; ++i) write->at<%(cdtype)s>(i) = value;
-}"""%dict(cdtype = np2c[outdtype]))
+        func_code=r"""
+            CGT_EXPORT_C void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
+                size_t s = write->size();
+                %(cdtype)s value = cldata->value;
+                for (int i=0; i < s; ++i) write->at<%(cdtype)s>(i) = value;
+            }"""%dict(cdtype = np2c[outdtype])
+        return NativeCompileInfo(func_code=func_code, closure_triples=self.get_closure())
 def _is_int(node):
     return dtype_kind(node.dtype)=='i'
 
@@ -1076,7 +1083,7 @@ class ElwiseUnary(Op):
                         writedata[i] = scalar_$function(readdata[i]);
                     }
                 }"""%dict(cdtype0=np2c[input_types[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
-            return NativeCompileInfo(self, 1, "c++", code, includes=["math.h"], link_flags="-lm")
+            return NativeCompileInfo(code, includes=["math.h"], link_flags="-lm")
         elif devtype == "gpu":
             code = """
                 __forceinline__ __device__ %(cdtype1)s $function(%(cdtype0)s x) {return %(cexpr)s;}        
@@ -1092,12 +1099,12 @@ class ElwiseUnary(Op):
                     cgt_get_bt(n, &num_blocks, &num_threads);
                     ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)read->data(), (%(cdtype1)s*)write->data());
                 }"""%dict(cdtype0=np2c[input_types[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
-            return NativeCompileInfo(self, 1, "cuda", code, includes=["math.h"], link_flags="-lm",gpu_deref_mask=(True,))
+            return NativeCompileInfo(code, lang="cuda",includes=["math.h"], link_flags="-lm",gpu_deref_mask=(True,))
         else:
             raise Unreachable
 
 class ElwiseBinary(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     # +, -, *, /, <, ^, //
     def __init__(self, opname, scalar_mask, info=None):
         assert opname in BINARY_INFO        
@@ -1204,7 +1211,7 @@ class ElwiseBinary(Op):
                     }
                 }"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
                 cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape) 
-            return NativeCompileInfo(self, 2, "c++", code, includes=["math.h"])
+            return NativeCompileInfo(func_code=code, includes=["math.h"])
 
         elif devtype == "gpu":
             code = """
@@ -1221,7 +1228,7 @@ class ElwiseBinary(Op):
                     ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
                 }"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
             cexpr=self.info.cexpr,index0=index0,index1=index1,ind4shape=ind4shape) 
-            return NativeCompileInfo(self, 2, "cuda", code, includes=["math.h"], gpu_deref_mask=(True,True))
+            return NativeCompileInfo(func_code=code, lang="cuda", includes=["math.h"], gpu_deref_mask=(True,True))
 
 def elwise_binary(opname, x, y):
     (x, y) = map(as_node, (x, y))
@@ -1264,7 +1271,7 @@ class Size(Op):
                 return cgt.constant(fixed_shape[self.axis])
     def get_closure(self, inputs):
         return [("ax",ctypes.c_int,self.axis)]
-    def get_c_impl(self, _):
+    def get_native_compile_info(self, _):
         code = r"""
 CGT_EXPORT_C cgtArray* $function(void* cl0, cgtArray** reads) {
 $closure* cl = ($closure*)cl0;
@@ -1273,7 +1280,7 @@ $closure* cl = ($closure*)cl0;
     ((long*)out->data())[0] = in->shape()[cl->ax];
     return out;
 }"""
-        return CImpl(code)
+        return NativeCompileInfo(code)
 
 class Reshape(Op):
     available_impls = ("python",)        
@@ -1294,7 +1301,7 @@ class Reshape(Op):
         return TensorType(input_types[0].dtype, len(input_types)-1)
     def get_closure(self, parents):
         return [("ndim", ctypes.c_int,len(parents)-1)]
-    def get_c_impl(self, _):
+    def get_native_compile_info(self, _):
         code = r"""
 CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
     cgtArray* in = reads[0];
@@ -1304,7 +1311,7 @@ CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
     return out;
 }
 """
-        return CImpl(code)
+        return NativeCompileInfo(code)
 
 class Concatenate(Op):
     available_impls = ("python",)        
@@ -1335,8 +1342,7 @@ class Stack(Op):
     available_impls = ("python",)        
     def get_diff(self, num_inputs):
         return [True for _ in xrange(num_inputs)]
-    def get_numeric_py(self):
-        raise RuntimeError # move to get_*_impl
+    def get_py_func(self, input_types):
         def fn(*vals):
             return np.array(vals)
         return fn
@@ -1345,7 +1351,7 @@ class Stack(Op):
     def shp_apply(self, inputs):
         return [cgt.constant(len(inputs))] + cgt.shape(inputs[0])
     def typ_apply(self, input_types):
-        assert utils.allsame([x.typ for x in inputs])
+        assert utils.allsame(input_types)
         return TensorType(input_types[0].dtype, input_types[0].ndim+1)
 
 class Repeat(Op):
@@ -1364,8 +1370,8 @@ class Repeat(Op):
                 arr = np.repeat(arr, numrep, ax)
             np.copyto(write, arr)
         return f
-    def get_c_impl(self, inputs):
-        x = inputs[0]
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
@@ -1378,8 +1384,8 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
-    cdtype=np2c[inputs[0].dtype])
-        return CImpl(code)
+    cdtype=np2c[input_types[0].dtype])
+        return NativeCompileInfo(code)
     def get_replacement(self, parents, analysis):
         if parents[0] in analysis["node2sv"]:
             value = analysis["node2sv"][parents[0]]
@@ -1415,8 +1421,8 @@ class Transpose(Op):
         return input_types[0]
     def __str__(self):
         return "Transpose{%s}"%",".join(map(str, self.axes))
-    def get_c_impl(self, inputs):
-        x = inputs[0]
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
         d = {}
         d["openloops"] = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         d["closeloops"] = "}"*x.ndim
@@ -1431,7 +1437,7 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
     %(closeloops)s
 }"""%d
-        return CImpl(code)
+        return NativeCompileInfo(code)
 
 class Transport(Op):
     def __init__(self, dev):
@@ -1451,7 +1457,7 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     cgt_memcpy(write->devtype(), reads[0]->devtype(), write->data(), reads[0]->data(), reads[0]->nbytes());
 }
 """
-        return NativeCompileInfo(self, 1, "c++", code)
+        return NativeCompileInfo(code)
 
 # TODO save computation by removing negative freq components
 class RFFT(Op):
@@ -1522,8 +1528,8 @@ class Sum(Op):
         return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
     def typ_apply(self, input_types):
         return input_types[0]
-    def get_c_impl(self, inputs):
-        x = inputs[0]
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         outdims = [i for i in xrange(x.ndim) if i not in self.axes]
@@ -1539,8 +1545,8 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
-    cdtype=np2c[inputs[0].dtype])
-        return CImpl(code, includes=["string.h"])
+    cdtype=np2c[input_types[0].dtype])
+        return NativeCompileInfo(code, includes=["string.h"])
 
 class Max(Op):
     available_impls = ("python",)    
@@ -1613,8 +1619,9 @@ class GetSli(Op):
             write[:] = x[slices]
         return f
     def pullback(self, inputs, output, goutput):
-        ginput = cgt.zeros_like(inputs[0])
-        return [Result(IncSli(self.axis), [ginput] + inputs[1:] + [goutput])] + [None]*3
+        z = cgt.zeros_like(inputs[0])
+        z.op.tag = id(output) # XXX tag hack
+        return [Result(IncSli(self.axis), [z] + inputs[1:] + [goutput])] + [None]*3
     def shp_apply(self, inputs):
         arr, start, stop, step = inputs
         s = cgt.shape(arr) #pylint: disable=W0621
@@ -1624,8 +1631,8 @@ class GetSli(Op):
     def typ_apply(self, input_types):
         assert input_types[1].dtype == input_types[2].dtype == input_types[3].dtype == 'i8'
         return input_types[0]
-    def get_c_impl(self, inputs):
-        x = inputs[0]
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
 
@@ -1642,8 +1649,8 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
-    cdtype=np2c[inputs[0].dtype])
-        return CImpl(code)
+    cdtype=np2c[input_types[0].dtype])
+        return NativeCompileInfo(code, closure_triples = self.get_closure())
 
 class IncSli(Op):
     available_impls = ("python",)
@@ -1656,20 +1663,23 @@ class IncSli(Op):
         def f(reads, write):
             x, start, stop, step, y=reads
             slices = [slice(None,None,None) for _ in xrange(x.ndim)]
-            slices[self.axis] = slice(start,stop,step)
-            write[slices] += y # XXX check that it's incremental
+            slices[self.axis] = slice(start,stop,step)          
+            if x.data != write.data:
+                utils.warn("incsli not inplace!")
+                np.copyto(write, x)
+            write[slices] += y
         return f
     def pullback(self, inputs, output, goutput):
-        _x, start, stop, step, _y = inputs
-        gx = goutput
-        gy = Result(GetSli(self.axis), [goutput, start, stop, step])        
-        return [gx, None, None, None, gy]
+        raise NotImplementedError
+        # _x, start, stop, step, _y = inputs
+        # gy = Result(GetSli(self.axis), [goutput, start, stop, step])        
+        # return [gx, None, None, None, gy]
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, input_types):
         return input_types[0]
-    def get_c_impl(self, inputs):
-        x = inputs[0]
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
         openloops = " ".join(
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
@@ -1689,8 +1699,8 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops,
-    cdtype=np2c[inputs[0].dtype], incidxexpr=incidxexpr)
-        return CImpl(code)
+    cdtype=np2c[input_types[0].dtype], incidxexpr=incidxexpr)
+        return NativeCompileInfo(code)
 
 class GetFlatIndices(Op):
     available_impls = ("python",)        
@@ -1744,8 +1754,8 @@ class Flip(Op):
         return cgt.shape(inputs[0])
     def typ_apply(self, input_types):
         return input_types[0]
-    def get_c_impl(self, inputs):
-        x = inputs[0]
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
         openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
         inidxexpr =  ",".join(["i%i"%ax for ax in xrange(x.ndim)])
@@ -1760,8 +1770,8 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
     %(closeloops)s
 }
 """%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops, 
-    inidxexpr=inidxexpr, cdtype=np2c[inputs[0].dtype])
-        return CImpl(code)
+    inidxexpr=inidxexpr, cdtype=np2c[input_types[0].dtype])
+        return NativeCompileInfo(code)
 
 
 
@@ -1790,11 +1800,11 @@ class Mul21(Op):
         return [cgt.size(inputs[0], 1 if self.tA else 0)]
     def typ_apply(self, input_types):
         return TensorType(input_types[0].dtype, 1)
-    def get_closure(self, inputs):
+    def get_closure(self):
         return [("tA",ctypes.c_bool, self.tA)]
     # gemv docs: https://software.intel.com/en-us/node/520750
-    def get_c_impl(self, inputs):
-        npdtype = inputs[0].dtype
+    def get_native_compile_info(self, input_types, devtype):
+        npdtype = input_types[0].dtype
         try:
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
         except KeyError:
@@ -1811,7 +1821,7 @@ CGT_EXPORT_C void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
       incx, beta, (%(cdtype)s*)y->data(), incy);
 }
 """%dict(letter=letter, cdtype = np2c[npdtype])
-        return CImpl(code, includes=["cblas.h"], link_flags="-lblas")
+        return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples = self.get_closure())
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
@@ -1869,11 +1879,11 @@ class Mul22(Op):
         # TODO put shape check somewhere else
         assert input_types[0].dtype==cgt.floatX and input_types[1].dtype==cgt.floatX
         return input_types[0]
-    def get_closure(self, inputs):
+    def get_closure(self):
         return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB)]
     # best gemm docs: https://software.intel.com/en-us/node/520775
-    def get_c_impl(self, inputs):
-        npdtype = inputs[0].dtype
+    def get_native_compile_info(self, input_types, devtype):
+        npdtype = input_types[0].dtype
         try:
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
         except KeyError:
@@ -1890,7 +1900,7 @@ CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
       ldb, beta, (%(cdtype)s*)C->data(), ldc);
 }
 """%dict(letter=letter, cdtype = np2c[npdtype])
-        return CImpl(code, includes=["cblas.h"], link_flags="-lblas")
+        return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples=self.get_closure())
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s%s"%(xexpr, u"\u1d57" if self.tA else "", yexpr, u"\u1d57" if self.tB else "")
     def __repr__(self):
@@ -2042,8 +2052,8 @@ class TupleIndex(Op):
         return intype[self.idx]
     def get_closure(self, _inputs):
         return [("idx",ctypes.c_int, self.idx)]
-    def get_c_impl(self, inputs):
-        return CImpl(code=r"""
+    def get_native_compile_info(self, input_types, devtype):
+        return NativeCompileInfo(func_code=r"""
 CGT_EXPORT_C cgtObject* $function($closure* cldata, cgtTuple** reads) {
     return reads[0]->getitem(cldata->idx);
 }""")
@@ -2539,47 +2549,60 @@ def get_cgt_src_root():
     osp = os.path
     return osp.dirname(osp.dirname(osp.realpath(__file__)))
 
+# ================================================================
+# Global config
+# ================================================================
+ 
 _CONFIG = None
-def load_config(force_reload = False):
-    osp = os.path
+def get_config(force_reload = False):
     global _CONFIG
     if _CONFIG is None or force_reload:
-        from thirdparty.configobj import ConfigObj
-        from thirdparty.validate import Validator
-        rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
-        specfilename = osp.join(get_cgt_src_root(), "cgtrc_spec.ini")
-        _CONFIG = ConfigObj(rcfileloc, configspec=specfilename)
-        val = Validator()
-        test = _CONFIG.validate(val,preserve_errors=True)
-        if test is not True:
-            for (k,v) in test.items():
-                if v is not True:
-                    utils.error("%s: %s in %s"%(k,v.message,rcfileloc))
-            raise ValueError
-        envflags = os.getenv("CGT_FLAGS")
-        if envflags:
-            pairs = envflags.split(",")
-            for pair in pairs:
-                lhs,rhs = pair.split("=")
-                assert lhs in _CONFIG
-                _CONFIG[lhs] = rhs
-        _CONFIG["default_device"] = Device()
+        _CONFIG = _load_config()
     return _CONFIG
-load_config()
+
+def _load_config():
+    from thirdparty.configobj import ConfigObj
+    from thirdparty.validate import Validator
+    rcfileloc = osp.join(osp.expanduser("~/.cgtrc"))
+    specfilename = osp.join(get_cgt_src_root(), "cgtrc_spec.ini")
+    config = ConfigObj(rcfileloc, configspec=specfilename)
+    val = Validator()
+    test = config.validate(val,preserve_errors=True)
+    if test is not True:
+        for (k,v) in test.items():
+            if v is not True:
+                utils.error("%s: %s in %s"%(k,v.message,rcfileloc))
+        raise ValueError
+    envflags = os.getenv("CGT_FLAGS")
+    if envflags:
+        pairs = envflags.split(",")
+        for pair in pairs:
+            lhs,rhs = pair.split("=")
+            assert lhs in config, "Unrecognized config option %s provided"%lhs
+            oldrhs = config[lhs]
+            config[lhs] = rhs
+            assert isinstance(rhs, (str,bool,int,float,list)), "You set %s=%s but rhs is invalid"%(lhs, rhs)
+            if isinstance(oldrhs, str): pass
+            elif isinstance(oldrhs, bool): config[lhs] = config.as_bool(lhs)
+            elif isinstance(oldrhs, int): config[lhs] = config.as_int(lhs)
+            elif isinstance(oldrhs, float): config[lhs] = config.as_float(lhs)
+            elif isinstance(oldrhs, list): config[lhs] = config.as_list(lhs)
+    config["default_device"] = Device()
+    return config
+
+_CONFIG = get_config()
 
 def reset_config():
-    global _CONFIG
-    _CONFIG = None
-    load_config()    
+    get_config(True)  
 
 def update_config(**kws):
-    config = load_config()
+    config = get_config()
     for (name,val) in kws.iteritems():
         config[name] = val
 
 class scoped_update_config(object):
     def __init__(self, **kw):
-        config = load_config()
+        config = get_config()
         self.prevsettings = {}
         self.delkeys = []
         for k in kw.iterkeys(): 
@@ -2591,6 +2614,6 @@ class scoped_update_config(object):
     def __enter__(self):
         return
     def __exit__(self, *args):
-        config = load_config()
+        config = get_config()
         config.update(self.prevsettings)
         for k in self.delkeys: del config[k]

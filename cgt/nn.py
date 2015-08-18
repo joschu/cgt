@@ -41,7 +41,7 @@ def setup_contiguous_storage(shareds):
     and return a view on that vector.
     This facilitates writing optimization code that acts on flat vectors.
     """
-    if core.load_config()["backend"]=="native":
+    if core.get_config()["backend"]=="native":
         utils.warn("setup_contiguous_storage is broken for backend=native. this will probably fail")
     dtype = cgt.floatX
     # assert utils.allsame([s.get_device() for s in shareds])

@@ -29,7 +29,7 @@ class CudnnConvForward(Op):
                 if (!closure->handle) setupConv(closure);
                 performConvForward(closure, reads[0], reads[1], reads[2], write);
             }"""
-        return NativeCompileInfo(self, len(input_types), "c++", code, closure_triples = make_closure(self.ph, self.pw, self.sv, self.sh),
+        return NativeCompileInfo(code, closure_triples = make_closure(self.ph, self.pw, self.sv, self.sh),
             includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart", gpu_deref_mask=(True,True,True,True))
     def shp_apply(self, inputs):
         X,W,_b = inputs
@@ -58,7 +58,7 @@ class CudnnConvBackwardData(Op):
                 if (!closure->handle) setupConv(closure);
                 performConvBackwardData(closure, reads[1], reads[2], write);
             }"""
-        return NativeCompileInfo(self, len(input_types), "c++", code, closure_triples = make_closure(self.ph, self.pw, self.sv, self.sh),
+        return NativeCompileInfo(code, closure_triples = make_closure(self.ph, self.pw, self.sv, self.sh),
             includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
@@ -78,7 +78,7 @@ class CudnnConvBackwardFilter(Op):
                 if (!closure->handle) setupConv(closure);
                 performConvBackwardFilter(closure, reads[1], reads[2], write);
             }"""
-        return NativeCompileInfo(self, len(input_types), "c++", code, closure_triples = make_closure(self.ph, self.pw, self.sv, self.sh),
+        return NativeCompileInfo(code, closure_triples = make_closure(self.ph, self.pw, self.sv, self.sh),
             includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
@@ -98,7 +98,7 @@ class CudnnConvBackwardBias(Op):
                 if (!closure->handle) setupConv(closure);
                 performConvBackwardBias(closure, reads[1], write);
             }"""
-        return NativeCompileInfo(self, len(input_types), "c++", code, closure_triples = make_closure(self.ph, self.pw, self.sv, self.sh),
+        return NativeCompileInfo(code, closure_triples = make_closure(self.ph, self.pw, self.sv, self.sh),
             includes=["cudnn_support.h"], link_flags="-lcudnn -lcudart")            
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])

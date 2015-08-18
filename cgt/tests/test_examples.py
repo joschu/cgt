@@ -1,7 +1,7 @@
 import subprocess, os.path as osp
 cmds = [
-"CGT_FLAGS=backend=python python %s/../../examples/mnist_newmu.py --test"%osp.dirname(__file__),
-"CGT_FLAGS=backend=native python %s/../../examples/mnist_newmu.py --test"%osp.dirname(__file__)
+"CGT_FLAGS=backend=python python %s/../../examples/demo_mnist.py --test"%osp.dirname(__file__),
+"CGT_FLAGS=backend=native python %s/../../examples/demo_mnist.py --test"%osp.dirname(__file__)
 ]
 
 
