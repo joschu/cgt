@@ -310,6 +310,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--grad_check",action="store_true")
+    parser.add_argument("--n_batches",type=int,default=1000000)
+    parser.add_argument("--profile",action="store_true")
     args = parser.parse_args()
     np.seterr("raise")
 
@@ -378,15 +380,19 @@ def main():
         return
 
     seq_num = 0
-    state = make_rmsprop_state(th, .01, .95)
-    print fmt_row(13, ["seq num", "CE (bits)", "0-1 loss", "|g|_inf"], header=True)
-    while True:
+    state = make_rmsprop_state(th, .003, .95)
+    print fmt_row(13, ["seq num", "CE (bits)", "accuracy", "|g|_inf"], header=True)
+    
+    if args.profile: cgt.profiler.start()
+    
+    for i in xrange(args.n_batches):
         x,y = task.gen_batch()
         seq_num += x.shape[1]
         l,l01,g = f_loss_and_grad(x,y)
         print fmt_row(13, [seq_num, l,l01,np.abs(g).max()])
         rmsprop_update(g, state)        
-
+    
+    if args.profile: cgt.profiler.print_stats()
 
     
 

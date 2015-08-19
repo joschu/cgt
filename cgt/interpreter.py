@@ -135,15 +135,22 @@ class _Profiler(object):
         self.t_total += elapsed
     def print_stats(self):
         op2stats = {}
+        from cgt.execution import ReturnByRef,ReturnByVal,Alloc
         # Collapse by Op, rather than instruction
         for (instr,(count,t)) in self.instr2stats.iteritems():
-            opkey = str(instr) # XXX
+            if isinstance(instr, (ReturnByRef, ReturnByVal)):
+                opkey = str(instr.op)
+            elif isinstance(instr, Alloc):
+                opkey = "Alloc{dtype=%s,ndim=%i}"%(instr.dtype, len(instr.read_locs))
+            else:
+                opkey = instr.__class__.__name__
+
             (prevcount, prevtime) = op2stats.get(opkey, (0, 0.0))
             op2stats[opkey] = (prevcount+count, prevtime+t)
 
         print "Total time elapsed: %.3g seconds"%self.t_total
-        _print_heading("By instruction")
-        _print_stats(self.instr2stats, self.t_total)
+        # _print_heading("By instruction")
+        # _print_stats(self.instr2stats, self.t_total)
         _print_heading("By Op")
         _print_stats(op2stats, self.t_total)
     def clear_stats(self):

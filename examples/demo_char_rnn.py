@@ -1,6 +1,6 @@
 from __future__ import division
 import cgt
-from cgt import nn, utils
+from cgt import nn, utils, profiler
 import numpy as np, numpy.random as nr
 import os.path as osp
 import argparse
@@ -258,7 +258,7 @@ def main():
     network, f_loss, f_loss_and_grad, f_step = make_loss_and_grad_and_step(opt.arch, loader.size_vocab, 
         loader.size_vocab, opt.size_mem, opt.size_batch, opt.n_layers, opt.n_unroll)
 
-    if opt.profile: cgt.execution.profiler.start()
+    if opt.profile: profiler.start()
 
     params = network.get_parameters()
     th = nn.setup_contiguous_storage(params)
@@ -304,7 +304,7 @@ def main():
 
         sample(f_step, initialize_hiddens(1), char2ind =loader.char2ind, n_steps=1000, temp=1.0, seed_text = "")
 
-    if opt.profile: cgt.execution.profiler.print_stats()
+    if opt.profile: profiler.print_stats()
 
 if __name__ == "__main__":
     main()
