@@ -4,8 +4,6 @@ Python implementation of interpreter for execution graph
 The parallel interpreter is mostly for prototyping/experimental purposes
 """
 
-import multiprocessing
-from multiprocessing.pool import ThreadPool
 from . import core
 import time, numpy as np
 
@@ -54,72 +52,9 @@ class SequentialInterpreter(Interpreter):
     def getarg(self, i):
         return self.args[i]
 
-# class ParallelInterpreter(Interpreter):
-#     """
-#     Runs an execution graph in parallel using Python threads
-#     """
-#     def __init__(self, eg, output_locs, input_types, copy_outputs=True):
-#         self.eg = eg
-#         self.input_types = input_types
-#         self.output_locs = output_locs
-#         self.storage = [None for _ in xrange(self.eg.n_locs)]
-#         self.args = None
-#         self.copy_outputs = copy_outputs
-#         # XXX may want to specify max threads different way
-#         self.pool = ThreadPool(multiprocessing.cpu_count())
-#     def __call__(self, *args):
-#         self.args = tuple(core.as_valid_arg(arg) for arg in args)
-#         typecheck_args(self.args, self.input_types)
-#         self.instrs_left = set(xrange(len(self.eg.instrs)))
-#         # XXX removed profiler
-#         self.setup_instr_locs()
-#         while self.instrs_left:
-#             self.pool.map(lambda instr: instr.fire(self),
-#                     [self.eg.instrs[k] for k in self.ready_instr_inds])
-#             for instr_ind in self.ready_instr_inds:
-#                 instr = self.eg.instrs[instr_ind]
-#                 self.write_queue[instr.write_loc.index].pop(0)
-#                 self.instrs_left.remove(instr_ind)
-#             self.update_instr_locs()
-#         outputs = [self.get(loc) for loc in self.output_locs]
-#         if self.copy_outputs: outputs = map(_copy, outputs)
-#         return outputs
-#         # need to copy because otherwise we might mess up the data when we call func again
-#         # todo: add option that prevents this behavior
-#     def get(self, mem):
-#         return self.storage[mem.index]
-#     def set(self, mem, val):
-#         self.storage[mem.index] = val
-#     def getarg(self, i):
-#         return self.args[i]
-#     def apply_inplace(self, node, reads, write):
-#         self.oplib.py_apply_inplace(node, reads, write)
-#     def apply_valret(self, node, reads):
-#         return self.oplib.py_apply_valret(node, reads)
-#     def setup_instr_locs(self):
-#         # instructions which write to location, fifo
-#         self.write_queue = [list() for _ in xrange(self.eg.n_locs)]
-#         for k in xrange(len(self.eg.instrs)):
-#             instr = self.eg.instrs[k]
-#             self.write_queue[instr.write_loc.index].append(k)
-#         self.update_instr_locs()
-#     def update_instr_locs(self):
-#         self.ready_instr_inds = list()
-#         for k in self.instrs_left:
-#             if self.ready_to_fire(k):
-#                 self.ready_instr_inds.append(k)
-#     def ready_to_fire(self, instr_ind):
-#         instr = self.eg.instrs[instr_ind]
-#         read_rdy = True
-#         for read_loc in instr.read_locs:
-#             for k in self.write_queue[read_loc.index]:
-#                 if k < instr_ind:
-#                     read_rdy = False
-#         write_rdy = self.write_queue[instr.write_loc.index][0] == instr_ind
-#         return read_rdy and write_rdy
 
 ################################################################
-### 
+### Profiler
 ################################################################
  
 class _Profiler(object):

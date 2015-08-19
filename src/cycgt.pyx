@@ -12,7 +12,7 @@ import traceback
 
 
 import cgt
-from cgt import core, execution
+from cgt import core, compilation
 
 cnp.import_array()
 
@@ -344,15 +344,15 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     t = type(pyinstr)
     cdef Instruction* out
     cdef MemLocation wloc = _tocppmem(pyinstr.write_loc)
-    if t == execution.LoadArgument:
+    if t == compilation.LoadArgument:
         out = new LoadArgument(repr(pyinstr), pyinstr.ind, wloc)
-    elif t == execution.Alloc:
+    elif t == compilation.Alloc:
         out = new Alloc(repr(pyinstr), dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), wloc)
-    elif t == execution.BuildTup:
+    elif t == compilation.BuildTup:
         out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
-    elif t == execution.ReturnByRef:
+    elif t == compilation.ReturnByRef:
         out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
-    elif t == execution.ReturnByVal:
+    elif t == compilation.ReturnByVal:
         out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
@@ -425,7 +425,7 @@ cdef class CppInterpreterWrapper:
     def __call__(self, *pyargs):
         assert len(pyargs) == len(self.input_types)
         pyargs = tuple(core.as_valid_array(arg,typ) for (arg,typ) in zip(pyargs,self.input_types)) 
-        # execution.typecheck_args(pyargs, self.input_types)
+        # compilation.typecheck_args(pyargs, self.input_types)
 
         # TODO: much better type checking on inputs
         cdef cgtTuple* cargs = new cgtTuple(len(pyargs))

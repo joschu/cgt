@@ -138,9 +138,5 @@ def main():
         assert np.allclose(nugrad, angrad)
 
 
-
-
-    # todo numeric grad check
-
 if __name__ == "__main__":
     main()

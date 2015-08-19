@@ -2121,7 +2121,7 @@ class Composition(Op):
         return self._diff
     def get_py_func(self, input_types):
         # TODO testme
-        f = cgt.execution.function(self._inputs, self._outputs)
+        f = cgt.compilation.function(self._inputs, self._outputs)
         def py_impl(num_inputs):
             return tuple(f(num_inputs))
         return py_impl
@@ -2191,6 +2191,9 @@ def unpack(tup):
 
 # Assertion and debug operations
 # ----------------------------------------------------------------
+
+# XXX currently not being used / tested anywhere
+
 class Assertion(Op):
     """
     Assertion gets evaluated when the graph is executed, and it prints out a stack trace on failure
@@ -2257,11 +2260,6 @@ class debug_context(object):
         return self
     def __exit__(self, *_args):
         debug_context.global_context = None
-
-
-# ================================================================
-# Funcs wrapping ops (numpy-like)
-# ================================================================
 
 # ================================================================
 # Graph Optimization
@@ -2407,7 +2405,7 @@ def maybe_replace(node, analysis, repl):
     # ASSUMPTION: the only type of nullary ops that we can propagate this way
     # are subclasses of Constant
     if len(parents) > 0 and all(isinstance(par.op, Constant) for par in parents):
-        c = cgt.execution.get_callable(node.op, [par.typ for par in parents], "cpu", True)
+        c = cgt.compilation.get_callable(node.op, [par.typ for par in parents], "cpu", True)
         try:
             out = cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
             if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
@@ -2627,7 +2625,7 @@ def get_numeric_shape_fun(node):
 def py_numeric_apply(node, vals):
     try:
         # py_func = node.op.get_py_func(node.parents)
-        callable = cgt.execution.get_callable(node.op, [par.typ for par in node.parents],"cpu", True)
+        callable = cgt.compilation.get_callable(node.op, [par.typ for par in node.parents],"cpu", True)
 
     except MethodNotDefined:
         print 'Op %s has no Python implementation' % repr(node.op)
