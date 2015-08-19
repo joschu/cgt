@@ -3,6 +3,7 @@
 #include <queue>
 #include <set>
 #include <vector>
+#include "util/ThreadPool.h"
 
 namespace cgt {
 
@@ -59,8 +60,10 @@ private:
 class ParallelInterpreter: public Interpreter {
 public:
     ParallelInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs)
-    : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL), write_queue_(eg->n_locs()) {
-
+    : eg_(eg), output_locs_(output_locs), storage_(eg->n_locs()), args_(NULL),
+      write_queue_(eg->n_locs()), read_queue_(eg->n_locs()),
+      pool(int(std::thread::hardware_concurrency()) - 1) {
+        printf("Using %d threads\n", int(std::thread::hardware_concurrency()) - 1);
     }
 
     cgtObject * get(const MemLocation& m) {
@@ -74,9 +77,23 @@ public:
         return args_->members[argind].get();
     }
 
-    static void fire_instr(Instruction* instr, Interpreter* interp)
+    static void fire_instr(ParallelInterpreter* interp, int instr_ind)
     {
-        instr->fire(interp);
+        interp->_fire_instr(instr_ind);
+    }
+
+    void _fire_instr(int instr_ind)
+    {
+        Instruction* instr = eg_->instrs()[instr_ind];
+        //printf("instr %d added: %s\n", instr_ind, instr->repr().c_str());
+        instr->fire(this);
+        //printf("instr %d fired\n", instr_ind);
+
+        int write_ind = instr->get_writeloc().index();
+        pmutex.lock();
+        write_queue_[write_ind].erase(write_queue_[write_ind].begin());
+        update(write_ind);
+        pmutex.unlock();
     }
 
     cgtTuple * run(cgtTuple * newargs) {
@@ -84,22 +101,17 @@ public:
         cgt_assert(newargs != NULL);
         cgt_assert(newargs->len == eg_->n_args());
 
-        setup_instr_locs();
-        while (instrs_left_.size() > 0) {
-            const int nthreads = ready_instr_inds_.size();
-            // XXX use thread pool
-            std::vector<std::thread> instr_threads(nthreads);
-            int j = 0;
-            for (int instr_ind : ready_instr_inds_) {
-                Instruction* instr = eg_->instrs()[instr_ind];
-                instr_threads[j] = std::thread(fire_instr, instr, this);
-                int ind = instr->get_writeloc().index();
-                write_queue_[ind].erase(write_queue_[ind].begin());
-                j++;
+        setup();
+
+        while (fired_.size() < eg_->n_instrs()) {
+            if (ready_instr_inds_.size() > 0)
+            {
+                pmutex.lock();
+                int instr_ind = ready_instr_inds_.front();
+                pool.enqueue(fire_instr, this, instr_ind);
+                ready_instr_inds_.pop();
+                pmutex.unlock();
             }
-            for (int k = 0; k < instr_threads.size(); k++)
-                instr_threads[k].join();
-            update_instr_locs();
         }
 
         args_ = NULL;
@@ -110,32 +122,42 @@ public:
             out->setitem(i, get(output_locs_[i]));
         }
         return out;
-        // todo actually do something with outputs
     }
-    void setup_instr_locs() {
+    void setup() {
+        fired_.clear();
+        for (int k=0; k < eg_->n_locs(); k++) {
+            read_queue_[k].clear();
+            write_queue_[k].clear();
+        }
         for (int k=0; k < eg_->n_instrs(); k++) {
+            for (const MemLocation& memloc: eg_->instrs()[k]->get_readlocs())
+                read_queue_[memloc.index()].push_back(k);
             write_queue_[eg_->instrs()[k]->get_writeloc().index()].push_back(k);
-            instrs_left_.insert(k);
         }
-        update_instr_locs();
-    }
-    void update_instr_locs() {
-        for (int instr_ind : ready_instr_inds_) {
-            instrs_left_.erase(instr_ind);
-        }
-        ready_instr_inds_.clear();
-        for (int instr_ind : instrs_left_) {
-            if (ready_to_fire(instr_ind)) {
-                ready_instr_inds_.push_back(instr_ind);
+        for (int k=0; k < eg_->n_instrs(); k++) {
+            if (ready_to_fire(k)) {
+                ready_instr_inds_.push(k);
+                fired_.insert(k);
             }
         }
-        //printf("ready_instrs: %d\n", int(ready_instr_inds_.size()));
-        for (int k : ready_instr_inds_) {
-            Instruction* instr = eg_->instrs()[k];
-            //printf("%s ", instr->repr().c_str());
+    }
+    void update(int write_ind) {
+        for (int instr_ind : read_queue_[write_ind]) {
+            if (ready_to_fire(instr_ind)) {
+                ready_instr_inds_.push(instr_ind);
+                fired_.insert(instr_ind);
+            }
+        }
+        for (int instr_ind : write_queue_[write_ind]) {
+            if (ready_to_fire(instr_ind)) {
+                ready_instr_inds_.push(instr_ind);
+                fired_.insert(instr_ind);
+            }
         }
     }
     bool ready_to_fire(int instr_ind) {
+        if (fired_.find(instr_ind) != fired_.end())
+            return false;
         Instruction* instr = eg_->instrs()[instr_ind];
         bool read_rdy = true;
         for (const MemLocation& loc : instr->get_readlocs()) {
@@ -152,9 +174,13 @@ private:
     ExecutionGraph* eg_;
     vector<MemLocation> output_locs_;
     vector<IRC<cgtObject>> storage_;
-    std::set<int> instrs_left_;
-    vector<int> ready_instr_inds_;
-    vector<std::vector<int> > write_queue_;
+
+    ThreadPool pool;
+    std::mutex pmutex;
+    std::set<int> fired_;
+    std::queue<int> ready_instr_inds_;
+    std::vector<std::vector<int> > write_queue_;
+    std::vector<std::vector<int> > read_queue_;
     cgtTuple * args_;
 };
 
