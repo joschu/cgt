@@ -1,0 +1,5 @@
+https://github.com/Newmu/Theano-Tutorials
+
+http://deeplearning.net/tutorial/
+
+https://github.com/torch/tutorials
