@@ -26,7 +26,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 
 # set(CMAKE_C_STANDARD 99)
 list( APPEND CMAKE_C_FLAGS "-std=c99")
-list( APPEND CMAKE_CXX_FLAGS "-std=c++11 -stdlib=libc++")
+if(APPLE)
+  list( APPEND CMAKE_CXX_FLAGS "-std=c++11 -stdlib=libc++")
+else()
+  list( APPEND CMAKE_CXX_FLAGS "-std=c++11")
+endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/4build/cmake)
 
