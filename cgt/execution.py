@@ -234,9 +234,11 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
     return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
 
 
-def get_callable(op, input_types, devtype):
+def get_callable(op, input_types, devtype, prefer_python=False):
+    if prefer_python: return op.get_py_callable(input_types)
     assert op.available_impls, "need to set op.available_impls"
     if get_config()["backend"] == "python" and "python" in op.available_impls or devtype=="cpu" and "native_cpu" not in op.available_impls:
+        if get_config()["backend"] == "native": print "using python impl for",op
         return op.get_py_callable(input_types)
     else:
         nci = op.get_native_compile_info(input_types, devtype)

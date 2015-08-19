@@ -913,7 +913,7 @@ class Arange(Op):
     """
     (start,stop,step) -> 1D array, just like numpy
     """
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     call_type="byval"
     def __init__(self, dtype='i8'):
         self.dtype = dtype
@@ -931,6 +931,18 @@ class Arange(Op):
     def typ_apply(self, input_types):
         assert _list_is_valid_sli(input_types)
         return TensorType(self.dtype, 1)
+    def get_native_compile_info(self, input_types, devtype):
+        func_code=r"""
+            CGT_EXPORT_C cgtArray* $function(void* cldata, cgtArray** reads) {
+                size_t start=reads[0]->at<size_t>(0),
+                       stop=reads[1]->at<size_t>(0),
+                       step=reads[2]->at<size_t>(0);
+                size_t size = (stop-start)/step;
+                cgtArray* out = new cgtArray(1, &size, cgt_i8, cgtCPU);
+                for (int i=0; i < size; ++i) out->at<size_t>(i) = start+i*step;
+                return out;
+            }"""
+        return NativeCompileInfo(func_code=func_code)
 
 class ScalarRng(Op):
     """
@@ -956,6 +968,18 @@ class ScalarRng(Op):
         return inputs
     def typ_apply(self, input_types):
         return TensorType(cgt.floatX, len(input_types))
+    def get_native_compile_info(self, input_types, devtype):
+        func_code=r"""
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                size_t start=reads[0]->at<size_t>(0),
+                       stop=reads[1]->at<size_t>(0),
+                       step=reads[2]->at<size_t>(0);
+                size_t size = (stop-start)/step;
+                cgtArray* out = new cgtArray(1, &size, cgt_i8, cgtCPU);
+                for (int i=0; i < size; ++i) out->at<size_t>(i) = start+i*step;
+                return out;
+            }"""
+        return NativeCompileInfo(func_code=func_code)
 
 # Elementwise
 # ----------------------------------------------------------------
@@ -1246,7 +1270,7 @@ class Size(Op):
     Return an element of the shape of a tensor
     """
     call_type = "byval"
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
@@ -1269,9 +1293,9 @@ class Size(Op):
             fixed_shape = x.get_fixed_shape()
             if fixed_shape[self.axis] is not None:
                 return cgt.constant(fixed_shape[self.axis])
-    def get_closure(self, inputs):
+    def get_closure(self):
         return [("ax",ctypes.c_int,self.axis)]
-    def get_native_compile_info(self, _):
+    def get_native_compile_info(self, input_types, devtype):
         code = r"""
 CGT_EXPORT_C cgtArray* $function(void* cl0, cgtArray** reads) {
 $closure* cl = ($closure*)cl0;
@@ -1280,10 +1304,10 @@ $closure* cl = ($closure*)cl0;
     ((long*)out->data())[0] = in->shape()[cl->ax];
     return out;
 }"""
-        return NativeCompileInfo(code)
+        return NativeCompileInfo(code,closure_triples = self.get_closure())
 
 class Reshape(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     call_type = "byval"
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
@@ -1299,9 +1323,9 @@ class Reshape(Op):
         return inputs[1:]
     def typ_apply(self, input_types):
         return TensorType(input_types[0].dtype, len(input_types)-1)
-    def get_closure(self, parents):
-        return [("ndim", ctypes.c_int,len(parents)-1)]
-    def get_native_compile_info(self, _):
+    def get_closure(self, n_parents):
+        return [("ndim", ctypes.c_int,n_parents-1)]
+    def get_native_compile_info(self, input_types, devtype):
         code = r"""
 CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
     cgtArray* in = reads[0];
@@ -1311,7 +1335,7 @@ CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
     return out;
 }
 """
-        return NativeCompileInfo(code)
+        return NativeCompileInfo(code, closure_triples=self.get_closure(len(input_types)))
 
 class Concatenate(Op):
     available_impls = ("python",)        
@@ -1355,7 +1379,7 @@ class Stack(Op):
         return TensorType(input_types[0].dtype, input_types[0].ndim+1)
 
 class Repeat(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, num_inputs):
@@ -1403,7 +1427,7 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         return input_types[0]
 
 class Transpose(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, _):
@@ -1451,12 +1475,12 @@ class Transport(Op):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
         code = r"""
-CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgt_assert(write->devtype() != reads[0]->devtype());
-    cgt_assert(write->data() != reads[0]->data());
-    cgt_memcpy(write->devtype(), reads[0]->devtype(), write->data(), reads[0]->data(), reads[0]->nbytes());
-}
-"""
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                cgt_assert(write->devtype() != reads[0]->devtype());
+                cgt_assert(write->data() != reads[0]->data());
+                cgt_memcpy(write->devtype(), reads[0]->devtype(), write->data(), reads[0]->data(), reads[0]->nbytes());
+            }
+            """
         return NativeCompileInfo(code)
 
 # TODO save computation by removing negative freq components
@@ -1508,8 +1532,31 @@ class IRFFT(Op):
 # Reductions
 # ----------------------------------------------------------------
 
+def gen_reduction_code(dtype, axes, ndim, reduction_expr, initval):
+    openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(ndim)])
+    closeloops = "}"*ndim
+    inidxexpr = ",".join(["i"+str(i) for i in xrange(ndim)])
+    outidxexpr = ",".join(["0" if i in axes else  "i"+str(i) for i in xrange(ndim)])
+    d = dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
+            cdtype=np2c[dtype])
+    reduction_expr %= d
+    initval %= d
+    d["reduction_expr"] = reduction_expr
+    d["initval"] = initval
+    return r"""
+        static inline %(cdtype)s reduction_$function(%(cdtype)s x, %(cdtype)s y) {return %(reduction_expr)s;}
+        CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+            cgtArray *read=reads[0];
+            for (int i=0; i < write->size(); ++i) write->at<%(cdtype)s>(i) = %(initval)s;
+            %(openloops)s
+                %(cdtype)s x = write->at<%(cdtype)s>(%(outidxexpr)s); 
+                %(cdtype)s y = read->at<%(cdtype)s>(%(inidxexpr)s) ;
+                write->at<%(cdtype)s>(%(outidxexpr)s) = reduction_$function(x, y);
+            %(closeloops)s
+        }
+        """%d
 class Sum(Op):
-    available_impls = ("python",)
+    available_impls = ("python","native_cpu")
     def __init__(self, axes):
         self.axes = tuple(axes)
     def get_diff(self, _):
@@ -1528,28 +1575,12 @@ class Sum(Op):
         return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
     def typ_apply(self, input_types):
         return input_types[0]
-    def get_native_compile_info(self, input_types, devtype):
-        x = input_types[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
-        closeloops = "}"*x.ndim
-        outdims = [i for i in xrange(x.ndim) if i not in self.axes]
-        inidxexpr = " + ".join(["i%(ax)s * read->stride(%(ax)s)"%dict(ax=ax) for ax in xrange(x.ndim)])
-        outidxexpr = " + ".join(["i%(ax)s * write->stride(%(ax)s)"%dict(ax=ax) for ax in outdims])\
-            if len(outdims)>0 else "0"
-        code = r"""
-CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray *read=reads[0];
-    memset(write->data(), 0, write->nbytes());
-    %(openloops)s
-        ((%(cdtype)s*)write->data())[%(outidxexpr)s] += ((%(cdtype)s*)read->data())[%(inidxexpr)s];
-    %(closeloops)s
-}
-"""%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
-    cdtype=np2c[input_types[0].dtype])
+    def get_native_compile_info(self, input_types, devtype):        
+        code = gen_reduction_code(input_types[0].dtype, self.axes, input_types[0].ndim, "x+y","0")
         return NativeCompileInfo(code, includes=["string.h"])
 
 class Max(Op):
-    available_impls = ("python",)    
+    available_impls = ("python","native_cpu")    
     def __init__(self, axes):
         self.axes = tuple(axes)
     def get_diff(self, _):
@@ -1573,6 +1604,10 @@ class Max(Op):
         return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
     def typ_apply(self, input_types):
         return input_types[0]
+    # ALMOST VERBATIM COPIED FROM SUM, EXCEPT FOR ONE LINE OF CODE
+    def get_native_compile_info(self, input_types, devtype):
+        code = gen_reduction_code(input_types[0].dtype, self.axes, input_types[0].ndim, "fmax(x,y)", "-std::numeric_limits<%(cdtype)s>::max()")
+        return NativeCompileInfo(code, includes=["string.h","limits","math.h"])
 
 class Argmax(Op):
     available_impls = ("python",)    
@@ -1604,7 +1639,7 @@ class Argmax(Op):
 # ----------------------------------------------------------------
 
 class GetSli(Op):
-    available_impls = ("python",)
+    available_impls = ("python","native_cpu")
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
@@ -1640,20 +1675,20 @@ class GetSli(Op):
         inidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
 
         code = r"""
-CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray *in=reads[0];
-    size_t start = reads[1]->at<size_t>(0);
-    size_t step = reads[3]->at<size_t>(0);
-    %(openloops)s
-        write->at<%(cdtype)s>(%(outidxexpr)s) = in->at<%(cdtype)s>(%(inidxexpr)s);
-    %(closeloops)s
-}
-"""%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                cgtArray *in=reads[0];
+                size_t start = reads[1]->at<size_t>(0);
+                size_t step = reads[3]->at<size_t>(0);
+                %(openloops)s
+                    write->at<%(cdtype)s>(%(outidxexpr)s) = in->at<%(cdtype)s>(%(inidxexpr)s);
+                %(closeloops)s
+            }
+            """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
     cdtype=np2c[input_types[0].dtype])
-        return NativeCompileInfo(code, closure_triples = self.get_closure())
+        return NativeCompileInfo(code)
 
 class IncSli(Op):
-    available_impls = ("python",)
+    available_impls = ("python","native_cpu")
     writes_to_input = 0
     def __init__(self, axis):
         self.axis = axis
@@ -1688,22 +1723,22 @@ class IncSli(Op):
         incidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
 
         code = r"""
-CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray *in=reads[0], *inc = reads[4], *out=write;
-    long start = reads[1]->at<size_t>(0);
-    long step = reads[3]->at<size_t>(0);
-    cgt_assert(in->size() == out->size());
-    if (out->data() != in->data()) cgt_memcpy(cgtCPU, cgtCPU, out, in, out->nbytes());
-    %(openloops)s
-        write->at<%(cdtype)s>(%(outidxexpr)s) += inc->at<%(cdtype)s>(%(incidxexpr)s);
-    %(closeloops)s
-}
-"""%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops,
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                cgtArray *in=reads[0], *inc = reads[4], *out=write;
+                long start = reads[1]->at<size_t>(0);
+                long step = reads[3]->at<size_t>(0);
+                cgt_assert(in->size() == out->size());
+                if (out->data() != in->data()) cgt_memcpy(cgtCPU, cgtCPU, out, in, out->nbytes());
+                %(openloops)s
+                    write->at<%(cdtype)s>(%(outidxexpr)s) += inc->at<%(cdtype)s>(%(incidxexpr)s);
+                %(closeloops)s
+            }
+            """%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops,
     cdtype=np2c[input_types[0].dtype], incidxexpr=incidxexpr)
         return NativeCompileInfo(code)
 
 class GetFlatIndices(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def get_diff(self, _):
         return [True,False]
     def get_py_func(self, input_types):
@@ -1719,24 +1754,50 @@ class GetFlatIndices(Op):
     def typ_apply(self, inputs):
         assert inputs[1].ndim == 1 and dtype_kind(inputs[1].dtype) == 'i'
         return TensorType(inputs[0].dtype,1)
+    def get_native_compile_info(self, input_types, devtype):
+        npdtype = input_types[0].dtype
+        code = r"""
+            CGT_EXPORT_C void $function(void**, cgtArray** xk, cgtArray* z) {
+                cgtArray *x=xk[0], *k=xk[1];
+                for (int i=0; i < z->size(); ++i) {
+                    z->at<%(cdtype)s>(i) = x->at<%(cdtype)s>(k->at<size_t>(i));
+                }
+            }
+            """%dict(cdtype = np2c[npdtype])    
+        return NativeCompileInfo(code)
 
 class IncFlatIndices(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     writes_to_input = 0
     def get_diff(self, _):
         return [True,False,True]
     def get_py_func(self, input_types):
         def f(reads, write):
             x,inds,y = reads
+            if x.data != write.data:
+                utils.warn("incsli not inplace!")
+                np.copyto(write, x)
             write.flat[inds] += y # XXX
         return f
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, input_types):
         return input_types[0]
+    def get_native_compile_info(self, input_types, devtype):
+        npdtype = input_types[0].dtype
+        code = r"""
+            CGT_EXPORT_C void $function(void**, cgtArray** xkp, cgtArray* write) {
+                cgtArray *x=xkp[0], *k=xkp[1], *p=xkp[2];
+                if (write->data() != x->data()) cgt_memcpy(cgtCPU, cgtCPU, write, x, write->nbytes());            
+                for (int i=0; i < p->size(); ++i) {
+                    write->at<%(cdtype)s>(k->at<size_t>(i)) += p->at<%(cdtype)s>(i);
+                }
+            }
+            """%dict(cdtype = np2c[npdtype])    
+        return NativeCompileInfo(code)
 
 class Flip(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, _):
@@ -1761,15 +1822,15 @@ class Flip(Op):
         inidxexpr =  ",".join(["i%i"%ax for ax in xrange(x.ndim)])
         outidxexpr =  ",".join([("shape[%(ax)s] - 1 - i%(ax)s" if ax in self.axes else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
         code = r"""
-CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray *in=reads[0], *out=write;
-    cgt_assert(in->size() == out->size());
-    const size_t* shape = in->shape();
-    %(openloops)s
-        out->at<%(cdtype)s>(%(outidxexpr)s) = in->at<%(cdtype)s>(%(inidxexpr)s);
-    %(closeloops)s
-}
-"""%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops, 
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                cgtArray *in=reads[0], *out=write;
+                cgt_assert(in->size() == out->size());
+                const size_t* shape = in->shape();
+                %(openloops)s
+                    out->at<%(cdtype)s>(%(outidxexpr)s) = in->at<%(cdtype)s>(%(inidxexpr)s);
+                %(closeloops)s
+            }
+            """%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops, 
     inidxexpr=inidxexpr, cdtype=np2c[input_types[0].dtype])
         return NativeCompileInfo(code)
 
@@ -1780,7 +1841,7 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
 
 
 class Mul21(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def __init__(self, tA):
         self.tA = tA
     def get_py_func(self, input_types):
@@ -1810,23 +1871,23 @@ class Mul21(Op):
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         code = r"""
-CGT_EXPORT_C void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
-    cgtArray *A=Ax[0], *x=Ax[1];
-    int lda = A->shape()[1];
-    int M = A->shape()[0];
-    int N = A->shape()[1];
-    const %(cdtype)s alpha=1, beta=0;
-    int incx = 1, incy = 1;
-  cblas_%(letter)sgemv(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), M, N, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
-      incx, beta, (%(cdtype)s*)y->data(), incy);
-}
-"""%dict(letter=letter, cdtype = np2c[npdtype])
+            CGT_EXPORT_C void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
+                cgtArray *A=Ax[0], *x=Ax[1];
+                int lda = A->shape()[1];
+                int M = A->shape()[0];
+                int N = A->shape()[1];
+                const %(cdtype)s alpha=1, beta=0;
+                int incx = 1, incy = 1;
+              cblas_%(letter)sgemv(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), M, N, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
+                  incx, beta, (%(cdtype)s*)y->data(), incy);
+            }
+            """%dict(letter=letter, cdtype = np2c[npdtype])
         return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples = self.get_closure())
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
 class Mul22(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
@@ -1889,17 +1950,17 @@ class Mul22(Op):
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
         code = r"""
-CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
-    cgtArray *A=AB[0], *B=AB[1];
-    int lda = A->shape()[1], ldb = B->shape()[1], ldc = C->shape()[1];
-    int M = C->shape()[0];
-    int N = C->shape()[1];
-    int K = A->shape()[cl->tA ? 0 : 1];
-    const %(cdtype)s alpha=1, beta=0;
-  cblas_%(letter)sgemm(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), (CBLAS_TRANSPOSE)(cl->tB + 111), M, N, K, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)B->data(),
-      ldb, beta, (%(cdtype)s*)C->data(), ldc);
-}
-"""%dict(letter=letter, cdtype = np2c[npdtype])
+            CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
+                cgtArray *A=AB[0], *B=AB[1];
+                int lda = A->shape()[1], ldb = B->shape()[1], ldc = C->shape()[1];
+                int M = C->shape()[0];
+                int N = C->shape()[1];
+                int K = A->shape()[cl->tA ? 0 : 1];
+                const %(cdtype)s alpha=1, beta=0;
+              cblas_%(letter)sgemm(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), (CBLAS_TRANSPOSE)(cl->tB + 111), M, N, K, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)B->data(),
+                  ldb, beta, (%(cdtype)s*)C->data(), ldc);
+            }
+            """%dict(letter=letter, cdtype = np2c[npdtype])
         return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples=self.get_closure())
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s%s"%(xexpr, u"\u1d57" if self.tA else "", yexpr, u"\u1d57" if self.tB else "")
@@ -1907,7 +1968,7 @@ CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
         return "Mul22{%s,%s}"%("T" if self.tA else "N", "T" if self.tB else "N")
 
 class BatchedMul22(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
@@ -1938,9 +1999,35 @@ class BatchedMul22(Op):
     def typ_apply(self, input_types):
         # assert inputs[0].dtype==cgt.floatX and inputs[1].dtype==cgt.floatX
         return input_types[0]
+    def get_closure(self):
+        return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB)]        
+    # <COPIED FROM Mul22> but incremented all dimensions
+    def get_native_compile_info(self, input_types, devtype):
+        npdtype = input_types[0].dtype
+        try:
+            letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
+        except KeyError:
+            raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
+        code = r"""
+            CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
+                cgtArray *A=AB[0], *B=AB[1];
+                int P = A->shape()[0];
+                int lda = A->shape()[1+1], ldb = B->shape()[1+1], ldc = C->shape()[1+1];
+                int M = C->shape()[1+0];
+                int N = C->shape()[1+1];
+                int K = A->shape()[1+(cl->tA ? 0 : 1)];
+                const %(cdtype)s alpha=1, beta=0;
+              for (int i=0; i < P; ++i) {
+                  cblas_%(letter)sgemm(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), (CBLAS_TRANSPOSE)(cl->tB + 111), M, N, K, alpha, (%(cdtype)s*)A->data()+i*A->stride(0), lda, 
+                    (%(cdtype)s*)B->data()+i*B->stride(0), ldb, beta, (%(cdtype)s*)C->data()+ i*C->stride(0), ldc);  
+              }
+            }
+            """%dict(letter=letter, cdtype = np2c[npdtype])
+        return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples=self.get_closure())
+    # </COPIED>
 
 class Outer(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")        
     def get_py_func(self, input_types):
         def f(reads, write):
             np.outer(reads[0], reads[1], out=write)
@@ -1950,27 +2037,53 @@ class Outer(Op):
     def shp_apply(self, inputs):
         return [cgt.size(inputs[0],0), cgt.size(inputs[1],0)]
     def typ_apply(self, input_types):
+        assert input_types[0] == input_types[1]
         return TensorType(cgt.floatX, 2)
-
-
+    def get_native_compile_info(self, input_types, devtype):
+        npdtype = input_types[0].dtype
+        code = r"""
+            CGT_EXPORT_C void $function(void**, cgtArray** xy, cgtArray* z) {
+                cgtArray *x=xy[0], *y=xy[1];                
+                for (int i=0; i < x->size(); ++i) {
+                    for (int j=0; j < y->size(); ++j) {
+                        z->at<%(cdtype)s>(i,j) = x->at<%(cdtype)s>(i) * y->at<%(cdtype)s>(j);
+                    }
+                }
+            }
+            """%dict(cdtype = np2c[npdtype])    
+        return NativeCompileInfo(code)
 
 # BLAS 1
 # ----------------------------------------------------------------
 
 class Dot(Op):
-    available_impls = ("python",)    
-    call_type = "byval"
+    available_impls = ("python","native_cpu")    
+    call_type = "byref"
     def get_py_func(self, input_types):
-        def f(reads):
-            return np.dot(reads[0], reads[1])
+        def f(reads,write):
+            write[...] = np.dot(reads[0], reads[1])
         return f
     def pullback(self, inputs, _output, goutput):
         x, y = inputs
         return [y*goutput, x*goutput]
     def shp_apply(self, _):
         return []
-    def typ_apply(self, _):
+    def typ_apply(self, input_types):
+        assert input_types[0] == input_types[1]
         return TensorType(cgt.floatX, 0)
+    def get_native_compile_info(self, input_types, devtype):
+        npdtype = input_types[0].dtype
+        code = r"""
+            CGT_EXPORT_C void $function(void**, cgtArray** xy, cgtArray* z) {
+                cgtArray *x=xy[0], *y=xy[1];
+                %(cdtype)s out = 0;
+                for (int i=0; i < x->size(); ++i) {
+                    out += x->at<%(cdtype)s>(i) * y->at<%(cdtype)s>(i);
+                }
+                z->at<%(cdtype)s>(0) = out;
+            }
+            """%dict(cdtype = np2c[npdtype])    
+        return NativeCompileInfo(code)
 
 # Composition
 # ----------------------------------------------------------------
@@ -2036,7 +2149,7 @@ class Composition(Op):
         return self._nodes
 
 class TupleIndex(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu","native_gpu")        
     call_type="byval"
     def __init__(self, idx):
         self.idx = idx
@@ -2053,10 +2166,12 @@ class TupleIndex(Op):
     def get_closure(self, _inputs):
         return [("idx",ctypes.c_int, self.idx)]
     def get_native_compile_info(self, input_types, devtype):
-        return NativeCompileInfo(func_code=r"""
-CGT_EXPORT_C cgtObject* $function($closure* cldata, cgtTuple** reads) {
-    return reads[0]->getitem(cldata->idx);
-}""")
+        code=r"""
+            CGT_EXPORT_C cgtObject* $function($closure* cldata, cgtTuple** reads) {
+                return reads[0]->getitem(cldata->idx);
+            }"""
+        return NativeCompileInfo(code, closure_triples=self.get_closure(input_types))
+
 
 
 class MakeTuple(Op):
@@ -2292,7 +2407,7 @@ def maybe_replace(node, analysis, repl):
     # ASSUMPTION: the only type of nullary ops that we can propagate this way
     # are subclasses of Constant
     if len(parents) > 0 and all(isinstance(par.op, Constant) for par in parents):
-        c = cgt.execution.get_callable(node.op, [par.typ for par in parents], "cpu")
+        c = cgt.execution.get_callable(node.op, [par.typ for par in parents], "cpu", True)
         try:
             out = cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
             if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
@@ -2512,7 +2627,7 @@ def get_numeric_shape_fun(node):
 def py_numeric_apply(node, vals):
     try:
         # py_func = node.op.get_py_func(node.parents)
-        callable = cgt.execution.get_callable(node.op, [par.typ for par in node.parents],"cpu")
+        callable = cgt.execution.get_callable(node.op, [par.typ for par in node.parents],"cpu", True)
 
     except MethodNotDefined:
         print 'Op %s has no Python implementation' % repr(node.op)
