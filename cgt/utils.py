@@ -23,12 +23,12 @@ def colorprint(colorcode, text, o=sys.stdout):
     o.write("\x1b[0m")
 
 def warn(msg):
-    colorprint(Color.YELLOW, msg)
-    sys.stdout.write("\n")
+    colorprint(Color.YELLOW, msg,o=sys.stderr)
+    sys.stderr.write("\n")
 
 def error(msg):
-    colorprint(Color.RED, msg)
-    sys.stdout.write("\n")
+    colorprint(Color.RED, msg,o=sys.stderr)
+    sys.stderr.write("\n")
 
 def is_singleton(x):
     return isinstance(x, np.ndarray) and np.prod(x.shape)==1

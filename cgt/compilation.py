@@ -1,7 +1,6 @@
-from .interpreter import SequentialInterpreter
 from . import core, utils
 import cgt
-import ctypes, os.path as osp, hashlib, numpy as np, sys, subprocess, string, os
+import ctypes, os.path as osp, hashlib, numpy as np, sys, subprocess, string, os, time, traceback
 from collections import defaultdict, namedtuple
 from StringIO import StringIO
 
@@ -62,7 +61,7 @@ def determine_devices(nodes_sorted, updatetarg2src):
         elif node.is_argument():
             device = home_device
         else:            
-            if "native_gpu" in node.op.available_impls and (default_device.devtype == "gpu" or "native_cpu" not in node.op.available_impls):
+            if " " in node.op.available_impls and (default_device.devtype == "gpu" or "native_cpu" not in node.op.available_impls):
                 device = core.Device("gpu", default_device.idx)
             else:
                 device = core.Device(devtype="cpu", idx=default_device.idx)
@@ -227,11 +226,11 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
                     # this should have been enforced in determine_devices()
                     assert node2dev[node] == node2dev[node2memowner[node]]
                     write_loc = node2memloc[node2memowner[node]]                
-                instrs.append(ReturnByRef(node.op, [par.typ for par in node.parents], read_locs, write_loc))
+                instrs.append(ReturnByRef(node.op, [par.typ for par in node.parents], read_locs, write_loc, node_props=node.props))
             else:
                 assert node.op.call_type == "byval"
                 write_loc = counter.new_memloc(node2dev[node].devtype)
-                instrs.append(ReturnByVal(node.op, [par.typ for par in node.parents], read_locs, write_loc))
+                instrs.append(ReturnByVal(node.op, [par.typ for par in node.parents], read_locs, write_loc, node_props=node.props))
         node2memloc[node] = write_loc
     return ExecutionGraph(instrs, len(inputs), counter.count), node2memloc
 
@@ -239,15 +238,36 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
 def get_callable(op, input_types, devtype, prefer_python=False):
     if prefer_python and "python" in op.available_impls: return op.get_py_callable(input_types)
     assert op.available_impls, "need to set op.available_impls"
-    if core.get_config()["backend"] == "python" and "python" in op.available_impls or devtype=="cpu" and "native_cpu" not in op.available_impls:
-        if core.get_config()["backend"] == "native": print "using python impl for",op
-        return op.get_py_callable(input_types)
-    else:
-        nci = op.get_native_compile_info(input_types, devtype)
-        nci.op_str = str(op)
-        nci.call_type = op.call_type
-        nci.n_in = len(input_types)
-        return nci2callable(nci)
+    if prefer_python and "python" in op.available_impls:
+        return op.get_py_callable(input_types)        
+    elif core.get_config()["backend"] == "python":
+        if "python" in op.available_impls:
+            return op.get_py_callable(input_types)
+        else:
+            assert devtype=="cpu", "can't use devtype=gpu with python backend"
+            if "native_cpu" in op.available_impls:
+                return get_native_callable(op, input_types, "cpu")
+            else:
+                raise RuntimeError("Can't find an implementation of %s suitable for python backend. Just have available_impls=%s"%(op,op.available_impls))
+    else: # backend = native
+        if devtype == "cpu":
+            if "native_cpu" in op.available_impls:
+                return get_native_callable(op, input_types, "cpu")
+            else:
+                return op.get_py_callable(input_types)
+        else:
+            if "native_gpu" in op.available_impls:
+                return get_native_callable(op, input_types, "gpu")
+            else:
+                raise RuntimeError("Tried to put Op %s on the GPU but I only have a python impl :("%op)
+
+
+def get_native_callable(op, input_types, devtype):
+    nci = op.get_native_compile_info(input_types, devtype)
+    nci.op_str = str(op)
+    nci.call_type = op.call_type
+    nci.n_in = len(input_types)
+    return nci2callable(nci)
 
 def add_transports(nodelist, node2dev, node2shape):
 
@@ -332,11 +352,10 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     return interp
 
 
+# ================================================================
+# Simple numeric eval via traversal
+# ================================================================
 
-################################################################
-### Simple numeric eval via traversal 
-################################################################
- 
 def numeric_eval(output, arg2val):
     if isinstance(output, list):
         assert all(isinstance(x, core.Node) for x in output), "expected a list of Nodes"
@@ -393,10 +412,9 @@ class MemLocation(object):
         return "%%%i/%s" % (self.index, self.devtype)
 
 
-
-################################################################
-### Instructions 
-################################################################
+# ================================================================
+# Instructions
+# ================================================================
 
 class Instr(object):
     def fire(self, interp):
@@ -435,12 +453,13 @@ class BuildTup(Instr):
         return "%s = BuildTup args:%s" % (self.write_loc, str(self.read_locs))
 
 class ReturnByRef(Instr):
-    def __init__(self, op, input_types, read_locs, write_loc):
+    def __init__(self, op, input_types, read_locs, write_loc, node_props=None):
         self.op = op
         self.input_types = input_types
         self.read_locs = read_locs
         self.write_loc = write_loc
         self._callable = None
+        self.node_props=node_props
     def fire(self, interp):
         if self._callable is None: self._callable = self.get_callable()
         self._callable.call(
@@ -452,26 +471,26 @@ class ReturnByRef(Instr):
         return get_callable(self.op, self.input_types, self.write_loc.devtype)
 
 class ReturnByVal(Instr):
-    def __init__(self, op, input_types, read_locs, write_loc):
+    def __init__(self, op, input_types, read_locs, write_loc, node_props=None):
         self.op = op
         self.input_types = input_types
         self.read_locs = read_locs
         self.write_loc = write_loc
         self._callable = None
+        self.node_props=node_props        
     def fire(self, interp):
         if self._callable is None: self._callable = self.get_callable()        
         interp.set(self.write_loc, self._callable.call([interp.get(mem) for mem in self.read_locs]))
     def get_callable(self):
         return get_callable(self.op, self.input_types, self.write_loc.devtype)
-        return self._callable
     def __repr__(self):
         return "%s = ReturnByVal op:%s args:%s" % (self.write_loc, str(self.op), str(self.read_locs))
 
 
-################################################################
-### Compiling native code 
-################################################################
- 
+# ================================================================
+# Compiling native code
+# ================================================================
+
     
 def nci2callable(nci):
     common_includes =["cgt_common.h","cgt_cuda.h"] if nci.involves_gpu() else ["cgt_common.h"]
@@ -698,9 +717,150 @@ def _build_closure(triples):
 
 
 ################################################################
-### Utils 
+### Interpreters 
 ################################################################
  
+class Interpreter(object):
+    def __call__(self, args):
+        raise NotImplementedError
+    def get(self, mem):
+        raise NotImplementedError
+    def set(self, mem, val):
+        raise NotImplementedError
+    def getarg(self, i):
+        raise NotImplementedError
+
+
+class SequentialInterpreter(Interpreter):
+    """
+    Runs an execution graph
+    """
+    def __init__(self, eg, output_locs, input_types, copy_outputs=True):
+        self.eg = eg
+        self.input_types = input_types
+        self.output_locs = output_locs
+        self.storage = [None for _ in xrange(self.eg.n_locs)]
+        self.args = None
+        self.copy_outputs = copy_outputs
+    def __call__(self, *args):
+        assert len(args) == len(self.input_types), "Wrong number of inputs provided"
+        self.args = tuple(core.as_valid_array(arg, intype) for (arg, intype) in zip(args, self.input_types))
+        for instr in self.eg.instrs:
+            if profiler.on: tstart = time.time()
+            try:
+                instr.fire(self)
+            except Exception as e:
+                traceback.print_exc()
+                if isinstance(instr, (ReturnByRef,ReturnByVal)):
+                    if core.get_config()["debug"]:
+                        assert "stack" in instr.node_props
+                        utils.colorprint(utils.Color.MAGENTA, "HERE'S THE STACK WHEN THE OFFENDING NODE WAS CREATED\n")
+                        print ">>>>>>>>>>>>>>>>>>>>>>>>>>"        
+                        traceback.print_list(instr.node_props["stack"])
+                        print "<<<<<<<<<<<<<<<<<<<<<<<<<<"        
+                    else:
+                        utils.error("Didn't save the stack so I can't give you a nice traceback :(. Try running with CGT_FLAGS=debug=True")
+                        raise e
+                else:
+                    utils.error("Oy vey, an exception occurred in a %s Instruction. I don't know how to help you debug this one right now :(."%type(instr))
+                    raise e
+
+            if profiler.on: profiler.update(instr, time.time()-tstart)
+        outputs = [self.get(loc) for loc in self.output_locs]
+        if self.copy_outputs: outputs = map(_copy, outputs)
+        return outputs
+        # need to copy because otherwise we might mess up the data when we call func again
+        # todo: add option that prevents this behavior
+    def get(self, mem):
+        return self.storage[mem.index]
+    def set(self, mem, val):
+        self.storage[mem.index] = val
+    def getarg(self, i):
+        return self.args[i]
+
+
+# ================================================================
+# Profiler
+# ================================================================
+
+
+class _Profiler(object):
+    def __init__(self):
+        self.instr2stats = {}
+        self.on = False
+        self.t_total = 0.0
+    def start(self): self.on = True
+    def stop(self): self.on = False
+    def update(self, instr, elapsed):
+        (prevcount, prevtime) = self.instr2stats.get(instr, (0,0.0))
+        self.instr2stats[instr] = (prevcount+1, prevtime+elapsed)
+        self.t_total += elapsed
+    def print_stats(self):
+        op2stats = {}
+        # Collapse by Op, rather than instruction
+        for (instr,(count,t)) in self.instr2stats.iteritems():
+            if isinstance(instr, (ReturnByRef, ReturnByVal)):
+                opkey = str(instr.op)
+            elif isinstance(instr, Alloc):
+                opkey = "Alloc{dtype=%s,ndim=%i}"%(instr.dtype, len(instr.read_locs))
+            else:
+                opkey = instr.__class__.__name__
+
+            (prevcount, prevtime) = op2stats.get(opkey, (0, 0.0))
+            op2stats[opkey] = (prevcount+count, prevtime+t)
+
+        print "Total time elapsed: %.3g seconds"%self.t_total
+        # _print_heading("By instruction")
+        # _print_stats(self.instr2stats, self.t_total)
+        _print_heading("By Op")
+        _print_stats(op2stats, self.t_total)
+    def clear_stats(self):
+        self.instr2stats = {}
+        self.t_total = 0.0
+
+profiler = _Profiler()
+
+def _print_heading(heading):
+    heading = "  " + heading + "  "
+    width = 60
+    assert len(heading) < width-10
+    print
+    print "*"*width
+    padleft = (width-len(heading))//2
+    padright = width-len(heading)-padleft
+    print "*"*padleft + heading + "*"*padright
+    print "*"*width
+
+def _print_stats(key2stats, t_total):
+    rows = []
+    for (key, (count,t)) in key2stats.iteritems():
+        rows.append([str(key), count, t, t/t_total])
+    rows = sorted(rows, key=lambda row: row[2], reverse=True)
+    cumsum = 0
+    for row in rows:
+        cumsum += row[3]
+        row.append(cumsum)
+    from thirdparty.tabulate import tabulate
+    print tabulate(rows, headers=["Instruction","Count","Time","Frac","Frac cumsum"])
+
+def _copy(x):
+    if isinstance(x, np.ndarray): return x.copy()
+    elif isinstance(x, tuple): return tuple(el.copy() for el in x)
+    elif np.isscalar(x): return x # xxx is this case ok?
+    else: raise NotImplementedError
+
+
+def typecheck_args(numargs, types):
+    assert len(numargs)==len(types), "wrong number of arguments. got %i, expected %i"%(len(numargs),len(types))
+    for (numarg,typ) in zip(numargs,types):
+        if isinstance(typ, core.TensorType):
+            assert numarg.dtype==typ.dtype and numarg.ndim==typ.ndim
+    
+
+# ================================================================
+# Utils
+# ================================================================
+
 def _list_to_json(xs):
     return [x.to_json() for x in xs]
 

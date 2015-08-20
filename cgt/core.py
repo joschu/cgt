@@ -402,11 +402,10 @@ class Result(Node):
         parents = map(as_node, parents)
         typ = op.typ_apply([parent.typ for parent in parents]) if typ is None else typ
         assert op is not None
-        # self.stackinfo = traceback.extract_stack()
         Node.__init__(self, typ, op, parents, props=props)
         
         self.props["default_device"] = _CONFIG["default_device"]
-        if _CONFIG["debug"]: self.props["stack"] = traceback.extract_stack()[:-2]
+        if _CONFIG["debug"] and "stack" not in self.props: self.props["stack"] = traceback.extract_stack()[:-2]
 
     def get_hash(self, node2hash):        
         hashobj = hashlib.md5(self.op.get_hash())
