@@ -8,24 +8,24 @@
   /* Code block avoids redefinition of cudaError_t error */ \
   do { \
     cudaError_t error = condition; \
-    if (error != cudaSuccess) puts(cudaGetErrorString(error)); \
+    if (error != cudaSuccess) printf("%s\n", cudaGetErrorString(error)); \
   } while (0)
 
 #define CUDA_CHECK_ERROR(msg) do { \
   cudaError_t e = cudaGetLastError(); \
-  if (e != cudaSuccess) {puts(msg); puts(" CUDA: "); puts(cudaGetErrorString(e));} \
+  if (e != cudaSuccess) {printf("%s\n", cudaGetErrorString(e));} \
   } while (0)
 
 #define CUBLAS_CHECK(condition) \
   do { \
     cublasStatus_t status = condition; \
-    if (status != CUBLAS_STATUS_SUCCESS) puts(cublasGetErrorString(status)); \
+    if (status != CUBLAS_STATUS_SUCCESS) printf("%s\n", cublasGetErrorString(status)); \
   } while (0)
 
 #define CURAND_CHECK(condition) \
   do { \
     curandStatus_t status = condition; \
-    if (status != CURAND_STATUS_SUCCESS) puts(curandGetErrorString(status)); \
+    if (status != CURAND_STATUS_SUCCESS) printf("%s\n", curandGetErrorString(status)); \
   } while (0)
 
 // CUDA: grid stride looping
@@ -42,7 +42,7 @@
 // const char* curandGetErrorString(curandStatus_t error);
 
 // TODO better determination of threads info
-
+// todo: this is c++ so let's use refs
 static void cgt_get_bt(size_t size, int* num_blocks, int* num_threads) {
   if(size <= 32)
     *num_threads = 32;

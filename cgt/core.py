@@ -236,7 +236,12 @@ class Node(object):
     def __getitem__(self, slis):
         return cgt.getitem(self, slis)
     def __iter__(self):
-        raise TypeError("Node is not iterable")
+        if self.is_array():
+            raise TypeError("Array variable is not iterable")            
+        if self.is_tuple():
+            return iter(unpack(self))
+        else:            
+            raise NotImplementedError
     def __len__(self):
         if isinstance(self.typ, TupleType):
             return len(self.typ)
@@ -1464,9 +1469,9 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
         return NativeCompileInfo(code)
 
 class Transport(Op):
+    available_impls = ("native_cpu","native_gpu")
     def __init__(self, dev):
         self.dev = dev
-    available_impls = ("native_cpu","native_gpu")
     def typ_apply(self, input_types):
         return input_types[0]
     def shp_apply(self, inputs):
@@ -1475,10 +1480,8 @@ class Transport(Op):
         # This C code should only be run if the input and output devices differ.
         # There should never be any no-op transports.
         code = r"""
-            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-                cgt_assert(write->devtype() != reads[0]->devtype());
-                cgt_assert(write->data() != reads[0]->data());
-                cgt_memcpy(write->devtype(), reads[0]->devtype(), write->data(), reads[0]->data(), reads[0]->nbytes());
+            CGT_EXPORT_C void $function(void* cldata, cgtObject** reads, cgtObject* write) {
+                cgt_copy_object(write, reads[0]);
             }
             """
         return NativeCompileInfo(code)

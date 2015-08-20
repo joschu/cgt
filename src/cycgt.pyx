@@ -351,9 +351,9 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     elif t == compilation.BuildTup:
         out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == compilation.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(), storage))
     elif t == compilation.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(pyinstr.write_loc.devtype), storage))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out

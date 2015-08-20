@@ -75,12 +75,14 @@ public:
     ArrayKind,
     TupleKind
   };
-  cgtObject() : ref_cnt(0), kind(UndefKind) { }
-  cgtObject(ObjectKind kind) : ref_cnt(0), kind(kind) { }
+  cgtObject() : ref_cnt(0), kind_(UndefKind) { }
+  cgtObject(ObjectKind kind) : ref_cnt(0), kind_(kind) { }
+  ObjectKind kind() const {return kind_;}
+  // for refcounting:
   void Retain() const { ++ref_cnt; }
   inline void Release() const;
-  ObjectKind kind;
 private:
+  ObjectKind kind_;
   mutable unsigned ref_cnt;
 };
 
@@ -153,11 +155,15 @@ public:
 void cgtObject::Release() const {
   assert (ref_cnt > 0 && "Reference count is already zero.");
   if (--ref_cnt == 0) {
-    if (kind==ArrayKind) delete (const cgtArray *)this;  // XXX is this legit?
-    else if (kind==TupleKind) delete (const cgtTuple *)this;
+    if (kind_==ArrayKind) delete (const cgtArray *)this;  // XXX is this legit?
+    else if (kind_==TupleKind) delete (const cgtTuple *)this;
     else assert(0 && "invalid kind");
   }
 }
+
+void cgt_copy_object(cgtObject* to, cgtObject* from);
+void cgt_copy_array(cgtArray* to, cgtArray* from);
+void cgt_copy_tuple(cgtTuple* to, cgtTuple* from);
 
 typedef void (*cgtByRefFun)(void * /* closure data */, cgtObject ** /* read */, cgtObject * /* write */);
 typedef cgtObject *(*cgtByValFun)(void * /* closure data */, cgtObject ** /* read */);
@@ -205,8 +211,8 @@ static inline void clear_error() {
 // Memory management
 // ================================================================
 
-static inline bool cgt_is_array(cgtObject *o) { return o->kind == cgtObject::ArrayKind; }
-static inline bool cgt_is_tuple(cgtObject *o) { return o->kind == cgtObject::TupleKind; }
+static inline bool cgt_is_array(cgtObject *o) { return o->kind() == cgtObject::ArrayKind; }
+static inline bool cgt_is_tuple(cgtObject *o) { return o->kind() == cgtObject::TupleKind; }
 
 void *cgt_alloc(cgtDevtype devtype, size_t size);
 void cgt_free(cgtDevtype devtype, void *ptr);

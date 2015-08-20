@@ -1,7 +1,7 @@
 from .api import *
 from .display import print_tree, print_expr, print_text, as_dot
 from .compilation import function, numeric_eval
-from .core import grad, get_config, update_config, simplify, reset_config, Device, scoped_update_config
+from .core import grad, get_config, update_config, simplify, reset_config, Device, scoped_update_config, infer_shape
 from .ez import EasyCustomOp
 from .interpreter import profiler
 try: import cycgt

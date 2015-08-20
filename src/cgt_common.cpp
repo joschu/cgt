@@ -66,6 +66,32 @@ cgtTuple::~cgtTuple() {
 
 
 // ================================================================
+// Copying
+// ================================================================
+
+void cgt_copy_object(cgtObject* to, cgtObject* from) {
+  cgt_assert(to->kind() == from->kind());
+  if (to->kind() == cgtObject::ArrayKind) {    
+    cgt_copy_array(static_cast<cgtArray*>(to), static_cast<cgtArray*>(from));
+  }
+  else if (to->kind() == cgtObject::TupleKind) {
+    cgt_copy_tuple(static_cast<cgtTuple*>(to), static_cast<cgtTuple*>(from));
+  }
+  else cgt_assert(0 && "unreachable");
+}
+
+void cgt_copy_array(cgtArray* to, cgtArray* from) {
+  cgt_assert(from->size() == to->size() && from->dtype() == to->dtype()) ;
+  cgt_memcpy(to->devtype(), from->devtype(), to->data(), from->data(), from->nbytes());
+}
+
+void cgt_copy_tuple(cgtTuple* to, cgtTuple* from) {
+  for (int i=0; i < to->size(); ++i) cgt_copy_object(to->getitem(i), from->getitem(i));
+}
+
+
+
+// ================================================================
 // Error handling 
 // ================================================================
 

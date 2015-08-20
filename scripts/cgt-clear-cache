@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import cgt,os.path as osp, subprocess,sys
-config = cgt.load_config()
+config = cgt.get_config()
 cache_dir = config["cache_dir"]
 cmd = "rm -rf %s"%osp.expandvars(cache_dir)
 while True:

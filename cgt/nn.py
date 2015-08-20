@@ -110,3 +110,4 @@ def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
     col_Bmn_L = core.Result(core.Mul22(False,True), [col_Bmn_Z, f_LZ])
     return col_Bmn_L.reshape([B,m,n,L]).transpose([0,3,1,2])
 
+

@@ -432,7 +432,7 @@ class BuildTup(Instr):
     def fire(self, interp):
         interp.set(self.write_loc, tuple(interp.get(loc) for loc in self.read_locs))
     def __repr__(self):
-        return "%s = BuildTup:%s" % (self.write_loc, self.typ)
+        return "%s = BuildTup args:%s" % (self.write_loc, str(self.read_locs))
 
 class ReturnByRef(Instr):
     def __init__(self, op, input_types, read_locs, write_loc):
@@ -442,14 +442,14 @@ class ReturnByRef(Instr):
         self.write_loc = write_loc
         self._callable = None
     def fire(self, interp):
-        self.get_callable("cpu").call(
+        if self._callable is None: self._callable = self.get_callable()
+        self._callable.call(
             [interp.get(mem) for mem in self.read_locs],
             interp.get(self.write_loc))
     def __repr__(self):
         return "%s = ReturnByRef op:%s args:%s" % (self.write_loc, str(self.op), str(self.read_locs))
-    def get_callable(self, devtype):
-        if self._callable is None: self._callable = get_callable(self.op, self.input_types, devtype)
-        return self._callable
+    def get_callable(self):
+        return get_callable(self.op, self.input_types, self.write_loc.devtype)
 
 class ReturnByVal(Instr):
     def __init__(self, op, input_types, read_locs, write_loc):
@@ -459,9 +459,10 @@ class ReturnByVal(Instr):
         self.write_loc = write_loc
         self._callable = None
     def fire(self, interp):
-        interp.set(self.write_loc, self.get_callable("cpu").call([interp.get(mem) for mem in self.read_locs]))
-    def get_callable(self, devtype):
-        if self._callable is None: self._callable = get_callable(self.op, self.input_types, devtype)
+        if self._callable is None: self._callable = self.get_callable()        
+        interp.set(self.write_loc, self._callable.call([interp.get(mem) for mem in self.read_locs]))
+    def get_callable(self):
+        return get_callable(self.op, self.input_types, self.write_loc.devtype)
         return self._callable
     def __repr__(self):
         return "%s = ReturnByVal op:%s args:%s" % (self.write_loc, str(self.op), str(self.read_locs))
