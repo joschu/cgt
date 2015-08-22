@@ -44,15 +44,25 @@ private:
 
 class Interpreter;
 
+enum InstructionKind {
+    LoadArgumentKind,
+    AllocKind,
+    BuildTupKind,
+    ReturnByRefKind,
+    ReturnByValKind
+};
+
 class Instruction {
 public:
-    Instruction(const std::string& repr) : repr_(repr) { }
+    Instruction(InstructionKind kind, const std::string& repr) : kind_(kind), repr_(repr) { }
     virtual void fire(Interpreter*)=0;
     virtual ~Instruction() {};
     virtual const vector<MemLocation>& get_readlocs() const=0;
     virtual const MemLocation& get_writeloc() const=0;
     const std::string& repr() const { return repr_; }
+    const InstructionKind kind() const {return kind_;}
 private:
+    InstructionKind kind_;
     std::string repr_;
 };
 
@@ -87,7 +97,7 @@ Interpreter* create_interpreter(ExecutionGraph*, vector<MemLocation> output_locs
 
 class LoadArgument : public Instruction  {
 public:
-    LoadArgument(const std::string& repr, int ind, const MemLocation& writeloc) : Instruction(repr), ind(ind), writeloc(writeloc) {}
+    LoadArgument(const std::string& repr, int ind, const MemLocation& writeloc) : Instruction(LoadArgumentKind, repr), ind(ind), writeloc(writeloc) {}
     void fire(Interpreter*);
     const vector<MemLocation>& get_readlocs() const { return readlocs; }
     const MemLocation& get_writeloc() const { return writeloc; }
@@ -101,7 +111,7 @@ private:
 class Alloc : public Instruction {
 public:
     Alloc(const std::string& repr, cgtDtype dtype, vector<MemLocation> readlocs, const MemLocation& writeloc)
-    : Instruction(repr), dtype(dtype), readlocs(readlocs), writeloc(writeloc) {}
+    : Instruction(AllocKind, repr), dtype(dtype), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
     const vector<MemLocation>& get_readlocs() const { return readlocs; }
     const MemLocation& get_writeloc() const { return writeloc; }
@@ -114,7 +124,7 @@ private:
 class BuildTup : public Instruction {
 public:
     BuildTup(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc)
-    : Instruction(repr), readlocs(readlocs), writeloc(writeloc) {}
+    : Instruction(BuildTupKind, repr), readlocs(readlocs), writeloc(writeloc) {}
     void fire(Interpreter*);
     const vector<MemLocation>& get_readlocs() const { return readlocs; }
     const MemLocation& get_writeloc() const { return writeloc; }
@@ -126,7 +136,7 @@ private:
 class ReturnByRef : public Instruction  {
 public:
     ReturnByRef(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc, ByRefCallable callable)
-    : Instruction(repr), readlocs(readlocs), writeloc(writeloc), callable(callable) {}
+    : Instruction(ReturnByRefKind, repr), readlocs(readlocs), writeloc(writeloc), callable(callable) {}
     void fire(Interpreter*);
     const vector<MemLocation>& get_readlocs() const { return readlocs; }
     const MemLocation& get_writeloc() const { return writeloc; }
@@ -139,7 +149,7 @@ private:
 class ReturnByVal : public Instruction  {
 public:
     ReturnByVal(const std::string& repr, vector<MemLocation> readlocs, const MemLocation& writeloc, ByValCallable callable)
-    : Instruction(repr), readlocs(readlocs), writeloc(writeloc), callable(callable) {}
+    : Instruction(ReturnByValKind, repr), readlocs(readlocs), writeloc(writeloc), callable(callable) {}
     void fire(Interpreter*);
     const vector<MemLocation>& get_readlocs() const { return readlocs; }
     const MemLocation& get_writeloc() const { return writeloc; }

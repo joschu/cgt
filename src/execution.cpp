@@ -10,6 +10,7 @@ namespace cgt {
 
 using std::vector;
 using std::atomic;
+using std::mutex;
 
 // ================================================================
 // Sequential interpreter
@@ -63,16 +64,14 @@ private:
 
 /**
 
-
-Pseudocode for run():
-
-    Launch the instructions with no prerequisites
-    while (npending > 0) sleep
-
-    when instruction finishes, increment its write counter
-    launch all instructions that are ready and read from write loc
+Each instruction is associated with the set of instructions that depend on it,
+through the mapping instr2next
+Also, each instruction knows how many dependencies it has.
+When all the dependencies have fired, the instruciton gets enqueued
 
 */
+
+// #define DBG_PAR
 
 class ParallelInterpreter: public Interpreter {
 public:
@@ -91,28 +90,29 @@ public:
     }
 
     cgtTuple * run(cgtTuple * newargs);
-    bool instr_is_ready(InstrInd ind);
     void fire_instr(InstrInd instr_ind);
     void trigger_instr(InstrInd instr_ind);
 
-    ~ParallelInterpreter() {}
+    ~ParallelInterpreter() {
+        delete[] loc2mutex_; 
+        delete[] instr2mutex_;
+    }
 private:
     ExecutionGraph* eg_;
     vector<MemLocation> output_locs_;
     vector<IRC<cgtObject>> storage_;
     cgtTuple * args_;
     ThreadPool pool_;
-    vector<int> n_writes_total_; // home many writes total to each mem location
-    vector<InstrInd> no_prereqs_; // instructions with no prereqs
-    vector<vector<InstrInd>> loc2rwinstrs_; // mem loc idx to readers
-    vector<int> instr2writecount_; // instr idx 2 what write count should be when its fired
 
-    std::mutex dont_fire_twice_;
-
+    vector<vector<InstrInd>> instr2next_; // instr -> instrs that depend on it
+    vector<int> instr2indegree_; // instr -> number of instrs that it depends on
+    vector<InstrInd> no_prereqs_; // instructions that can be fired initially
+    vector<int> instr2insofar_;
     atomic<int> n_pending_; // number of pending instrs
-    atomic<int> n_total_;
-    vector<atomic<bool>> instr_triggered_; // bool whether instr was triggered or not
-    vector<atomic<int>> n_writes_sofar_; // how many writes so far to each mem location
+    atomic<int> n_total_; // total instructions fired (just for debugging purposes)
+    mutex* loc2mutex_; // lock while writing to loc during execution. using c array because vector requires move constructor
+    // xxx i think we can remove this
+    mutex* instr2mutex_; // lock while checking if this instruction can fire or firing it
 };
 
 ParallelInterpreter::ParallelInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs)
@@ -121,44 +121,50 @@ ParallelInterpreter::ParallelInterpreter(ExecutionGraph* eg, const vector<MemLoc
     storage_(eg->n_locs()), 
     args_(NULL),
     pool_(int(std::thread::hardware_concurrency())),
-    n_writes_total_(eg->n_locs()), 
+    instr2next_(eg->n_instrs()),
+    instr2indegree_(eg->n_instrs()), 
     no_prereqs_(),
-    loc2rwinstrs_(eg->n_locs()),
-    instr2writecount_(eg->n_instrs()),
+    instr2insofar_(eg->n_instrs()),
     n_pending_(0),
     n_total_(0),
-    instr_triggered_(eg->n_instrs()),
-    n_writes_sofar_(eg->n_locs()) 
+    loc2mutex_(new mutex[eg->n_locs()]),
+    instr2mutex_(new mutex[eg->n_instrs()])
 {
-    InstrInd instr_ind=0;
+    vector<InstrInd> loc2lastwriter(eg->n_locs()); // for each location, last instruction to write to it
+    InstrInd instr_ind=0; // will loop over instr index
     for (auto& instr : eg_->instrs()) {
-        auto write_ind = instr->get_writeloc().index();
-        if (instr->get_readlocs().empty()) {
-            no_prereqs_.push_back(instr_ind); // xxx this is wrong if the write loc needs to be allocated. e.g. if Constant was byref
+        auto write_ind = instr->get_writeloc().index(); 
+        // Instructions that have no read locations can be fired initially, except for ReturnByRef instructions
+        if (instr->get_readlocs().empty() && instr->kind() != ReturnByRefKind) {
+            no_prereqs_.push_back(instr_ind);
         }
         else {
-            for (auto& m : instr->get_readlocs()) {
-                loc2rwinstrs_[m.index()].push_back(instr_ind);
+            // All instructions depend on last writer to each read location
+            for (auto& readmemloc : instr->get_readlocs()) {
+                InstrInd lastwriter = loc2lastwriter[readmemloc.index()];
+                instr2next_[lastwriter].push_back(instr_ind);                
+                ++instr2indegree_[instr_ind];
             }
-        }
-        instr2writecount_[instr_ind] = n_writes_total_[write_ind];
-        loc2rwinstrs_[write_ind].push_back(instr_ind);
-        n_writes_total_[write_ind] += 1;
+            // ReturnByRef instruction depends on last writer to write location
+            if (instr->kind() == ReturnByRefKind) {
+                InstrInd lastwriter = loc2lastwriter[write_ind];
+                instr2next_[lastwriter].push_back(instr_ind);
+                ++instr2indegree_[instr_ind];
+            }
+        }        
+        loc2lastwriter[write_ind] = instr_ind;
         ++instr_ind;
     }
-}
 
-
-bool ParallelInterpreter::instr_is_ready(InstrInd instr_ind) {
-    bool result=true;
-    auto instr = eg_->instrs()[instr_ind];
-    for (auto readloc : instr->get_readlocs()) {
-        result = result && (n_writes_sofar_[readloc.index()] == n_writes_total_[readloc.index()]);
+    #ifdef DBG_PAR
+    for (int i=0; i < eg->n_instrs(); ++i) {
+        printf("instrution %i triggers", i);
+        for (InstrInd ii : instr2next_[i]) printf(" %i", ii);
+        printf(", in degree = %i\n", instr2indegree_[i]);
     }
-    result = result && (n_writes_sofar_[instr->get_writeloc().index()] == instr2writecount_[instr_ind]);
-    // cgt_assert(get(instr->get_writeloc())!= NULL);
-    return result;
+    #endif
 }
+
 
 cgtTuple * ParallelInterpreter::run(cgtTuple * newargs) {
     args_ = newargs;
@@ -168,19 +174,16 @@ cgtTuple * ParallelInterpreter::run(cgtTuple * newargs) {
     // setup
     n_pending_=0;
     n_total_=0;
-    for (auto& n : n_writes_sofar_) { n = 0;}
-    for (int i=0; i < eg_->n_instrs(); ++i) instr_triggered_[i] = false;
+    for (auto& n : instr2insofar_) { n = 0;}
 
+    // trigger instructions that are ready initially
     for (InstrInd i : no_prereqs_) {
         trigger_instr(i);
-        auto instr = eg_->instrs()[i];
-        cgtObject* objptr = get(instr->get_writeloc());
-        // printf("init: instr %d triggered: %s %zu\n", i, instr->repr().c_str(), objptr);
-
     }
 
+    // wait until everything's done
     while (n_pending_ > 0) {
-        usleep(1000);
+        usleep(100);
     }
 
     args_ = NULL;
@@ -191,48 +194,37 @@ cgtTuple * ParallelInterpreter::run(cgtTuple * newargs) {
         out->setitem(i, get(output_locs_[i]));
     }
 
-    printf("don %i insrts \n", (int)n_total_);
-
+    cgt_assert(n_total_ == eg_->n_instrs());
 
     return out;
 }
 
 void ParallelInterpreter::fire_instr(InstrInd instr_ind)
 {
-    printf("runing instr %i\n", instr_ind);
     Instruction* instr = eg_->instrs()[instr_ind];
+    
+    // for (auto& m : instr->get_readlocs()) instr2mutex_[m.index()].lock();
+    instr2mutex_[instr->get_writeloc().index()].lock();
     instr->fire(this);
-    // printf("instr %d DONE: %s\n", instr_ind, instr->repr().c_str());
+    // for (auto& m : instr->get_readlocs()) instr2mutex_[m.index()].unlock();
+    instr2mutex_[instr->get_writeloc().index()].unlock();
 
-    InstrInd write_ind = instr->get_writeloc().index();
-    n_writes_sofar_[write_ind] += 1;
-    for (auto& nextinstr_ind : loc2rwinstrs_[write_ind]) {
-        printf("%i finished. checking %i\n", instr_ind, nextinstr_ind);
-        if (instr_is_ready(nextinstr_ind)) {            
-            { // can we cleverly do this without a lock? we just need a loc specific to instr
-                // e.g. just write tid into atomic
-                std::lock_guard<std::mutex> lock(dont_fire_twice_);
-                if (!instr_triggered_[nextinstr_ind]) {
-                    // Instruction* nextinstr = eg_->instrs()[nextinstr_ind];
-                    // cgtObject* objptr = get(nextinstr->get_writeloc());
-                    // printf("instr %d triggered: %s %zu\n", nextinstr_ind, nextinstr->repr().c_str(), objptr);
-                    trigger_instr(nextinstr_ind);                    
-
-                }
-            }
+    for (InstrInd& nextind : instr2next_[instr_ind]) {
+        std::lock_guard<std::mutex> lock(instr2mutex_[nextind]);
+        ++instr2insofar_[nextind];
+        if (instr2insofar_[nextind] == instr2indegree_[nextind]) {
+            trigger_instr(nextind);
         }
-    } 
-
-    --n_pending_;
+    }
+    --n_pending_;    
 }
 
 void ParallelInterpreter::trigger_instr(InstrInd instr_ind)
 {
-    // printf("instr %d ENQUED: %s\n", instr_ind, eg_->instrs()[instr_ind]->repr().c_str());    
     ++n_pending_;
     ++n_total_;
     pool_.enqueue(&ParallelInterpreter::fire_instr, this, instr_ind);
-    instr_triggered_[instr_ind] = true;                            
+    instr2insofar_[instr_ind] = 0;
 }
 
 
