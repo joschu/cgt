@@ -44,9 +44,7 @@ def determine_devices(nodes_sorted, updatetarg2src):
     # (1) Get available devices for nodes, determined by which impls are available and node types
     compile_info = get_compile_info()
 
-    cuda_enabled = cgt.get_config()["enable_cuda"]
-    if cuda_enabled:
-        assert compile_info["CGT_ENABLE_CUDA"], "CUDA requested in configuration, but CGT is not compiled with CUDA support"
+    cuda_enabled = compile_info["CGT_ENABLE_CUDA"]
 
     node2dev = {}
     home_device = core.Device(devtype="cpu", idx=0)
@@ -60,8 +58,10 @@ def determine_devices(nodes_sorted, updatetarg2src):
             device = node.device
         elif node.is_argument():
             device = home_device
-        else:            
-            if " " in node.op.available_impls and (default_device.devtype == "gpu" or "native_cpu" not in node.op.available_impls):
+        else:
+
+            if "native_gpu" in node.op.available_impls and (default_device.devtype == "gpu" or "native_cpu" not in node.op.available_impls):                
+                assert cuda_enabled, "trying to put op on gpu but cuda is disabled"
                 device = core.Device("gpu", default_device.idx)
             else:
                 device = core.Device(devtype="cpu", idx=default_device.idx)
@@ -254,6 +254,7 @@ def get_callable(op, input_types, devtype, prefer_python=False):
             if "native_cpu" in op.available_impls:
                 return get_native_callable(op, input_types, "cpu")
             else:
+                print "using python impl for",op
                 return op.get_py_callable(input_types)
         else:
             if "native_gpu" in op.available_impls:
@@ -341,7 +342,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     # print execution graph
     if config["verbose"]:
         print 'begin'
-        print '\n'.join('\t'+repr(instr) for instr in eg.instrs)
+        print '\n'.join(str(i)+'.) \t'+repr(instr) for (i,instr) in enumerate(eg.instrs))
         print 'end'
 
     # Phase 3: create C or Python interpreter for graph
@@ -754,10 +755,11 @@ class SequentialInterpreter(Interpreter):
                 if isinstance(instr, (ReturnByRef,ReturnByVal)):
                     if core.get_config()["debug"]:
                         assert "stack" in instr.node_props
-                        utils.colorprint(utils.Color.MAGENTA, "HERE'S THE STACK WHEN THE OFFENDING NODE WAS CREATED\n")
-                        print ">>>>>>>>>>>>>>>>>>>>>>>>>>"        
+                        utils.colorprint(utils.Color.MAGENTA, "HERE'S THE STACK WHEN THE OFFENDING NODE WAS CREATED\n",o=sys.stderr)
+                        print>>sys.stderr, ">>>>>>>>>>>>>>>>>>>>>>>>>>"        
                         traceback.print_list(instr.node_props["stack"])
-                        print "<<<<<<<<<<<<<<<<<<<<<<<<<<"        
+                        print>>sys.stderr, "<<<<<<<<<<<<<<<<<<<<<<<<<<"        
+                        raise e
                     else:
                         utils.error("Didn't save the stack so I can't give you a nice traceback :(. Try running with CGT_FLAGS=debug=True")
                         raise e

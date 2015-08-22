@@ -1,14 +1,14 @@
-// JDS: Modified Caffe code so channels are last dimension in output
 
-template <typename Dtype>
-void im2col_cpu(const Dtype* data_im, const int channels,
-    const int height, const int width, const int kernel_h, const int kernel_w,
-    const int pad_h, const int pad_w,
-    const int stride_h, const int stride_w,
-    Dtype* data_col) {
+// JDS: Modified Caffe code so channels are last dimension in output, and so arguments are template parameters
+// (actually gives a good speedup). could be further sped up by rearranging loops
+// so inner loops can be unrolled
+
+template <typename Dtype, int kernel_h, int kernel_w, int pad_h, int pad_w, int stride_h, int stride_w>
+void im2col_cpu(const Dtype* data_im, int channels, int height, int width, Dtype* data_col) {
   int height_col = (height + 2 * pad_h - kernel_h) / stride_h + 1;
   int width_col = (width + 2 * pad_w - kernel_w) / stride_w + 1;
   int channels_col = channels * kernel_h * kernel_w;
+
   for (int c = 0; c < channels_col; ++c) {
     int w_offset = c % kernel_w;
     int h_offset = (c / kernel_w) % kernel_h;
@@ -27,12 +27,8 @@ void im2col_cpu(const Dtype* data_im, const int channels,
   }
 }
 
-template <typename Dtype>
-void col2im_cpu(const Dtype* data_col, const int channels,
-    const int height, const int width, const int patch_h, const int patch_w,
-    const int pad_h, const int pad_w,
-    const int stride_h, const int stride_w,
-    Dtype* data_im) {
+template <typename Dtype, int patch_h, int patch_w, int pad_h, int pad_w, int stride_h, int stride_w>
+void col2im_cpu(const Dtype* data_col, const int channels, int height, int width, Dtype* data_im) {
   for (int i=0; i < height * width * channels; ++i) data_im[i] = Dtype(0);
   int height_col = (height + 2 * pad_h - patch_h) / stride_h + 1;
   int width_col = (width + 2 * pad_w - patch_w) / stride_w + 1;

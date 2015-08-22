@@ -21,10 +21,9 @@ def fmt_row(width, row, header=False):
     if header: out = out + "\n" + "-"*len(out)
     return out
 
-def fetch_dataset(url):    
+def download(url):
+    "download and return path to file"
     fname = osp.basename(url)
-    extension =  osp.splitext(fname)[-1]
-    assert extension in [".npz"]
     from cgt.core import get_cgt_src_root
     datadir = osp.join(get_cgt_src_root(),"downloads")
     datapath = osp.join(datadir, fname)
@@ -32,6 +31,14 @@ def fetch_dataset(url):
         print "downloading %s to %s"%(url, datapath)
         if not osp.exists(datadir): os.makedirs(datadir)
         urllib.urlretrieve(url, datapath)
+    return datapath
+
+
+def fetch_dataset(url):    
+    datapath = download(url)
+    fname = osp.basename(url)
+    extension =  osp.splitext(fname)[-1]
+    assert extension in [".npz"]    
     if extension == ".npz":
         return np.load(datapath)
     else:

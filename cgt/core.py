@@ -403,9 +403,9 @@ class Result(Node):
         typ = op.typ_apply([parent.typ for parent in parents]) if typ is None else typ
         assert op is not None
         Node.__init__(self, typ, op, parents, props=props)
-        
-        self.props["default_device"] = _CONFIG["default_device"]
-        if _CONFIG["debug"] and "stack" not in self.props: self.props["stack"] = traceback.extract_stack()[:-2]
+        config = get_config()
+        self.props["default_device"] = config["default_device"]
+        if config["debug"] and "stack" not in self.props: self.props["stack"] = traceback.extract_stack()[:-2]
 
     def get_hash(self, node2hash):        
         hashobj = hashlib.md5(self.op.get_hash())
@@ -486,7 +486,7 @@ class Data(Input):
     """
     def __init__(self, value,name=None,device=None, fixed_shape_mask=None):
         value = as_valid_array(value)
-        self.device = device or _CONFIG["default_device"]
+        self.device = device or get_config()["default_device"]
 
         self.use_numpy = cgt.get_config()["backend"] == "python"
         if self.use_numpy:
@@ -785,7 +785,10 @@ class ConstantTensor(Constant):
         def f(reads, write):
             np.copyto(write, self.value)
         return f
-    # def py_apply(reads, write)
+    # def get_py_func(self, input_types):
+    #     def f(reads):
+    #         return self.value
+    #     return f
     # def valret_func(reads):
     #     return self.value
     # def inplace_func(reads, write):
@@ -808,7 +811,6 @@ class ConstantTensor(Constant):
     def get_closure(self):
         assert isinstance(self.value, np.ndarray)
         shapeptr = ctypes.cast(self.value.ctypes.shape, ctypes.c_void_p).value
-        shit.append(self.value)
         return [
         ("ndim", ctypes.c_int,self.value.ndim),
         ("shape",ctypes.c_void_p,shapeptr),
@@ -819,7 +821,7 @@ class ConstantTensor(Constant):
         if self.call_type == "byval": code = self._c_code_valret(input_types)
         elif self.call_type == "byref": code = self._c_code_inplace(input_types)
         else: raise ValueError
-        return NativeCompileInfo(func_code=code, closure_triples=self.get_closure())
+        return NativeCompileInfo(func_code=code, closure_triples=self.get_closure(),store_objects=(self.value,))
     def _c_code_inplace(self, inputs):
         if isinstance(self.value, tuple):
             raise MethodNotDefined
@@ -835,7 +837,6 @@ class ConstantTensor(Constant):
                         (cgtDtype)cldata->dtype, cgtCPU, (void*)cldata->data, false);
                     return out;
             }"""
-
 
 class ConstantTuple(Constant):
     call_type = "byval"
@@ -857,11 +858,6 @@ class ConstantTuple(Constant):
     def get_hash(self):
         if self._hash is None: self._hash = cPickle.dumps(self.value, -1)
         return self._hash
-
-
-
-shit = [] # XXX just so this stuff doesn't get dereferenced.
-# this is a memory leak, will fix later
 
 
 class Fill(Op):
@@ -1301,13 +1297,13 @@ class Size(Op):
         return [("ax",ctypes.c_int,self.axis)]
     def get_native_compile_info(self, input_types, devtype):
         code = r"""
-CGT_EXPORT_C cgtArray* $function(void* cl0, cgtArray** reads) {
-$closure* cl = ($closure*)cl0;
-    cgtArray* in = reads[0];
-    cgtArray* out = new cgtArray(0, NULL, cgt_i8, cgtCPU);
-    ((long*)out->data())[0] = in->shape()[cl->ax];
-    return out;
-}"""
+            CGT_EXPORT_C cgtArray* $function(void* cl0, cgtArray** reads) {
+                $closure* cl = ($closure*)cl0;
+                cgtArray* in = reads[0];
+                cgtArray* out = new cgtArray(0, NULL, cgt_i8, cgtCPU);
+                out->at<size_t>(0) = in->shape()[cl->ax];
+                return out;
+            }"""
         return NativeCompileInfo(code,closure_triples = self.get_closure())
 
 class Reshape(Op):
@@ -2703,9 +2699,8 @@ def _load_config():
             elif isinstance(oldrhs, float): config[lhs] = config.as_float(lhs)
             elif isinstance(oldrhs, list): config[lhs] = config.as_list(lhs)
     config["default_device"] = Device()
+    cgt.set_precision(config["precision"])
     return config
-
-_CONFIG = get_config()
 
 def reset_config():
     get_config(True)  
@@ -2717,6 +2712,7 @@ def update_config(**kws):
 
 class scoped_update_config(object):
     def __init__(self, **kw):
+        self.kw = kw
         config = get_config()
         self.prevsettings = {}
         self.delkeys = []
@@ -2724,10 +2720,11 @@ class scoped_update_config(object):
             if k in config: 
                 self.prevsettings[k] = config[k]
             else:
-                self.delkeys.append(k)
-        config.update(kw)
+                self.delkeys.append(k)                
     def __enter__(self):
-        return
+        config = get_config()
+        config.update(self.kw)
+        cgt.set_precision(config["precision"])
     def __exit__(self, *args):
         config = get_config()
         config.update(self.prevsettings)

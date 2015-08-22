@@ -4,6 +4,7 @@
 #include "stdbool.h"
 #include "IRC.h"
 #include <cassert>
+#include <atomic>
 
 // ================================================================
 // Visibility 
@@ -83,7 +84,7 @@ public:
   inline void Release() const;
 private:
   ObjectKind kind_;
-  mutable unsigned ref_cnt;
+  mutable std::atomic<unsigned> ref_cnt;
 };
 
 class cgtArray : public cgtObject {

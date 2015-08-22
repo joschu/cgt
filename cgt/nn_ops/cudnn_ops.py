@@ -23,7 +23,7 @@ class CudnnConvForward(Op):
         self.sv = sv
         self.sh = sh
 
-    def get_native_compile_info(self, input_types, devtype):
+    def get_native_compile_info(self, _input_types, devtype):
         code = """
             CGT_EXPORT_C void $function(conv_closure* closure, cgtArray** reads, cgtArray* write) {
                 if (!closure->handle) setupConv(closure);
@@ -106,37 +106,3 @@ class CudnnConvBackwardBias(Op):
         return TensorType(cgt.floatX, 4)
 
 
-def main():
-    import numpy.random as nr
-    from cgt.numeric_diff import numeric_grad_multi
-    
-    cgt.set_precision("double")
-    Xval = nr.randn(2,3,19,18)
-    Wval = nr.randn(5,3,3,3)
-    bval = nr.randn(1,5,1,1)
-
-    X = cgt.tensor4("X", fixed_shape=Xval.shape)
-    W = cgt.tensor4("W", fixed_shape=Wval.shape)
-    b = cgt.tensor4("b", fixed_shape=bval.shape)
-
-
-    Y = cgt.core.Result(CudnnConvForward(1,1,1,1),[X, W, b])
-
-    Y2 = nr.randn(*cgt.core.infer_shape(Y))
-
-    fY = cgt.function([X,W,b],Y)
-    Yval = fY(Xval,Wval,bval)
-    print Yval.shape
-    print cgt.core.infer_shape(Y)
-    print Yval.flat[0:10]
-    cost = (Y*Y2).sum()
-    fcost = cgt.function([X,W,b],cost)
-    fgrad = cgt.function([X,W,b],cgt.grad(cost, [X,W,b]))
-    angrads = fgrad(Xval,Wval,bval)
-    nugrads = numeric_grad_multi(fcost, [Xval, Wval, bval],eps=1e-3)
-    for (nugrad,angrad) in zip(nugrads,angrads):
-        assert np.allclose(nugrad, angrad)
-
-
-if __name__ == "__main__":
-    main()

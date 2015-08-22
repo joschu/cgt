@@ -35,6 +35,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/4build/cmake)
 
 include(${CMAKE_SOURCE_DIR}/4build/cmake/UseCython.cmake)
+include(${CMAKE_SOURCE_DIR}/4build/cmake/CUDA.cmake)
 
 find_package(PythonLibs REQUIRED)
 find_package(Numpy REQUIRED)
@@ -74,7 +75,10 @@ if (CGT_ENABLE_CUDA)
 endif()
 
 if (CGT_ENABLE_CUDNN)
-  set(CUDNN_ROOT "/Users/joschu/Src/cudnn-6.5-osx-v2")
+    detect_cuDNN()
+    if(NOT CUDNN_FOUND)
+      message(FATAL_ERROR "Couldn't find CUDNN. Set CUDNN_ROOT")
+    endif()
 endif()
 
 target_link_libraries(cgt ${CUDA_CUDART_LIBRARY})
@@ -88,6 +92,7 @@ cython_add_module(cycgt ${CMAKE_SOURCE_DIR}/src/cycgt.pyx
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/cycgt.pyx PROPERTIES CYTHON_IS_CXX TRUE)
 target_include_directories(cycgt PRIVATE ${NUMPY_INCLUDE_DIR} ${CGT_INCLUDE_DIR})
 target_link_libraries(cycgt cgt)
+
 
 
 # add_custom_command(

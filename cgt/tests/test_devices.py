@@ -8,6 +8,12 @@ def test_devices():
     N = 10
     K = 3
 
+    compile_info = cgt.compilation.get_compile_info()
+    cuda_enabled = compile_info["CGT_ENABLE_CUDA"]
+    if not cuda_enabled:
+        cgt.utils.warn("Skipping test -- cuda disabled")
+        return
+
     Xval = np.random.randn(N,K).astype(cgt.floatX)
     wval = np.random.randn(K).astype(cgt.floatX)
     bval = np.asarray(np.random.randn()).astype(cgt.floatX)

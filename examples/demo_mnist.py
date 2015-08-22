@@ -148,7 +148,7 @@ def main():
         print "success!"
         return
 
-    if args.profile: cgt.execution.profiler.start()
+    if args.profile: cgt.profiler.start()
 
     print fmt_row(10, ["Epoch","Train NLL","Train Err","Test NLL","Test Err","Epoch Time"])
     for i_epoch in xrange(args.epochs):

@@ -2,16 +2,16 @@ import ctypes
 from cgt.core import *
 from collections import namedtuple
 
-LRNInfo = namedtuple("LRNInfo",["N","alpha","beta"])
+LRNInfo = namedtuple("LRNInfo",["localsize","alpha","beta"])
 
 def make_closure(info):
     return [
-        ("N",ctypes.c_int,info.N),
+        ("localsize",ctypes.c_int,info.localsize),
         ("alpha",ctypes.c_double,info.alpha),
         ("beta",ctypes.c_double,info.beta)
     ]
 
-class LRNForward(Op):
+class CrossChannelLRNForward(Op):
     available_impls = ("native_gpu",)    
     def __init__(self, info):
         assert isinstance(info, LRNInfo)
@@ -31,7 +31,7 @@ class LRNForward(Op):
                 int nblocks, nthreads;
                 cgt_get_bt(size, &nblocks, &nthreads);
                 LRNFillScale<%(cdtype)s><<<nblocks, nthreads, 0>>>(
-                    size, (%(cdtype)s*)X->data(), num_img, channels, height, width, cldata->N, cldata->alpha / cldata->N, (%(cdtype)s*)scale->data());
+                    size, (%(cdtype)s*)X->data(), num_img, channels, height, width, cldata->localsize, cldata->alpha / cldata->localsize, (%(cdtype)s*)scale->data());
                 CUDA_CHECK_ERROR("LRNFillScale");
 
                 size = num_img * channels * width * height;
@@ -48,9 +48,9 @@ class LRNForward(Op):
     def pullback(self, inputs, output, gout):
         top, scaling = cgt.core.unpack(output)
         gtop, _ = gout
-        return [Result(LRNBackward(self.info), [inputs[0], top, scaling, gtop])]
+        return [Result(CrossChannelLRNBackward(self.info), [inputs[0], top, scaling, gtop])]
 
-class LRNBackward(Op):
+class CrossChannelLRNBackward(Op):
     available_impls = ("native_gpu",)    
     def __init__(self, info):
         self.info = info
@@ -66,9 +66,9 @@ class LRNBackward(Op):
             int size = num_img * width * height;
             cgt_get_bt(size, &nblocks, &nthreads);
             LRNComputeDiff<%(cdtype)s><<<nblocks, nthreads, 0>>>(size, (%(cdtype)s*)X->data(), (%(cdtype)s*)top->data(), 
-                (%(cdtype)s*)scaling->data(), (%(cdtype)s*)top_diff->data(),  num_img, channels, height, width, cldata->N, 
-                -cldata->beta, 2. * cldata->alpha * cldata->beta / cldata->N, (%(cdtype)s*)bottom_diff->data());
-            CUDA_CHECK_ERROR("LRNBackward");
+                (%(cdtype)s*)scaling->data(), (%(cdtype)s*)top_diff->data(),  num_img, channels, height, width, cldata->localsize, 
+                -cldata->beta, 2. * cldata->alpha * cldata->beta / cldata->localsize, (%(cdtype)s*)bottom_diff->data());
+            CUDA_CHECK_ERROR("CrossChannelLRNBackward");
             }"""%dict(cdtype=np2c[input_types[0].dtype])
         return NativeCompileInfo(code, lang="cuda", closure_triples = make_closure(self.info),
             includes=["lrn.cuh"], link_flags="-lcudart", gpu_deref_mask=(True,True,True,True))
@@ -77,29 +77,9 @@ class LRNBackward(Op):
     def typ_apply(self, _inputs):
         return TensorType(cgt.floatX, 4)
 
-def lrn(X, windowsize, alpha, beta):
+def cross_channel_lrn(X, localsize, alpha, beta):
     assert X.ndim == 4
-    return Result(LRNForward(LRNInfo(windowsize,alpha,beta)), [X])
-
-if __name__ == "__main__":
-    from cgt.tests import gradcheck_model
-    cgt.set_precision('double')
-    import numpy.random as nr
-    nr.seed(9)
-    Xval = nr.randn(4,8,16,16)
-    X = cgt.shared(Xval, name="X", fixed_shape_mask="all")
-    # X = cgt.tensor4(name='X')
-    y,_ = lrn(X, windowsize=4, alpha=.1, beta=.5)
-    f = cgt.function([],y)
-    print f().sum()
-    print f().sum()
-    print f().sum()
-    assert np.isfinite(f().sum())
-    # print f(Xval).sum()
-    a = nr.rand(*cgt.infer_shape(y))
-    loss = (y*a).sum()
-    gradcheck_model(loss, [X],eps=1e-5)
-
+    return Result(CrossChannelLRNForward(LRNInfo(localsize,alpha,beta)), [X])[0]
 
 
     # print q[:-1].sum(), s[:-1].sum()

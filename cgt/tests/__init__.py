@@ -4,8 +4,8 @@ import numpy as np
 
 def gradcheck_model(cost, params, extravars=(), extravals=(), atol=1e-8, eps=1e-9):
     precision = cgt.get_precision()
-    if precision != "quad":
-        cgt.utils.warn("You're doing a gradient check with %s precision. Use %s for best results"%(precision,"quad"))
+    if precision == "single":
+        cgt.utils.warn("You're doing a gradient check with %s precision. Use double or better yet quad for best results"%(precision))
     assert all(isinstance(param, cgt.core.Input) for param in params)
     assert len(extravars) == len(extravals)
 

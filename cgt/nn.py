@@ -3,24 +3,16 @@ Neural network library, drawing inspiration from Torch's nn and nngraph
 """
 
 import cgt
-from cgt import core, size
+from cgt import core, size, utils
 import numpy as np
-from .im2col import im2col
-from .pooling import max_pool_2d
+from .nn_ops.im2col import im2col
+from .nn_ops.max_pool_2d import max_pool_2d
+from .nn_ops.cross_channel_lrn import cross_channel_lrn
+from collections import namedtuple
 
-class Affine(object):
-    """
-    torch's nn.Linear
-    """
-    def __init__(self, input_size, output_size, name=None):
-        name = "unnamed" if name is None else name
-        self.weight = cgt.shared(np.zeros((input_size, output_size),cgt.floatX),
-            name=name+".W",fixed_shape_mask=(True,True))
-        self.bias = cgt.shared(np.zeros((1, output_size),cgt.floatX), 
-            name=name+".b",fixed_shape_mask=(True,True))
-
-    def __call__(self, x):
-        return cgt.broadcast("+", x.dot(self.weight), self.bias, "xx,1x")
+# ================================================================
+# Main datastructures
+# ================================================================
 
 class Module(object):
     def __init__(self, inputs, outputs):
@@ -35,27 +27,13 @@ class Module(object):
     def expand(self, inputs):
         return self.c.expand(inputs)
 
-def setup_contiguous_storage(shareds):
-    """
-    Moves the data stored in a bunch of Data variables to be slices of a single contiguous vector,
-    and return a view on that vector.
-    This facilitates writing optimization code that acts on flat vectors.
-    """
-    if core.get_config()["backend"]=="native":
-        utils.warn("setup_contiguous_storage is broken for backend=native. this will probably fail")
-    dtype = cgt.floatX
-    # assert utils.allsame([s.get_device() for s in shareds])
-    tot_size = sum(s.get_size() for s in shareds)
-    flatvec = np.empty(tot_size, dtype=dtype)
-    start = 0
-    for s in shareds:
-        assert s.dtype == dtype
-        v = s.get_value()
-        size = v.size #pylint: disable=W0621
-        flatvec[start:start+size] = v.ravel()
-        s.set_value(flatvec[start:start+size].reshape(v.shape))
-        start += size
-    return flatvec
+
+def get_parameters(loss):
+    return list(node for node in cgt.core.topsorted([loss]) if isinstance(node,core.Data))
+
+# ================================================================
+# Math functions
+# ================================================================
 
 def rectify(x):
     return x * (x >= 0)
@@ -109,5 +87,98 @@ def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
     col_Bmn_Z = col_BmnZ.reshape([B*m*n, Z])
     col_Bmn_L = core.Result(core.Mul22(False,True), [col_Bmn_Z, f_LZ])
     return col_Bmn_L.reshape([B,m,n,L]).transpose([0,3,1,2])
+
+
+# ================================================================
+# Initializations
+# ================================================================
+
+IIDGaussian = namedtuple("IIDGaussian", ["mean","std"])
+IIDGaussian.__new__.__defaults__ = (0, 1)
+IIDUniform = namedtuple("IIDUniform", ["low","high"])
+Zeros = namedtuple("Zeros",[])
+
+def _init_array(init, shape):
+    if isinstance(init, IIDGaussian):
+        return (np.random.randn(*shape)*init.std + init.mean).astype(cgt.floatX)
+    elif isinstance(init, IIDUniform):
+        return (np.random.rand(*shape)*(init.high-init.low) + init.low).astype(cgt.floatX)
+    elif isinstance(init, Zeros):
+        return np.zeros(shape, cgt.floatX)
+    else:
+        raise ValueError("Invalid initializer %s"%init)
+
+
+
+# ================================================================
+# Layer constructors
+# ================================================================
+
+class Affine(object):
+    """
+    Like torch's nn.Linear
+    """
+    def __init__(self, input_size, output_size, name=None, weight_init=Zeros(), bias_init=Zeros()):
+        input_size = int(input_size)
+        output_size = int(output_size)
+        name = "unnamed" if name is None else name
+
+        self.weight = cgt.shared(_init_array(weight_init, (input_size, output_size)),
+            name=name+".W",fixed_shape_mask=(True,True))
+        self.bias = cgt.shared(_init_array(bias_init, (1, output_size)), 
+            name=name+".b",fixed_shape_mask=(True,True))
+
+    def __call__(self, x):
+        return cgt.broadcast("+", x.dot(self.weight), self.bias, "xx,1x")
+
+
+class SpatialConvolution(object):
+    def __init__(self, input_channels, output_channels, kernelshape, pad, stride=(1,1), name=None, weight_init=Zeros(), bias_init=Zeros()):
+        # type conversion
+        input_channels = int(input_channels)
+        output_channels = int(output_channels)
+        self.kernelshape = tuple(map(int, kernelshape))
+        self.pad = tuple(map(int,pad))
+        self.stride = tuple(map(int,stride))
+        name = "unnamed" if name is None else name
+
+        self.weight = cgt.shared(_init_array(weight_init, (output_channels, input_channels) + self.kernelshape),
+            name=name+".W",fixed_shape_mask="all")
+        self.bias = cgt.shared(_init_array(bias_init, (1, output_channels, 1, 1)), 
+            name=name+".b",fixed_shape_mask="all")
+
+    def __call__(self, x):
+        tmp = conv2d(x, self.weight, self.kernelshape, self.pad, self.stride)
+        return cgt.broadcast("+", tmp, self.bias, "xxxx,1x11")
+
+
+# ================================================================
+# Deprecated
+# ================================================================
+
+
+
+def setup_contiguous_storage(shareds):
+    """
+    Moves the data stored in a bunch of Data variables to be slices of a single contiguous vector,
+    and return a view on that vector.
+    This facilitates writing optimization code that acts on flat vectors.
+    """
+    FIXME
+    if core.get_config()["backend"]=="native":
+        utils.warn("setup_contiguous_storage is broken for backend=native. this will probably fail")
+    dtype = cgt.floatX
+    # assert utils.allsame([s.get_device() for s in shareds])
+    tot_size = sum(s.get_size() for s in shareds)
+    flatvec = np.empty(tot_size, dtype=dtype)
+    start = 0
+    for s in shareds:
+        assert s.dtype == dtype
+        v = s.get_value()
+        size = v.size #pylint: disable=W0621
+        flatvec[start:start+size] = v.ravel()
+        s.set_value(flatvec[start:start+size].reshape(v.shape))
+        start += size
+    return flatvec
 
 

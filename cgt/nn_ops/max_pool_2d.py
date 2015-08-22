@@ -77,25 +77,5 @@ CGT_EXPORT_C void $function(conv_closure* cl, cgtArray** reads, cgtArray* write)
 }"""%dict(cdtype=core.np2c[input_types[0].dtype])
         return core.NativeCompileInfo(code, closure_triples=info2closure(self.info), includes=["pooling.h"])
 
-def test():
-    np.random.seed(0)
-    cgt.set_precision("quad")
-    x = cgt.tensor4("x", fixed_shape=(2,3,5,7))
-    y = max_pool_2d(x, (4,4),(0,0),(1,1))
-    xval = np.random.randn(2,3,5,7)
-    hval = np.random.randn(*core.infer_shape(y))
-    h = cgt.constant(hval)
-
-    cost = (y*h).sum()
-
-    fcost = cgt.function([x], cost)
-    fgrad = cgt.function([x], cgt.grad(cost, [x])[0])
-
-    from cgt.numeric_diff import numeric_grad
-    gnum = numeric_grad(fcost, xval)
-    gana = fgrad(xval)
-
-    assert np.allclose(gnum,gana)
-
 if __name__ == "__main__":
     test()
