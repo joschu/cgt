@@ -4,6 +4,20 @@ import __builtin__
 import traceback
 import cgt
 from . import utils
+import logging.config
+
+logging.config.dictConfig({
+    "version" : 1,
+    "root" : {
+        "level" : "INFO",
+        "formatters" : {
+            "simple" : {
+                "format" : "%(name)s:%(levelname)s:%(asctime)s:%(msecs)d %(message)s",
+                "datefmt" : "%H:%M:%S"
+            }
+        }
+    }
+})
 
 # ================================================================
 # Datatypes
@@ -524,8 +538,6 @@ class Data(Input):
             self._value = value
         else:
             self._value = cgt.cycgt.CppArrayWrapper.from_numpy(value, self.device.devtype, False)
-
-
     # TODO: remove external accesses to .value
 
 def _singleton_ones(dtype, ndim):
@@ -2703,7 +2715,7 @@ def _load_config():
     return config
 
 def reset_config():
-    get_config(True)  
+    get_config(True)
 
 def update_config(**kws):
     config = get_config()

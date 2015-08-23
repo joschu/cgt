@@ -6,6 +6,7 @@ import os.path as osp
 import argparse
 from time import time
 from StringIO import StringIO
+from param_collection import ParamCollection
 
 # via https://github.com/karpathy/char-rnn/blob/master/model/GRU.lua
 # via http://arxiv.org/pdf/1412.3555v1.pdf
@@ -75,7 +76,7 @@ def cat_sample(ps):
     ps is a 2D array whose rows are vectors of probabilities
     """
     r = nr.rand(len(ps))
-    out = np.zeros(len(ps),dtype='i32')
+    out = np.zeros(len(ps),dtype='i4')
     cumsums = np.cumsum(ps, axis=1)
     for (irow,csrow) in enumerate(cumsums):
         for (icol, csel) in enumerate(csrow):
@@ -87,10 +88,16 @@ def cat_sample(ps):
 
 def rmsprop_update(grad, state):
     state.sqgrad[:] *= state.decay_rate
+    state.count *= state.decay_rate
+
     np.square(grad, out=state.scratch) # scratch=g^2
-    state.sqgrad[:] += state.scratch
-    np.sqrt(state.sqgrad, out=state.scratch) # scratch = scaling
-    np.divide(grad, state.scratch, out=state.scratch) # scratch = grad/scaling
+
+    state.sqgrad += state.scratch
+    state.count += 1
+
+    np.sqrt(state.sqgrad, out=state.scratch) # scratch = sum of squares
+    np.divide(state.scratch, np.sqrt(state.count), out=state.scratch) # scratch = rms
+    np.divide(grad, state.scratch, out=state.scratch) # scratch = grad/rms
     np.multiply(state.scratch, state.step_size, out=state.scratch)
     state.theta[:] -= state.scratch
 
@@ -142,7 +149,7 @@ class Table(dict):
 
 def make_rmsprop_state(theta, step_size, decay_rate):
     return Table(theta=theta, sqgrad=np.zeros_like(theta)+1e-6, scratch=np.empty_like(theta), 
-        step_size=step_size, decay_rate=decay_rate)
+        step_size=step_size, decay_rate=decay_rate, count=0)
     
 class Loader(object):
     def __init__(self, data_dir, size_batch, n_unroll, split_fractions):
@@ -200,7 +207,7 @@ def text_to_tensor(text_file, preproc_file):
 
 
 def get_num_hiddens(arch, n_layers):
-        return {"lstm" : 2 * n_layers, "gru" : n_layers}[arch]
+    return {"lstm" : 2 * n_layers, "gru" : n_layers}[arch]
 
 def sample(f_step, init_hiddens, char2ind, n_steps, temp, seed_text = ""):
     vocab_size = len(char2ind)
@@ -239,58 +246,58 @@ def main():
     parser.add_argument("--size_mem", type=int,default=64)
     parser.add_argument("--size_batch", type=int,default=64)
     parser.add_argument("--n_layers",type=int,default=2)
-    parser.add_argument("--n_unroll",type=int,default=64)
-    parser.add_argument("--step_size",type=float,default=1e-1)
+    parser.add_argument("--n_unroll",type=int,default=16)
+    parser.add_argument("--step_size",type=float,default=.01)
     parser.add_argument("--decay_rate",type=float,default=0.95)
     parser.add_argument("--n_epochs",type=int,default=20)
     parser.add_argument("--arch",choices=["lstm","gru"],default="lstm")
     parser.add_argument("--grad_check",action="store_true")
     parser.add_argument("--profile",action="store_true")
 
-    opt = parser.parse_args()
+    args = parser.parse_args()
 
-    cgt.set_precision("quad" if opt.grad_check else "single")
+    cgt.set_precision("quad" if args.grad_check else "single")
 
-    assert opt.n_unroll > 1
+    assert args.n_unroll > 1
 
-    loader = Loader(opt.data_dir,opt.size_batch, opt.n_unroll, (.8,.1,.1))
+    loader = Loader(args.data_dir,args.size_batch, args.n_unroll, (.8,.1,.1))
 
-    network, f_loss, f_loss_and_grad, f_step = make_loss_and_grad_and_step(opt.arch, loader.size_vocab, 
-        loader.size_vocab, opt.size_mem, opt.size_batch, opt.n_layers, opt.n_unroll)
+    network, f_loss, f_loss_and_grad, f_step = make_loss_and_grad_and_step(args.arch, loader.size_vocab, 
+        loader.size_vocab, args.size_mem, args.size_batch, args.n_layers, args.n_unroll)
 
-    if opt.profile: profiler.start()
+    if args.profile: profiler.start()
 
     params = network.get_parameters()
-    th = nn.setup_contiguous_storage(params)
-    th[:] = nr.uniform(-0.08, 0.08, th.shape)
+    pc = ParamCollection(params)
+    pc.set_value_flat(nr.uniform(-.1, .1, size=(pc.get_total_size(),)))
 
     def initialize_hiddens(n):
-        return [np.zeros((n, opt.size_mem), cgt.floatX) for _ in xrange(get_num_hiddens(opt.arch, opt.n_layers))]
+        return [np.zeros((n, args.size_mem), cgt.floatX) for _ in xrange(get_num_hiddens(args.arch, args.n_layers))]
 
-    if opt.grad_check:
+    if args.grad_check:
         x,y = loader.train_batches_iter().next()
-        prev_hiddens = initialize_hiddens(size_batch)
+        prev_hiddens = initialize_hiddens(args.size_batch)
         def f(thnew):
-            thold = th.copy()
-            th[:] = thnew
+            thold = pc.get_value_flat()
+            pc.set_value_flat(thnew)
             loss = f_loss(x,y, *prev_hiddens)
-            th[:] = thold
+            pc.set_value_flat(thold)
             return loss
         from cgt.numeric_diff import numeric_grad
-        g_num = numeric_grad(f, th,eps=1e-10)
+        g_num = numeric_grad(f, pc.get_value_flat(),eps=1e-10)
         _, g_anal,_,_ = f_loss_and_grad(x,y,*prev_hiddens)
         assert np.allclose(g_num, g_anal, atol=1e-4)
         print "Gradient check succeeded!"
         return
 
-    optim_state = make_rmsprop_state(theta=th, step_size = opt.step_size, 
-        decay_rate = opt.decay_rate)
+    optim_state = make_rmsprop_state(theta=pc.get_value_flat(), step_size = args.step_size, 
+        decay_rate = args.decay_rate)
 
-    for iepoch in xrange(opt.n_epochs):
+    for iepoch in xrange(args.n_epochs):
         losses = []
         tstart = time()
         print "starting epoch",iepoch
-        cur_hiddens = initialize_hiddens(opt.size_batch)
+        cur_hiddens = initialize_hiddens(args.size_batch)
         for (x,y) in loader.train_batches_iter():
             out = f_loss_and_grad(x,y, *cur_hiddens)
             loss = out[0]
@@ -298,13 +305,16 @@ def main():
             np.clip(grad,-5,5,out=grad)
             cur_hiddens = out[2:]
             rmsprop_update(grad, optim_state)
+            pc.set_value_flat(optim_state["theta"])
             losses.append(loss)
         print "%.3f s/batch. avg loss = %.3f"%((time()-tstart)/len(losses), np.mean(losses))
         optim_state.step_size *= .95 #pylint: disable=E1101
 
         sample(f_step, initialize_hiddens(1), char2ind =loader.char2ind, n_steps=1000, temp=1.0, seed_text = "")
 
-    if opt.profile: profiler.print_stats()
+        print pc.get_value_flat().sum()
+
+    if args.profile: profiler.print_stats()
 
 if __name__ == "__main__":
     main()

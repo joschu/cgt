@@ -10,10 +10,6 @@ from .nn_ops.max_pool_2d import max_pool_2d
 from .nn_ops.cross_channel_lrn import cross_channel_lrn
 from collections import namedtuple
 
-# ================================================================
-# Main datastructures
-# ================================================================
-
 class Module(object):
     def __init__(self, inputs, outputs):
         self.c = core.Composition(inputs, outputs)
