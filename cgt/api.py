@@ -185,7 +185,7 @@ def floor_divide(x, y):
 
 def getitem(arr, slis):
     arr = core.as_node(arr)
-    if isinstance(arr.get_type(), core.TupleType):
+    if isinstance(arr.typ, core.TupleType):
         assert isinstance(slis, int)
         return tuple_index(arr, slis)
     if (not _is_list_or_tuple(slis)):
@@ -343,8 +343,7 @@ def get_precision():
 
 def shape(x):
     x = core.as_node(x)
-    typ = x.get_type()
-    if isinstance(typ, core.TensorType):
+    if isinstance(x.typ, core.TensorType):
         return [size(x, i) for i in xrange(x.ndim)]
     else:
         return tuple(map(shape, x.parents))

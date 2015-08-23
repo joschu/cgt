@@ -2,7 +2,7 @@ import cgt, numpy as np
 from cgt import core
 
 class SinCos(core.Op):
-    call_type = "byval"
+    return_type = "byval"
     available_impls = ("python",)
     def typ_apply(self, inputs):
         assert inputs[0].dtype == 'f4'
@@ -29,7 +29,7 @@ class SinCos(core.Op):
 #         return CImpl(code, includes=["math.h"], link_flags="-lm")
 
 class SinCos2(core.Op):
-    call_type = "byref"
+    return_type = "byref"
     available_impls = ("python","native_cpu")    
     def typ_apply(self, inputs):
         ndim = inputs[0].ndim

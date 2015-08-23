@@ -30,9 +30,9 @@ class Dtype: #pylint: disable=W0232
         Return canonical string representation of dtype,
         using the floating point type that CGT is currently configured for
 
-        The following string representations are used: i1,i2,i4,i8,  f4,f8,  c8,c16
-        Either all floats are single precision or all are double.
-        So either we're using single (f4, c8) or double (f8, c16).
+        The following string representations are used: i1,i2,i4,i8,  f4,f8,f16  c8,c16,c32
+        So either we're using single (f4, c8) or double (f8, c16) or quad (f16, c32)
+        Note that quad precision is very useful for gradient checking
         """
         dt = np.dtype(dt)
         if dt.char in 'fdg':
@@ -45,16 +45,20 @@ class Dtype: #pylint: disable=W0232
             raise ValueError("Invalid dtype %s"%dt)
 
 def as_valid_array(x, dtype=None):
+    """
+    Converts to numpy array and dtype with valid precision
+    """
     x = np.asarray(x)
     x = x.astype(Dtype.canon(x.dtype) if dtype is None else dtype)
     return x
 
 def as_valid_tuple(x):
     return tuple(as_valid_array(a) for a in x)
+    # @TUPLES_OF_TENSORS
 
 def as_valid_arg(x):
     if isinstance(x, tuple):
-        return tuple(as_valid_arg(el) for el in x)
+        return as_valid_tuple(x)
     else:
         return as_valid_array(x)
 
@@ -83,11 +87,11 @@ class TensorType(Type):
 
 class TupleType(Type):
     """
-    A compount type
-    For now, we will only allow tuples of tensors, though we may allow tuple elements in the future
+    A compound type consisting of a tuple of other types
+    Only tuples of tensors are currently supported
     """
     def __init__(self, *eltypes):
-        assert all(isinstance(eltype, TensorType) for eltype in eltypes)
+        assert all(isinstance(eltype, TensorType) for eltype in eltypes) # @TUPLES_OF_TENSORS
         self.eltypes = eltypes
         self.dtype = 'O'
     def __len__(self):
@@ -100,7 +104,7 @@ class TupleType(Type):
         return "Tup(" + ",".join(map(str,self.eltypes))+")"
     def __eq__(self, other):
         return len(self.eltypes) == len(other.eltypes)\
-            and all(typ0 == typ1 for (typ0, typ1) in zip(self.eltypes, other.eltypes)) # XXX: self.dtype?
+            and all(typ0 == typ1 for (typ0, typ1) in zip(self.eltypes, other.eltypes))
     def __hash__(self):
         return hash((self.eltypes, self.dtype))
 
@@ -140,6 +144,9 @@ def _promote(typ1, typ2):
         raise ValueError("Don't know what to do with dtypes %s,%s"%(typ1, typ2))
 
 def _promote_multi(xtypes):
+    """
+    _promote with multiple operands
+    """
     return reduce(_promote, xtypes)
 
 def dtype_kind(dtype):
@@ -183,8 +190,6 @@ class Node(object):
         return False
     def is_data(self):
         return False
-    def get_type(self):
-        return self.typ
     def get_diff(self):
         return [] if self.op is None else self.op.get_diff(len(self.parents))
     # Unary ops
@@ -212,13 +217,13 @@ class Node(object):
     def __lt__(self, other):
         return cgt.less(self, other)
     def __le__(self, other):
-        return cgt.less_equal(self, other)
+        return cgt.less_equal(self, other)        
+    # GOT RID OF __eq__ and __ne__ because they might lead to funny problems when
+    # people want equality check. No strong opinion on whether they should be included
     # def __eq__(self, other):
     #     return equal(self, other)
     # def __ne__(self, other):
     #     return not_equal(self, other)
-
-    # TODO make these all match
     def __radd__(self, other):
         return self.__add__(other)
     def __rsub__(self, other):
@@ -298,7 +303,7 @@ def _get_value_type(value):
         return TupleType(*map(_get_value_type, value))
 
 def num_components(node):
-    return len(node.get_type()) if isinstance(node.get_type(), TupleType) else 1
+    return len(node.typ) if isinstance(node.typ, TupleType) else 1
 
 
 class Op(object):
@@ -307,7 +312,7 @@ class Op(object):
     """
 
     # attributes that can be overwritten in subclasses
-    call_type = "byref" # or "byval"
+    return_type = "byref" # or "byval"
     writes_to_input = -1
     available_impls = () # python, native_cpu, native_gpu
 
@@ -474,7 +479,7 @@ class Argument(Input):
 
 # Just here as a temporary  hack so node.op does the right thing in cython
 class GetData(Op):
-    call_type="byval"
+    return_type="byval"
     available_impls=("python","native_cpu","native_gpu")
     def __init__(self, datanode):
         self.datanode = datanode
@@ -678,7 +683,7 @@ class NativeCompileInfo(object):
             setup=False, teardown=False, gpu_deref_mask=None, store_objects = ()):
         # To be filled in by caller of constructor
         self.op_str = None
-        self.call_type = None
+        self.return_type = None
         self.n_in = None
         #####
         self.lang = lang
@@ -698,7 +703,7 @@ class Callable(object):
     def call(self, *args):
         raise NotImplementedError
     @property
-    def call_type(self):
+    def return_type(self):
         raise NotImplementedError
     @property
     def op_str(self):
@@ -711,7 +716,7 @@ class Callable(object):
 class PyCallable(Callable):
     def __init__(self, op,  n_in, func):
         self._op_str = str(op)
-        self._call_type = op.call_type
+        self._return_type = op.return_type
         self._n_in = n_in
         self._func = func
         self._kind = "py"
@@ -721,8 +726,8 @@ class PyCallable(Callable):
     def op_str(self):
         return self._op_str
     @property
-    def call_type(self):
-        return self._call_type
+    def return_type(self):
+        return self._return_type
     @property
     def kind(self):
         return self._kind
@@ -735,10 +740,10 @@ class PyCallable(Callable):
     
     
 class NativeCallable(object):
-    def __init__(self, n_in, call_type, op_str, fptr, cldata=None, 
+    def __init__(self, n_in, return_type, op_str, fptr, cldata=None, 
             store_objects=None, setup_fptr=None, teardown_fptr=None):
         self._n_in = n_in
-        self._call_type = call_type
+        self._return_type = return_type
         self._op_str = op_str
         self.fptr = fptr
         self.cldata = cldata
@@ -751,8 +756,8 @@ class NativeCallable(object):
         if self.teardown_fptr is not None:
             self.teardown_fptr()
     @property
-    def call_type(self):
-        return self._call_type
+    def return_type(self):
+        return self._return_type
     @property
     def op_str(self):
         return self._op_str
@@ -768,8 +773,8 @@ class NativeCallable(object):
     def _call_byref(self, inputs, output):
         cgt.cycgt.apply_byref(self.fptr, self.cldata, inputs, output)
     def call(self, *args):
-        if self._call_type == "byval": self._call_byval(*args)
-        elif self.call_type == "byref": self._call_byref(*args)
+        if self._return_type == "byval": self._call_byval(*args)
+        elif self.return_type == "byref": self._call_byref(*args)
         else: raise Unreachable
 
     
@@ -790,7 +795,7 @@ class Constant(Op): #pylint: disable=W0223
         return self.value
 
 class ConstantTensor(Constant):
-    call_type = "byref"
+    return_type = "byref"
     # XXX for some reason valret version gives rare segfaults
     def __init__(self, value):
         Constant.__init__(self, as_valid_array(value))
@@ -839,8 +844,8 @@ class ConstantTensor(Constant):
         ("data",ctypes.c_void_p,self.value.ctypes.data)]
     def get_native_compile_info(self, input_types, devtype):
         code = None
-        if self.call_type == "byval": code = self._c_code_valret(input_types)
-        elif self.call_type == "byref": code = self._c_code_inplace(input_types)
+        if self.return_type == "byval": code = self._c_code_valret(input_types)
+        elif self.return_type == "byref": code = self._c_code_inplace(input_types)
         else: raise ValueError
         return NativeCompileInfo(func_code=code, closure_triples=self.get_closure(),store_objects=(self.value,))
     def _c_code_inplace(self, inputs):
@@ -860,7 +865,7 @@ class ConstantTensor(Constant):
             }"""
 
 class ConstantTuple(Constant):
-    call_type = "byval"
+    return_type = "byval"
     def __init__(self, value):
         Constant.__init__(value)
     def get_expr(self, parent_exprs):
@@ -935,7 +940,7 @@ class Arange(Op):
     (start,stop,step) -> 1D array, just like numpy
     """
     available_impls = ("python","native_cpu")        
-    call_type="byval"
+    return_type="byval"
     def __init__(self, dtype='i8'):
         self.dtype = dtype
     def get_diff(self, num_inputs):
@@ -1290,7 +1295,7 @@ class Size(Op):
     """
     Return an element of the shape of a tensor
     """
-    call_type = "byval"
+    return_type = "byval"
     available_impls = ("python","native_cpu")        
     def __init__(self, axis):
         self.axis = axis
@@ -1329,7 +1334,7 @@ class Size(Op):
 
 class Reshape(Op):
     available_impls = ("python","native_cpu")        
-    call_type = "byval"
+    return_type = "byval"
     def get_diff(self, num_inputs):
         return [True] + [False]*(num_inputs-1)
     def get_py_func(self, input_types):
@@ -2103,7 +2108,7 @@ class Outer(Op):
 
 class Dot(Op):
     available_impls = ("python","native_cpu")    
-    call_type = "byref"
+    return_type = "byref"
     def get_py_func(self, input_types):
         def f(reads,write):
             write[...] = np.dot(reads[0], reads[1])
@@ -2135,7 +2140,7 @@ class Dot(Op):
 
 class Composition(Op):
     available_impls = ("python",)        
-    call_type = "byval"
+    return_type = "byval"
     def __init__(self, inputs, outputs):
         self._inputs = inputs
         self._outputs = outputs
@@ -2148,7 +2153,7 @@ class Composition(Op):
         dio = set(differentiably_influences(outputs))
         wrt = [x for x in inputs if x in dio]
 
-        self._goutput = [Argument(x.get_type()) for x in outputs]
+        self._goutput = [Argument(x.typ) for x in outputs]
         gwrt = pullback(self._outputs, self._goutput, wrt)
         
         wrtidx = 0
@@ -2160,7 +2165,7 @@ class Composition(Op):
             self._gin.append(None)
 
         self._diff = [node in dio for node in self._inputs]
-        self._out_typs = [x.get_type() for x in outputs]
+        self._out_typs = [x.typ for x in outputs]
 
     def get_diff(self, _):
         return self._diff
@@ -2195,7 +2200,7 @@ class Composition(Op):
 
 class TupleIndex(Op):
     available_impls = ("python","native_cpu","native_gpu")        
-    call_type="byval"
+    return_type="byval"
     def __init__(self, idx):
         self.idx = idx
     def get_py_func(self, input_types):
@@ -2221,7 +2226,7 @@ class TupleIndex(Op):
 
 class MakeTuple(Op):
     available_impls = ("python",)        
-    call_type="byval"
+    return_type="byval"
     def get_py_func(self, input_types):
         def f(inputs):
             return tuple(inputs)
@@ -2232,7 +2237,7 @@ class MakeTuple(Op):
         return TupleType(*input_types)
     
 def unpack(tup):
-    return [Result(TupleIndex(i),[tup]) for i in xrange(len(tup.get_type()))]
+    return [Result(TupleIndex(i),[tup]) for i in xrange(len(tup.typ))]
 
 # Assertion and debug operations
 # ----------------------------------------------------------------
@@ -2356,7 +2361,7 @@ def process_top_stack_item_and_maybe_get_replacement(stack, analysis, repl): #py
         if newnewnode is None:
             return (orig,newnode)
         else:
-            assert newnewnode.get_type() == orig.get_type()
+            assert newnewnode.typ == orig.typ
             if newnewnode in repl:
                 return (orig, newnewnode)
             else:
@@ -2419,7 +2424,7 @@ def do_analysis(node, analysis):
         newparents = node.parents
         node2shape[node] = node.op.shp_apply(newparents)
         # assert all([s.dtype == "i8" for s in node2shape[node]])
-    assert len(node2shape[node]) == node.ndim or isinstance(node.get_type(),TupleType)
+    assert len(node2shape[node]) == node.ndim or isinstance(node.typ,TupleType)
     # -- SCALAR VALUE --
     if isinstance(node, Result):
         op = node.op
@@ -2616,7 +2621,7 @@ def alloc_from_shp(shp, typ):
         return np.empty(shp,typ.dtype)
 
 def alloc_output(node, vals):
-    typ = node.get_type()
+    typ = node.typ
     shp = get_numeric_shape_fun(node)(vals)
     return alloc_from_shp(shp,typ)
 
@@ -2638,7 +2643,7 @@ def _unflatten_list(li,sizes):
 
 
 def get_numeric_shape_fun(node):
-    args = [make_argument(p.get_type()) for p in node.parents]
+    args = [make_argument(p.typ) for p in node.parents]
     # outputs = simplify(node.op.shp_apply(args))
     syshape = node.op.shp_apply(args)
 
@@ -2675,7 +2680,7 @@ def py_numeric_apply(node, vals):
     except MethodNotDefined:
         print 'Op %s has no Python implementation' % repr(node.op)
         raise
-    if node.op.call_type == "byval":
+    if node.op.return_type == "byval":
         out = callable.call(vals)
     else:
         out = alloc_output(node,vals)

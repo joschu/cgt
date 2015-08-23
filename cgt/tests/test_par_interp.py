@@ -8,7 +8,7 @@ from numpy.random import randn, seed
 
 
 class SleepFor(Op):
-    call_type="byval"
+    return_type="byval"
     available_impls=("native_cpu",)
     def get_native_compile_info(self, _, __):
         code=r"""
@@ -45,7 +45,7 @@ def test_sleeps():
 
 def test_matmuls():
     with cgt.scoped_update_config(parallel_interp = True, backend="native"):
-        
+
         m = 8
         d = 1000
 

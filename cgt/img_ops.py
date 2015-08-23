@@ -142,7 +142,7 @@ class Pool(Op):
                                       (size(x,3)-self.pad[1]-self.kernel[1]+1)//self.stride[0]] 
                                       # XXX round up or down?
     def typ_apply(self, inputs):
-        return inputs[0].get_type()
+        return inputs[0].typ
 
 def pool(kind, x, stride, kernel, pad):
     return Result(Pool(kind,stride,kernel,pad), [x])

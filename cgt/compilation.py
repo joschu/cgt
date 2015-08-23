@@ -77,7 +77,7 @@ def is_tuple(x):
 
 def create_interpreter(inputs, outputs, eg, node2memloc):
     assert isinstance(eg, ExecutionGraph)
-    input_types = [input.get_type() for input in inputs] #pylint: disable=W0622
+    input_types = [input.typ for input in inputs] #pylint: disable=W0622
     output_locs = [node2memloc[node] for node in outputs]
 
     backend = cgt.get_config()["backend"]
@@ -117,7 +117,7 @@ def topsorted_shapes_first(outputs, node2shape):
                     continue
             ps = i.parents
             ###### Changed part ######
-            if i.ndim > 0 and not i.is_input() and i.op.call_type=="byref":
+            if i.ndim > 0 and not i.is_input() and i.op.return_type=="byref":
                 if i in node2shape:
                     shpels = node2shape[i]
                 else:
@@ -161,7 +161,7 @@ def determine_memowner(nodes_sorted, updates, node2dev):
             base = node2memowner[node.parents[node.op.writes_to_input]]
         elif node in after2before:
             base = after2before[node]
-        elif enable_inplace_opt and node.op.call_type == "byref": # TODO think about if we need any other conditions
+        elif enable_inplace_opt and node.op.return_type == "byref": # TODO think about if we need any other conditions
             nodeshape = node.op.shp_apply(node.parents)
             for parent in node.parents:
                 if (len(node2child[parent])==1
@@ -203,7 +203,7 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
             instrs.append(LoadArgument(i, write_loc))
         else:
             read_locs = [node2memloc[parent] for parent in node.parents]
-            if node.op.call_type == "byref":
+            if node.op.return_type == "byref":
                 if node2memowner[node] is node:
                     if is_tensor(node): # just make one memory location for output
                         nodeshape = node2shape[node] if node.ndim > 0 else []
@@ -214,13 +214,13 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
                         nodeshape = node2shape[node]
                         assert isinstance(nodeshape, tuple)
                         arr_locs = []
-                        for (arrshp, arrtyp) in utils.safezip(nodeshape, node.get_type()):
+                        for (arrshp, arrtyp) in utils.safezip(nodeshape, node.typ):
                             arr_loc = counter.new_memloc(node2dev[node].devtype)
                             shape_locs = [node2memloc[shpel] for shpel in arrshp]
                             instrs.append(Alloc(arrtyp.dtype, shape_locs, arr_loc))
                             arr_locs.append(arr_loc)
                         write_loc = counter.new_memloc(node2dev[node].devtype)
-                        instrs.append(BuildTup(node.get_type(), arr_locs, write_loc))
+                        instrs.append(BuildTup(node.typ, arr_locs, write_loc))
 
                 else:
                     # If this node writes to another node's memory, the devices must be the same
@@ -229,7 +229,7 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
                     write_loc = node2memloc[node2memowner[node]]                
                 instrs.append(ReturnByRef(node.op, [par.typ for par in node.parents], read_locs, write_loc, node_props=node.props))
             else:
-                assert node.op.call_type == "byval"
+                assert node.op.return_type == "byval"
                 write_loc = counter.new_memloc(node2dev[node].devtype)
                 instrs.append(ReturnByVal(node.op, [par.typ for par in node.parents], read_locs, write_loc, node_props=node.props))
         node2memloc[node] = write_loc
@@ -267,7 +267,7 @@ def get_callable(op, input_types, devtype, prefer_python=False):
 def get_native_callable(op, input_types, devtype):
     nci = op.get_native_compile_info(input_types, devtype)
     nci.op_str = str(op)
-    nci.call_type = op.call_type
+    nci.return_type = op.return_type
     nci.n_in = len(input_types)
     return nci2callable(nci)
 
@@ -516,7 +516,7 @@ def nci2callable(nci):
     teardown_fptr = getattr(lib, _teardownname(prefix)) if nci.teardown else None
     cldata = _build_closure(nci.closure_triples)
     if nci.lang == "cuda": assert nci.gpu_deref_mask is not None
-    return core.NativeCallable(nci.n_in, nci.call_type, nci.op_str, fptr, cldata=cldata, setup_fptr=setup_fptr, teardown_fptr=teardown_fptr,
+    return core.NativeCallable(nci.n_in, nci.return_type, nci.op_str, fptr, cldata=cldata, setup_fptr=setup_fptr, teardown_fptr=teardown_fptr,
         store_objects=nci.store_objects)
 
 def _funcname(prefix):
