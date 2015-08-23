@@ -704,8 +704,8 @@ class NativeCompileInfo(object):
     """
     Stores the information necessary to create a NativeCallable object
     """
-    def __init__(self, func_code, lang="c++", closure_triples = None, includes=(), link_flags="", 
-            setup=False, teardown=False, gpu_deref_mask=None, store_objects = ()):
+    def __init__(self, func_code, closure_triples = None, includes=(), link_flags="", 
+            setup=False, teardown=False, gpu_deref_mask=None, store_objects = (), extra_srcs=()):
         """
         func_code : code implementing function
         lang : c++ or cuda
@@ -722,7 +722,6 @@ class NativeCompileInfo(object):
         self.return_type = None
         self.n_in = None
         #####
-        self.lang = lang
         self.func_code = func_code
         self.closure_triples = closure_triples
         self.includes = list(includes)
@@ -731,9 +730,12 @@ class NativeCompileInfo(object):
         self.teardown = teardown
         self.gpu_deref_mask = gpu_deref_mask
         self.store_objects = store_objects
+        self.extra_srcs = extra_srcs
 
     def involves_gpu(self):
         return self.gpu_deref_mask is not None
+
+SrcFile = namedtuple("SrcFile", ["lang","code"])
 
 class Callable(object):
     """
@@ -1164,6 +1166,7 @@ class ElwiseUnary(Op):
     def get_native_compile_info(self, input_types, devtype):
         info = self.info
         out_dtype = self.typ_apply(input_types).dtype
+        d = dict(cdtype0=np2c[input_types[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
         if devtype == "cpu":
             code = r"""
                 static inline %(cdtype1)s scalar_$function(%(cdtype0)s x) {return %(cexpr)s;}
@@ -1175,24 +1178,32 @@ class ElwiseUnary(Op):
                     for (int i=0; i < s; ++i) {
                         writedata[i] = scalar_$function(readdata[i]);
                     }
-                }"""%dict(cdtype0=np2c[input_types[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
+                }"""%d
             return NativeCompileInfo(code, includes=["math.h"], link_flags="-lm")
         elif devtype == "gpu":
-            code = """
+            cuda_code = r"""
+                #include "cgt_cuda.h"
                 __forceinline__ __device__ %(cdtype1)s $function(%(cdtype0)s x) {return %(cexpr)s;}        
                 __global__ void ${function}_kernel(const size_t n, const %(cdtype0)s* in, %(cdtype1)s* out) {
                   CUDA_KERNEL_LOOP(i, n) {
                     out[i] = $function(in[i]);
                   }
                 }
+                void launchker_$function(size_t n, %(cdtype0)s* x, %(cdtype1)s* y) {
+                    int num_blocks, num_threads;
+                    cgt_get_bt(n, num_blocks, num_threads);
+                    ${function}_kernel<<<num_blocks, num_threads>>>(n, x, y);                
+                }
+                """%d
+            cpp_code = """
+                extern void launchker_${function}(size_t, %(cdtype0)s*, %(cdtype1)s*);            
                 CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
                     cgtArray* read = reads[0];
                     size_t n = read->size();
-                    int num_blocks, num_threads;
-                    cgt_get_bt(n, &num_blocks, &num_threads);
-                    ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)read->data(), (%(cdtype1)s*)write->data());
-                }"""%dict(cdtype0=np2c[input_types[0].dtype], cdtype1=np2c[out_dtype], cexpr=info.cexpr)
-            return NativeCompileInfo(code, lang="cuda",includes=["math.h"], link_flags="-lm",gpu_deref_mask=(True,))
+                    launchker_$function(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)write->data());
+                }"""%d
+            return NativeCompileInfo(cpp_code, includes=["math.h"], link_flags="-lm -lcudart",
+                gpu_deref_mask=(True,), extra_srcs=[SrcFile("cuda",cuda_code)])
         else:
             raise Unreachable
 
@@ -1290,6 +1301,8 @@ class ElwiseBinary(Op):
         ind4shape = 1 if self.scalar_mask[0] else 0
         index0 = "0" if self.scalar_mask[0] else "i"
         index1 = "0" if self.scalar_mask[1] else "i"
+        d = dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
+            cexpr=self.info.cexpr,index0=index0,index1=index1,ind4shape=ind4shape)
         if devtype == "cpu":
             code = r"""
                 static inline %(cdtype2)s scalar_$function(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
@@ -1302,26 +1315,32 @@ class ElwiseBinary(Op):
                     for (int i=0; i < s; ++i) {
                         out[i] = scalar_$function(in0[%(index0)s], in1[%(index1)s]);
                     }
-                }"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
-                cexpr=self.info.cexpr, index0=index0, index1=index1, ind4shape=ind4shape) 
+                }"""%d
             return NativeCompileInfo(func_code=code, includes=["math.h"])
 
         elif devtype == "gpu":
-            code = """
+            cuda_code = r"""
+                #include "cgt_cuda.h"
                 __forceinline__ __device__ %(cdtype2)s $function(%(cdtype0)s x, %(cdtype1)s y) {return %(cexpr)s;}
                 __global__ void ${function}_kernel(const size_t n, const %(cdtype0)s* x, const %(cdtype1)s* y, %(cdtype2)s* z) {
                   CUDA_KERNEL_LOOP(i, n) {
                     z[i] = $function(x[%(index0)s], y[%(index1)s]);
                   }
                 }
+                void launchker_$function(size_t n, %(cdtype0)s* x, %(cdtype1)s* y, %(cdtype2)s* write) {
+                    int num_blocks,num_threads;                    
+                    cgt_get_bt(n, num_blocks, num_threads);
+                    ${function}_kernel<<<num_blocks, num_threads>>>(n, x, y, z);                
+                }
+            """%d
+            cpp_code = """
+                extern void launchker_${function}(size_t, %(cdtype0)s*, %(cdtype1)s*), %(cdtype2)s*);
                 CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
                     size_t n = reads[%(ind4shape)s]->size();
-                    int num_blocks,num_threads;
-                    cgt_get_bt(n, &num_blocks, &num_threads);
-                    ${function}_kernel<<<num_blocks, num_threads>>>(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
-                }"""%dict(cdtype0=np2c[npdtype0],cdtype1=np2c[npdtype1],cdtype2=np2c[npdtype2],
-            cexpr=self.info.cexpr,index0=index0,index1=index1,ind4shape=ind4shape) 
-            return NativeCompileInfo(func_code=code, lang="cuda", includes=["math.h"], gpu_deref_mask=(True,True))
+                    launchker_${function}(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
+                }"""%d
+            return NativeCompileInfo(func_code=cpp_code, includes=["math.h"], gpu_deref_mask=(True,True),
+                extra_srcs=[SrcFile("cuda",cuda_code)])
 
 def elwise_binary(opname, x, y):
     (x, y) = map(as_node, (x, y))

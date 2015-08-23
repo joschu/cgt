@@ -1,5 +1,8 @@
 #pragma once
 #include "cuda_runtime.h"
+#include "stdio.h"
+
+#define CGT_EXPORT_C extern "C" __attribute__((visibility("default")))
 
 // Code mostly ripped off from caffe
 
@@ -37,27 +40,23 @@
 // CUDA: check for error after kernel execution and exit loudly if there is one.
 #define CUDA_POST_KERNEL_CHECK CUDA_CHECK(cudaPeekAtLastError())
 
-// CUDA: library error reporting.
-// const char* cublasGetErrorString(cublasStatus_t error);
-// const char* curandGetErrorString(curandStatus_t error);
-
-// TODO better determination of threads info
-// todo: this is c++ so let's use refs
-static void cgt_get_bt(size_t size, int* num_blocks, int* num_threads) {
+// this is from Minerva
+// todo: what's the rationale?
+static void cgt_get_bt(size_t size, int& num_blocks, int& num_threads) {
   if(size <= 32)
-    *num_threads = 32;
+    num_threads = 32;
   else if(size <= 64)
-    *num_threads = 64;
+    num_threads = 64;
   else if(size <= 128)
-    *num_threads = 128;
+    num_threads = 128;
   else if(size <= 256)
-    *num_threads = 256;
+    num_threads = 256;
   else if(size <= 512)
-    *num_threads = 512;
+    num_threads = 512;
   else
-    *num_threads = 1024;
-  *num_blocks = (int)(((size + *num_threads - 1) / *num_threads));
-  if (*num_blocks < 0 || 128 < *num_blocks) {
-    *num_blocks = 128;
+    num_threads = 1024;
+  num_blocks = (int)(((size + num_threads - 1) / num_threads));
+  if (num_blocks < 0 || 128 < num_blocks) {
+    num_blocks = 128;
   }
 }

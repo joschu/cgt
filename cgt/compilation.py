@@ -496,26 +496,27 @@ class ReturnByVal(Instr):
 # Compiling native code
 # ================================================================
 
-    
 def nci2callable(nci):
-    common_includes =["cgt_common.h","cgt_cuda.h"] if nci.involves_gpu() else ["cgt_common.h"]
-    code = _gen_code(common_includes + nci.includes, nci.closure_triples, nci.func_code)
-    tu = TranslationUnit(nci.lang, code, nci.link_flags)
-    compile_info = get_compile_info()
+    template_code = gen_templated_code(nci.includes, nci.closure_triples, nci.func_code)
+    compile_info = get_compile_info()    
+    prefix = utils.hash_seq1(template_code, compile_info["CPP_FLAGS"], *(src.code for src in nci.extra_srcs))
+    d = dict(function=_funcname(prefix), closure=_closurename(prefix),setup=_setupname(prefix),teardown=_teardownname(prefix))
+    
+    fn_srcfile = core.SrcFile("c++",string.Template(template_code).substitute(d))
+    srcfiles = [fn_srcfile]
+    srcfiles.extend(core.SrcFile(sf.lang, string.Template(sf.code).substitute(d)) for sf in nci.extra_srcs)
+    
     CACHE_ROOT = compile_info["CACHE_ROOT"]
-    if not osp.exists(CACHE_ROOT): os.makedirs(CACHE_ROOT)
-    prefix = tu.hash()
-    ext = {"c++" : ".cpp", "cuda" : ".cu"}[nci.lang]
-    srcpath = osp.join(CACHE_ROOT, prefix+ext)
     libpath = osp.join(CACHE_ROOT, prefix+".so")
     if not osp.exists(libpath):
-        tu.compile(prefix, srcpath, libpath)
-    lib = _get_or_load_lib(libpath)
+        tu = TranslationUnit(srcfiles, nci.link_flags)
+        tu.compile(prefix, libpath)
+
+    lib = get_or_load_lib(libpath)
     fptr = getattr(lib, _funcname(prefix))
     setup_fptr = getattr(lib, _setupname(prefix)) if nci.setup else None
     teardown_fptr = getattr(lib, _teardownname(prefix)) if nci.teardown else None
     cldata = _build_closure(nci.closure_triples)
-    if nci.lang == "cuda": assert nci.gpu_deref_mask is not None
     return core.NativeCallable(nci.n_in, nci.return_type, nci.op_str, fptr, cldata=cldata, setup_fptr=setup_fptr, teardown_fptr=teardown_fptr,
         store_objects=nci.store_objects)
 
@@ -528,25 +529,17 @@ def _teardownname(prefix):
 def _closurename(prefix):
     return "closure_"+prefix
 
-_LIBRARIES = {}
-def _get_or_load_lib(libname):
-    if libname in _LIBRARIES:
-        return _LIBRARIES[libname]
-    else:
-        out = ctypes.cdll.LoadLibrary(libname)
-        _LIBRARIES[libname] = out
-        return out
 
-def _gen_code(includes, closure_info, func_code):
+def gen_templated_code(includes, closure_info, func_code):
     s = StringIO()
+    includes = ["cgt_common.h"] + includes
     for fname in includes:
         s.write('#include "%s"\n'%fname)
-    _gen_struct_code(closure_info, s)
+    gen_struct_code(closure_info, s)
     s.write(func_code)
     return s.getvalue()
 
-
-def _gen_struct_code(triples, outstream):
+def gen_struct_code(triples, outstream):
     if triples is None:
         return
     outstream.write("typedef struct $closure {\n")
@@ -557,33 +550,45 @@ def _gen_struct_code(triples, outstream):
         outstream.write(";\n")
     outstream.write("} $closure;\n")
 
+_LIBRARIES = {}
+def get_or_load_lib(libname):
+    if libname in _LIBRARIES:
+        return _LIBRARIES[libname]
+    else:
+        out = ctypes.cdll.LoadLibrary(libname)
+        _LIBRARIES[libname] = out
+        return out
+
 
 class TranslationUnit(object):
     """All the input that goes into building a native binary for one or more ops"""
 
-    def __init__(self, lang, template_code, link_flags, compile_flags=None):
-        self.lang = lang
-        self.template_code = template_code
+    def __init__(self, srcfiles, link_flags):
+        self.srcfiles = srcfiles
         self.link_flags = link_flags
-        if compile_flags is None:
-            compile_flags = "-fPIC -O0 -g" if core.get_config()["debug_cpp"] else "-O3 -DNDEBUG -ffast-math"
-        self.compile_flags = compile_flags
 
-    def hash(self):
-        h = hashlib.md5()
-        for item in (self.template_code, self.link_flags, self.compile_flags):
-            h.update(item)
-        return h.hexdigest()
-
-    def generate_code(self, prefix):
-        d = dict(function=_funcname(prefix), closure=_closurename(prefix),setup=_setupname(prefix),teardown=_teardownname(prefix))
-        return string.Template(self.template_code).substitute(d)
-
-    def compile(self, prefix, srcpath, libpath):
-        """Runs the compiler, placing code in srcpath and the output in libpath"""
-        with open(srcpath,"w") as fh:
-            fh.write(self.generate_code(prefix))
-        call_and_print(_make_compile_command(srcpath, libpath, self.link_flags, self.compile_flags))
+    def compile(self, prefix, libpath):
+        """
+        Compiles all of the files, places them in the cache directory
+        Then links them creating prefix.so
+        """
+        CACHE_ROOT = get_compile_info()["CACHE_ROOT"]
+        cmds = ["cd %s"%CACHE_ROOT]
+        objs = []
+        for (i,(lang,code)) in enumerate(self.srcfiles):
+            if lang=="c++":
+                srcpath = osp.join(CACHE_ROOT, prefix+"_%i.cpp"%i)
+                cmds.append(_make_cpp_compile_cmd(srcpath))
+            elif lang=="cuda":
+                srcpath = osp.join(CACHE_ROOT, prefix+"_%i.cu"%i)
+                cmds.append(_make_cuda_compile_cmd(srcpath))
+            else:
+                raise NotImplementedError 
+            with open(srcpath,"w") as fh: fh.write(code)
+            objs.append(srcpath+".o")
+        cmds.append(_make_link_cmd(objs, self.link_flags, libpath))
+        bigcmd = " && ".join(cmds)
+        call_and_print(bigcmd)
 
 
 _COMPILE_CONFIG = None
@@ -594,7 +599,7 @@ def get_compile_info():
 
         config = core.get_config()
 
-        CGT_BUILD_ROOT = cgt.cycgt.cgt_build_root()
+        CGT_BUILD_ROOT = cgt.cycgt.cgt_build_root() #pylint: disable=E1101
 
         cmake_info = {}
         with open(osp.join(CGT_BUILD_ROOT,"build_info.txt")) as fh:
@@ -628,74 +633,50 @@ def get_compile_info():
             CGT_ENABLE_CUDNN = CGT_ENABLE_CUDNN,
             # CGT_LIBRARY = cmake_info["CGT_LIBRARY"],
         )
+
+        includes  = "-I"+_COMPILE_CONFIG["CGT_INCLUDE_DIR"]
+        includes += " -I"+_COMPILE_CONFIG["OPENBLAS_INCLUDE_DIR"]
+        link_flags = ""
+        if _COMPILE_CONFIG["CGT_ENABLE_CUDA"]:  includes += " -I"+_COMPILE_CONFIG["CUDA_INCLUDE_DIR"]
+        if _COMPILE_CONFIG["CGT_ENABLE_CUDNN"]: includes += " -I"+_COMPILE_CONFIG["CUDNN_ROOT"]
+        _COMPILE_CONFIG["INCLUDES"] = includes
+
+        link_flags = "-lcgt -L"+_COMPILE_CONFIG["CGT_LIBRARY_DIR"]
+        if _COMPILE_CONFIG["CGT_ENABLE_CUDA"]: link_flags += " -L"+_COMPILE_CONFIG["CUDA_LIBRARY_DIR"]
+        if _COMPILE_CONFIG["CGT_ENABLE_CUDNN"]:
+            link_flags += " -L"+_COMPILE_CONFIG["CUDNN_ROOT"]
+            link_flags += " -Wl,-rpath,"+_COMPILE_CONFIG["CUDNN_ROOT"]            
+
+        if sys.platform == "darwin":
+            link_flags += " -dynamiclib -Wl,-headerpad_max_install_names"
+        else:
+            link_flags += " -shared -rdynamic"
+        _COMPILE_CONFIG["LINK_FLAGS"] = link_flags
+
+        cpp_flags = "-fvisibility=hidden -std=c++11 -stdlib=libc++ -fPIC" + (" -O0 -g" if config["debug_cpp"] else " -O3 -DNDEBUG")
+        _COMPILE_CONFIG["CPP_FLAGS"] = cpp_flags
+
+        CACHE_ROOT = _COMPILE_CONFIG["CACHE_ROOT"]
+        if not osp.exists(CACHE_ROOT):
+            os.makedirs(CACHE_ROOT)
     return _COMPILE_CONFIG
 
-def _make_compile_command(fname, libpath, extra_link_flags, compile_flags):
-    info = get_compile_info()
-    includes  = "-I"+info["CGT_INCLUDE_DIR"]
-    includes += " -I"+info["OPENBLAS_INCLUDE_DIR"]
-    if info["CGT_ENABLE_CUDA"]:  includes += " -I"+info["CUDA_INCLUDE_DIR"]
-    if info["CGT_ENABLE_CUDNN"]: includes += " -I"+info["CUDNN_ROOT"]
+def _make_cpp_compile_cmd(srcpath):
+    d = get_compile_info()
+    return "c++ %(cpp_flags)s %(srcpath)s -c -o %(srcpath)s.o %(includes)s %(definitions)s"%dict(
+        srcpath = srcpath, includes=d["INCLUDES"], definitions=d["DEFINITIONS"], 
+        cpp_flags=d["CPP_FLAGS"], cacheroot=d["CACHE_ROOT"])
 
+def _make_cuda_compile_cmd(srcpath):
+    d = get_compile_info()
+    return "nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(definitions)s"%dict(
+        srcpath = srcpath, includes=d["INCLUDES"], definitions=d["DEFINITIONS"])
 
-    linkdirs = "-L"+info["CGT_LIBRARY_DIR"]
-    if info["CGT_ENABLE_CUDA"]: linkdirs += " -L"+info["CUDA_LIBRARY_DIR"]
-    if info["CGT_ENABLE_CUDNN"]: # XXX and cudnn is necessary 
-        linkdirs += " -L"+info["CUDNN_ROOT"]
-        maybecudnnrpath = "-Wl,-rpath,"+info["CUDNN_ROOT"]
-    else:
-        maybecudnnrpath=""
-
-    d = dict(
-        cacheroot=info["CACHE_ROOT"],
-        srcpath=fname,
-        includes=includes,
-        linkdirs =linkdirs,
-        defines=info["DEFINITIONS"],
-        libname=osp.basename(libpath),
-        libpath=libpath,
-        cgtlibdir=info["CGT_LIBRARY_DIR"],
-        extralink=extra_link_flags,
-        compileflags=compile_flags,
-        maybecudnnrpath=maybecudnnrpath
-    )
-    if fname.endswith(".cu"):
-        if not info["CGT_ENABLE_CUDA"]:
-            raise RuntimeError("Trying to compile a CUDA function but CUDA is disabled in your build. Rebuild with CGT_ENABLE_CUDA=ON")
-        d.update(cudalibs=info["CUDA_LIBRARIES"], cudaroot=info["CUDA_ROOT"], cudalibdir=info["CUDA_LIBRARY_DIR"])
-
-    cmd = None
-    if sys.platform == "darwin":
-        if fname.endswith(".cpp"):
-            cmd = r'''
-cd %(cacheroot)s && \
-c++ %(compileflags)s %(srcpath)s -fvisibility=hidden -std=c++11 -stdlib=libc++ -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ %(compileflags)s %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names %(maybecudnnrpath)s -install_name %(libname)s -o %(libpath)s %(linkdirs)s -lcgt %(extralink)s
-            '''%d
-        elif fname.endswith(".cu"):
-            cmd = r'''
-cd %(cacheroot)s && \
-nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(defines)s && \
-c++ %(compileflags)s -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s %(maybecudnnrpath)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
-            '''%d
-                # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
-    else:
-        if fname.endswith(".cpp"):
-            cmd = '''
-c++ %(compileflags)s %(srcpath)s -fvisibility=hidden -std=c++11 -stdlib=libc++ -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ %(compileflags)s -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(linkdirs)s -lcgt
-            '''%d
-        elif fname.endswith(".cu"):
-            cmd = r'''
-cd %(cacheroot)s && 
-nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler -fPIC -Xcompiler -O3 -Xcompiler -DNDEBUG %(includes)s %(defines)s && \
-c++  %(compileflags)s -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(cudalibs)s -Wl,-rpath,%(cudaroot)s
-            '''%d
-            # TODO what do we put here instead of rpath?
-
-    assert cmd is not None
-    return cmd
-
+def _make_link_cmd(objs, extra_link_flags, libpath):
+    d = get_compile_info()
+    return r"c++ %(cpp_flags)s %(objnames)s  %(link_flags)s -install_name %(libname)s -o %(libpath)s"%dict(
+        objnames=" ".join(objs), includes=d["INCLUDES"], cpp_flags=d["CPP_FLAGS"], libpath=libpath, 
+        link_flags=d["LINK_FLAGS"]+" "+extra_link_flags, cacheroot=d["CACHE_ROOT"], libname=osp.basename(libpath))
 
 def call_and_print(cmd):
     print "\x1b[32m%s\x1b[0m"%cmd

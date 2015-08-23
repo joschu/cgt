@@ -104,4 +104,4 @@ def test_lrn():
 
 
 if __name__=="__main__":
-    test_cudnn()
+    test_lrn()
