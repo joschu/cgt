@@ -653,7 +653,8 @@ def get_compile_info():
             link_flags += " -shared -rdynamic"
         _COMPILE_CONFIG["LINK_FLAGS"] = link_flags
 
-        cpp_flags = "-fvisibility=hidden -std=c++11 -stdlib=libc++ -fPIC" + (" -O0 -g" if config["debug_cpp"] else " -O3 -DNDEBUG")
+        cpp_flags = "-fvisibility=hidden -std=c++11 -fPIC" + (" -O0 -g" if config["debug_cpp"] else " -O3 -DNDEBUG")
+        if sys.platform == "darwin": cpp_flags += " -stdlib=libc++"
         _COMPILE_CONFIG["CPP_FLAGS"] = cpp_flags
 
         CACHE_ROOT = _COMPILE_CONFIG["CACHE_ROOT"]
@@ -674,9 +675,10 @@ def _make_cuda_compile_cmd(srcpath):
 
 def _make_link_cmd(objs, extra_link_flags, libpath):
     d = get_compile_info()
-    return r"c++ %(cpp_flags)s %(objnames)s  %(link_flags)s -install_name %(libname)s -o %(libpath)s"%dict(
+    iname = "-install_name %s"%osp.basename(libpath) if sys.platform=="darwin" else ""
+    return r"c++ %(cpp_flags)s %(objnames)s  %(link_flags)s %(iname)s -o %(libpath)s"%dict(
         objnames=" ".join(objs), includes=d["INCLUDES"], cpp_flags=d["CPP_FLAGS"], libpath=libpath, 
-        link_flags=d["LINK_FLAGS"]+" "+extra_link_flags, cacheroot=d["CACHE_ROOT"], libname=osp.basename(libpath))
+        link_flags=d["LINK_FLAGS"]+" "+extra_link_flags, cacheroot=d["CACHE_ROOT"], iname=iname)
 
 def call_and_print(cmd):
     print "\x1b[32m%s\x1b[0m"%cmd

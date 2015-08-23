@@ -16,10 +16,6 @@ struct conv_closure {
 
 template <typename Dtype>
 void caffe_set(const int N, const Dtype alpha, Dtype* Y) {
-  if (alpha == 0) {
-    memset(Y, 0, sizeof(Dtype) * N);  // NOLINT(caffe/alt_fn)
-    return;
-  }
   for (int i = 0; i < N; ++i) {
     Y[i] = alpha;
   }
