@@ -252,9 +252,9 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass BuildTup(Instruction):
         BuildTup(const string&, vector[MemLocation], const MemLocation&)
     cppclass ReturnByRef(Instruction):
-        ReturnByRef(const string&, vector[MemLocation], const MemLocation&, ByRefCallable)
+        ReturnByRef(const string&, vector[MemLocation], const MemLocation&, ByRefCallable, bool)
     cppclass ReturnByVal(Instruction):
-        ReturnByVal(const string&, vector[MemLocation], const MemLocation&, ByValCallable)
+        ReturnByVal(const string&, vector[MemLocation], const MemLocation&, ByValCallable, bool)
 
     cppclass Interpreter:
         cgtTuple* run(cgtTuple*)
@@ -351,13 +351,15 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     elif t == compilation.BuildTup:
         out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == compilation.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(), storage))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(), storage), _allscalarinputs(pyinstr))
     elif t == compilation.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage), _allscalarinputs(pyinstr))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out
 
+def _allscalarinputs(pyinstr):
+    return all(t.ndim == 0 for t in pyinstr.input_types)
 
 ################################################################
 ### Wrapper classes

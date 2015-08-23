@@ -64,10 +64,11 @@ private:
 
 /**
 
-Each instruction is associated with the set of instructions that depend on it,
-through the mapping instr2next
-Also, each instruction knows how many dependencies it has.
-When all the dependencies have fired, the instruciton gets enqueued
+In constructor, we build up a DAG on the instructions, where each instruction
+points to the instructions that depend on it.
+Also, each instruction knows its "in degree".
+Thus, when all the predecessors of an instruction fire, we can enqueue that instruction.
+
 
 */
 
@@ -204,10 +205,11 @@ void ParallelInterpreter::fire_instr(InstrInd instr_ind)
     Instruction* instr = eg_->instrs()[instr_ind];
     
     // for (auto& m : instr->get_readlocs()) instr2mutex_[m.index()].lock();
-    instr2mutex_[instr->get_writeloc().index()].lock();
+    // instr2mutex_[instr->get_writeloc().index()].lock();
     instr->fire(this);
     // for (auto& m : instr->get_readlocs()) instr2mutex_[m.index()].unlock();
-    instr2mutex_[instr->get_writeloc().index()].unlock();
+    // instr2mutex_[instr->get_writeloc().index()].unlock();
+    // XXX do we need a lock on write location? 
 
     for (InstrInd& nextind : instr2next_[instr_ind]) {
         std::lock_guard<std::mutex> lock(instr2mutex_[nextind]);
@@ -223,8 +225,14 @@ void ParallelInterpreter::trigger_instr(InstrInd instr_ind)
 {
     ++n_pending_;
     ++n_total_;
-    pool_.enqueue(&ParallelInterpreter::fire_instr, this, instr_ind);
     instr2insofar_[instr_ind] = 0;
+    auto instr = eg_->instrs()[instr_ind];
+    if (instr->quick()) {
+        fire_instr(instr_ind);
+    }
+    else {
+        pool_.enqueue(&ParallelInterpreter::fire_instr, this, instr_ind);        
+    }
 }
 
 
