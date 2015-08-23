@@ -8,6 +8,7 @@ import numpy as np
 from .nn_ops.im2col import im2col
 from .nn_ops.max_pool_2d import max_pool_2d
 from .nn_ops.cross_channel_lrn import cross_channel_lrn
+from .nn_ops import cudnn_ops
 from collections import namedtuple
 
 class Module(object):

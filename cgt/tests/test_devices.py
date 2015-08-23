@@ -1,5 +1,6 @@
 import numpy as np
 import cgt
+from nose.plugins.skip import SkipTest
 
 
 def test_devices():
@@ -11,8 +12,7 @@ def test_devices():
     compile_info = cgt.compilation.get_compile_info()
     cuda_enabled = compile_info["CGT_ENABLE_CUDA"]
     if not cuda_enabled:
-        cgt.utils.warn("Skipping test -- cuda disabled")
-        return
+        raise SkipTest("cuda disabled")
 
     Xval = np.random.randn(N,K).astype(cgt.floatX)
     wval = np.random.randn(K).astype(cgt.floatX)

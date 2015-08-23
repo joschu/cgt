@@ -32,6 +32,7 @@ class ParamCollection(object):
         assert len(parvals) == len(self._params)
         for (param, newval) in zip(self._params, parvals):
             param.set_value(newval)
+            param.get_shape() == newval.shape
 
     def set_value_flat(self, theta):
         theta = theta.astype(cgt.floatX)
@@ -46,7 +47,6 @@ class ParamCollection(object):
     
     def get_value_flat(self):
         theta = np.empty(self.get_total_size(),dtype=cgt.floatX)
-        theta += np.nan
         n = 0
         for param in self._params:
             s = param.get_size()

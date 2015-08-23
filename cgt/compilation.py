@@ -84,7 +84,7 @@ def create_interpreter(inputs, outputs, eg, node2memloc):
     parallel_interp = cgt.get_config()["parallel_interp"]
     if backend == "python":
         if parallel_interp:
-            raise NotImplementedError
+            raise NotImplementedError("For parallel_interp=True, set backend=native")
             # return ParallelInterpreter(eg, output_locs, input_types)
         else:
             return SequentialInterpreter(eg, output_locs, input_types)
@@ -237,11 +237,11 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
 
 
 def get_callable(op, input_types, devtype, prefer_python=False):
-    if prefer_python and "python" in op.available_impls: return op.get_py_callable(input_types)
     assert op.available_impls, "need to set op.available_impls"
-    if prefer_python and "python" in op.available_impls:
+    config = core.get_config()
+    if (prefer_python or config["force_python_impl"]) and "python" in op.available_impls:
         return op.get_py_callable(input_types)        
-    elif core.get_config()["backend"] == "python":
+    elif config["backend"] == "python":
         if "python" in op.available_impls:
             return op.get_py_callable(input_types)
         else:
@@ -640,7 +640,11 @@ def _make_compile_command(fname, libpath, extra_link_flags, compile_flags):
 
     linkdirs = "-L"+info["CGT_LIBRARY_DIR"]
     if info["CGT_ENABLE_CUDA"]: linkdirs += " -L"+info["CUDA_LIBRARY_DIR"]
-    if info["CGT_ENABLE_CUDNN"]: linkdirs += " -L"+info["CUDNN_ROOT"]
+    if info["CGT_ENABLE_CUDNN"]: # XXX and cudnn is necessary 
+        linkdirs += " -L"+info["CUDNN_ROOT"]
+        maybecudnnrpath = "-Wl,-rpath,"+info["CUDNN_ROOT"]
+    else:
+        maybecudnnrpath=""
 
     d = dict(
         cacheroot=info["CACHE_ROOT"],
@@ -652,7 +656,8 @@ def _make_compile_command(fname, libpath, extra_link_flags, compile_flags):
         libpath=libpath,
         cgtlibdir=info["CGT_LIBRARY_DIR"],
         extralink=extra_link_flags,
-        compileflags=compile_flags
+        compileflags=compile_flags,
+        maybecudnnrpath=maybecudnnrpath
     )
     if fname.endswith(".cu"):
         if not info["CGT_ENABLE_CUDA"]:
@@ -665,14 +670,13 @@ def _make_compile_command(fname, libpath, extra_link_flags, compile_flags):
             cmd = r'''
 cd %(cacheroot)s && \
 c++ %(compileflags)s %(srcpath)s -fvisibility=hidden -std=c++11 -stdlib=libc++ -c -o %(srcpath)s.o %(includes)s %(defines)s && \
-c++ %(compileflags)s %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names -install_name %(libname)s -o %(libpath)s %(linkdirs)s -lcgt %(extralink)s
+c++ %(compileflags)s %(srcpath)s.o -dynamiclib -Wl,-headerpad_max_install_names %(maybecudnnrpath)s -install_name %(libname)s -o %(libpath)s %(linkdirs)s -lcgt %(extralink)s
             '''%d
         elif fname.endswith(".cu"):
-            # TODO fix cuda compilation commands
             cmd = r'''
 cd %(cacheroot)s && \
 nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler  -fPIC -Xcompiler -O3 -Xcompiler -arch -Xcompiler x86_64 %(includes)s %(defines)s && \
-c++ %(compileflags)s -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
+c++ %(compileflags)s -dynamiclib -Wl,-headerpad_max_install_names %(cudalibs)s -Wl,-rpath,%(cudalibdir)s %(maybecudnnrpath)s -install_name %(libname)s -o %(libpath)s %(srcpath)s.o
             '''%d
                 # gpulinkflags = "-dynamiclib -Wl,-headerpad_max_install_names %(CUDA_LIBRARIES)s -Wl,-rpath,%(CUDA_LIBRARY_DIR)s"%d
     else:
@@ -687,6 +691,7 @@ cd %(cacheroot)s &&
 nvcc %(srcpath)s -c -o %(srcpath)s.o -ccbin cc -m64 -Xcompiler -fPIC -Xcompiler -O3 -Xcompiler -DNDEBUG %(includes)s %(defines)s && \
 c++  %(compileflags)s -shared -rdynamic -Wl,-soname,%(libname)s -o %(libpath)s %(srcpath)s.o %(cudalibs)s -Wl,-rpath,%(cudaroot)s
             '''%d
+            # TODO what do we put here instead of rpath?
 
     assert cmd is not None
     return cmd

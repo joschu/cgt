@@ -1,16 +1,15 @@
 import numpy as np, numpy.random as nr
 from cgt.numeric_diff import numeric_grad_multi
 import cgt
-from cgt.nn import max_pool_2d, im2col, cross_channel_lrn
+from cgt.nn import max_pool_2d, im2col, cross_channel_lrn, cudnn_ops
 from cgt.compilation import get_compile_info
 from cgt import utils
-
+from nose.plugins.skip import SkipTest
 
 def test_cudnn():
     with cgt.scoped_update_config(precision="double",backend="native"):
         if not get_compile_info()["CGT_ENABLE_CUDNN"]:
-            utils.warn("CUDNN not enabled. Skipping this test")
-            return
+            raise SkipTest("CUDNN not enabled. Skipping this test")
 
         Xval = nr.randn(2,3,19,18)
         Wval = nr.randn(5,3,3,3)
@@ -83,8 +82,7 @@ def test_im2col():
 
 def test_lrn():
     if not get_compile_info()["CGT_ENABLE_CUDA"]:
-        utils.warn("CUDA not enabled. Skipping this test")
-        return
+        raise SkipTest("Skipping because CUDA disabled")
 
     with cgt.scoped_update_config(precision="double",backend="native"):
         from cgt.tests import gradcheck_model
@@ -93,7 +91,7 @@ def test_lrn():
         Xval = nr.randn(4,8,16,16)
         X = cgt.shared(Xval, name="X", fixed_shape_mask="all")
         # X = cgt.tensor4(name='X')
-        y = cross_channel_lrn.cross_channel_lrn(X, localsize=4, alpha=.1, beta=.5)
+        y = cross_channel_lrn(X, localsize=4, alpha=.1, beta=.5)
         f = cgt.function([],y)
         print f().sum()
         print f().sum()
@@ -106,4 +104,4 @@ def test_lrn():
 
 
 if __name__=="__main__":
-    test_im2col()
+    test_cudnn()

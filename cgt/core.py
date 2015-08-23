@@ -9,7 +9,7 @@ import logging.config
 logging.config.dictConfig({
     "version" : 1,
     "root" : {
-        "level" : "INFO",
+        "level" : "WARN",
         "formatters" : {
             "simple" : {
                 "format" : "%(name)s:%(levelname)s:%(asctime)s:%(msecs)d %(message)s",
@@ -485,10 +485,10 @@ class GetData(Op):
     def get_native_compile_info(self, input_types, devtype):
         code=r"""
             CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
-                return (cgtArray*)cldata->ptr;
+                return *(cgtArray**)cldata->pptr;
             }"""
-        ptr = self.datanode._value.ptr
-        return NativeCompileInfo(code, closure_triples=[("ptr", ctypes.c_void_p, ptr)], 
+        pptr = self.datanode.get_pptr()
+        return NativeCompileInfo(code, closure_triples=[("pptr", ctypes.c_void_p, pptr)], 
             store_objects=self.datanode._value)
     
 
@@ -500,11 +500,14 @@ class Data(Input):
     """
     def __init__(self, value,name=None,device=None, fixed_shape_mask=None):
         value = as_valid_array(value)
+        Input.__init__(self, _ndarray_type(value), name)
         self.device = device or get_config()["default_device"]
 
         self.use_numpy = cgt.get_config()["backend"] == "python"
         if self.use_numpy:
             assert self.device.devtype=="cpu","can only use numpy for cpu"
+        else:
+            self.dataptr = ctypes.c_long(0)
 
         self.set_value(value)
 
@@ -513,7 +516,7 @@ class Data(Input):
         if fixed_shape_mask is None:  self.fixed_shape_mask = (False,)*self._value.ndim
         elif fixed_shape_mask == "all": self.fixed_shape_mask = (True,)*self._value.ndim
         else: self.fixed_shape_mask = fixed_shape_mask
-        Input.__init__(self, _ndarray_type(value), name)
+
         self.op = GetData(self)
     def clone(self,*_):
         return self
@@ -527,17 +530,23 @@ class Data(Input):
         shp = self._value.shape
         return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
-        return self._value if self.use_numpy else self._value.to_numpy()
+        return self._value if self.use_numpy else self._value.to_numpy()        
         # XXX use more explicit names
     def get_shape(self):
         return self._value.shape
     def get_size(self):
         return self._value.size
     def set_value(self, value):
+        value = value.astype(self.dtype)
         if self.use_numpy:
-            self._value = value
+            self._value = value.copy()
         else:
             self._value = cgt.cycgt.CppArrayWrapper.from_numpy(value, self.device.devtype, False)
+            self.dataptr.value = self._value.ptr
+    def get_pptr(self):
+        return ctypes.addressof(self.dataptr)
+
+
     # TODO: remove external accesses to .value
 
 def _singleton_ones(dtype, ndim):
@@ -1339,25 +1348,24 @@ class Reshape(Op):
         return [("ndim", ctypes.c_int,n_parents-1)]
     def get_native_compile_info(self, input_types, devtype):
         code = r"""
-CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
-    cgtArray* in = reads[0];
-    size_t* newshape = new size_t[cldata->ndim];
-    for (int i=0; i < cldata->ndim; ++i) newshape[i] = static_cast<size_t*>(reads[i+1]->data())[0];
-    cgtArray* out = new cgtArray(cldata->ndim, newshape, in->dtype(), in->devtype(), in->data(), false);
-    return out;
-}
-"""
+            CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
+                cgtArray* in = reads[0];
+                size_t* newshape = new size_t[cldata->ndim];
+                for (int i=0; i < cldata->ndim; ++i) newshape[i] = static_cast<size_t*>(reads[i+1]->data())[0];
+                cgtArray* out = new cgtArray(cldata->ndim, newshape, in->dtype(), in->devtype(), in->data(), false);
+                return out;
+            }
+            """
         return NativeCompileInfo(code, closure_triples=self.get_closure(len(input_types)))
 
 class Concatenate(Op):
-    available_impls = ("python",)        
-    call_type = "byval"
+    available_impls = ("python","native_cpu")        
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, num_inputs):
         return [True]*num_inputs
     def get_py_func(self, input_types):
-        def f(reads): return np.concatenate(reads,axis=self.axis)
+        def f(reads, write): write[...] = np.concatenate(reads,axis=self.axis)
         return f
     def pullback(self, inputs, _output, gout):
         start = 0
@@ -1373,14 +1381,35 @@ class Concatenate(Op):
         return out
     def typ_apply(self, input_types):
         return TensorType(_promote_multi([x.dtype for x in input_types]), input_types[0].ndim)
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < in->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        closeloops = "}"*x.ndim
+        inidxexpr =  ",".join(["i%i"%ax for ax in xrange(x.ndim)])
+        outidxexpr =  ",".join([("i%i+n" if ax == self.axis else "i%i")%ax for ax in xrange(x.ndim)])
+        code = r"""
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                size_t n=0; // value along concat axis
+                for (int i=0; i < %(n_in)s; ++i) {
+                    cgtArray* in = reads[i];
+                    %(openloops)s
+                        write->at<%(cdtype)s>(%(outidxexpr)s) = in->at<%(cdtype)s>(%(inidxexpr)s);
+                    %(closeloops)s
+                    n += in->shape()[%(axis)s];
+                }
+            }
+            """%dict(openloops=openloops, closeloops=closeloops, inidxexpr=inidxexpr, outidxexpr=outidxexpr, 
+                n_in=len(input_types), cdtype=np2c[input_types[0].dtype],axis=self.axis)
+        return NativeCompileInfo(code)
 
+# TODO testme
 class Stack(Op):
-    available_impls = ("python",)        
+    available_impls = ("python","native_cpu")
     def get_diff(self, num_inputs):
         return [True for _ in xrange(num_inputs)]
     def get_py_func(self, input_types):
-        def fn(*vals):
-            return np.array(vals)
+        def fn(reads, write):
+            write[:] = np.array(reads)
         return fn
     def pullback(self, inputs, output, goutput):
         return [goutput[i] for i in xrange(len(inputs))]
@@ -1389,6 +1418,15 @@ class Stack(Op):
     def typ_apply(self, input_types):
         assert utils.allsame(input_types)
         return TensorType(input_types[0].dtype, input_types[0].ndim+1)
+    def get_native_compile_info(self, input_types, devtype):
+        code = r"""
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                for (int i=0; i < %(n_in)s, ++i) {
+                    write->at<%(cdtype)s>(i) = reads[i]->at<%(cdtype)s>(0);
+                }
+            }
+            """%dict(n_in = len(input_types),cdtype=np2c[input_types[0].dtype])
+        return NativeCompileInfo(code)
 
 class Repeat(Op):
     available_impls = ("python","native_cpu")        
@@ -1413,14 +1451,14 @@ class Repeat(Op):
         outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
         inidxexpr = ",".join(["0" if ax in self.axes else "i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
         code = r"""
-CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray *read=reads[0];
-    %(openloops)s
-        write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
-    %(closeloops)s
-}
-"""%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
-    cdtype=np2c[input_types[0].dtype])
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                cgtArray *read=reads[0];
+                %(openloops)s
+                    write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
+                %(closeloops)s
+            }
+            """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
+                cdtype=np2c[input_types[0].dtype])
         return NativeCompileInfo(code)
     def get_replacement(self, parents, analysis):
         if parents[0] in analysis["node2sv"]:
@@ -1466,13 +1504,13 @@ class Transpose(Op):
         d["inidxexpr"] = ",".join(["i"+str(i) for i in utils.invert_perm(self.axes)])
         d["cdtype"] = np2c[x.dtype]
         code = r"""
-CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-    cgtArray *read = reads[0];
-    %(cdtype)s* indata = (%(cdtype)s*)read->data(), *outdata = (%(cdtype)s*)write->data();
-    %(openloops)s
-        write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
-    %(closeloops)s
-}"""%d
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                cgtArray *read = reads[0];
+                %(cdtype)s* indata = (%(cdtype)s*)read->data(), *outdata = (%(cdtype)s*)write->data();
+                %(openloops)s
+                    write->at<%(cdtype)s>(%(outidxexpr)s) = read->at<%(cdtype)s>(%(inidxexpr)s);
+                %(closeloops)s
+            }"""%d
         return NativeCompileInfo(code)
 
 class Transport(Op):
@@ -1614,7 +1652,6 @@ class Max(Op):
         return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
     def typ_apply(self, input_types):
         return input_types[0]
-    # ALMOST VERBATIM COPIED FROM SUM, EXCEPT FOR ONE LINE OF CODE
     def get_native_compile_info(self, input_types, devtype):
         code = gen_reduction_code(input_types[0].dtype, self.axes, input_types[0].ndim, "fmax(x,y)", "-std::numeric_limits<%(cdtype)s>::max()")
         return NativeCompileInfo(code, includes=["string.h","limits","math.h"])
@@ -1637,13 +1674,9 @@ class Argmax(Op):
         return [(cgt.constant(1) if i == self.axis else s[i]) for i in xrange(x.ndim)]
     def typ_apply(self, inputs):
         return TensorType('i8', inputs[0].ndim)
+    # re: native impl, this is a tricky one, since it requires some scratch space
+    # to store the max values. probably just do a alloc/dealloc
 
-
-# Casting / data movement
-# ----------------------------------------------------------------
-
-# class Copy(Op):
-#     pass # TODO
 
 # Slicing
 # ----------------------------------------------------------------
@@ -1729,16 +1762,16 @@ class IncSli(Op):
             ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
         closeloops = "}"*x.ndim
 
-        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
-        incidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+        incidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        outidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
 
         code = r"""
             CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-                cgtArray *in=reads[0], *inc = reads[4], *out=write;
+                cgtArray *in=reads[0], *inc = reads[4];
                 long start = reads[1]->at<size_t>(0);
                 long step = reads[3]->at<size_t>(0);
-                cgt_assert(in->size() == out->size());
-                if (out->data() != in->data()) cgt_memcpy(cgtCPU, cgtCPU, out, in, out->nbytes());
+                cgt_assert(in->size() == write->size());
+                cgt_copy_array(write, in);
                 %(openloops)s
                     write->at<%(cdtype)s>(%(outidxexpr)s) += inc->at<%(cdtype)s>(%(incidxexpr)s);
                 %(closeloops)s
@@ -1897,7 +1930,9 @@ class Mul21(Op):
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
 class Mul22(Op):
-    available_impls = ("python","native_cpu")        
+    @property
+    def available_impls(self):
+        return ("python",) if cgt.get_precision() == "quad" else ("python","native_cpu")
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB

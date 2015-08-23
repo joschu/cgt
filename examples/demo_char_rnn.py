@@ -235,7 +235,7 @@ def sample(f_step, init_hiddens, char2ind, n_steps, temp, seed_text = ""):
         cur_hiddens, logprobs_1k = net_outputs[:-1], net_outputs[-1]
         t.write(char)
 
-    print t.getvalue()
+    cgt.utils.colorprint(cgt.utils.Color.YELLOW, t.getvalue() + "\n")
 
 def main():
 
@@ -285,7 +285,8 @@ def main():
             return loss
         from cgt.numeric_diff import numeric_grad
         g_num = numeric_grad(f, pc.get_value_flat(),eps=1e-10)
-        _, g_anal,_,_ = f_loss_and_grad(x,y,*prev_hiddens)
+        result = f_loss_and_grad(x,y,*prev_hiddens)
+        g_anal = result[1]
         assert np.allclose(g_num, g_anal, atol=1e-4)
         print "Gradient check succeeded!"
         return
@@ -302,7 +303,6 @@ def main():
             out = f_loss_and_grad(x,y, *cur_hiddens)
             loss = out[0]
             grad = out[1]
-            np.clip(grad,-5,5,out=grad)
             cur_hiddens = out[2:]
             rmsprop_update(grad, optim_state)
             pc.set_value_flat(optim_state["theta"])
@@ -310,9 +310,7 @@ def main():
         print "%.3f s/batch. avg loss = %.3f"%((time()-tstart)/len(losses), np.mean(losses))
         optim_state.step_size *= .95 #pylint: disable=E1101
 
-        sample(f_step, initialize_hiddens(1), char2ind =loader.char2ind, n_steps=1000, temp=1.0, seed_text = "")
-
-        print pc.get_value_flat().sum()
+        sample(f_step, initialize_hiddens(1), char2ind =loader.char2ind, n_steps=300, temp=1.0, seed_text = "")
 
     if args.profile: profiler.print_stats()
 

@@ -76,7 +76,7 @@ endif()
 
 if (CGT_ENABLE_CUDNN)
     detect_cuDNN()
-    if(NOT CUDNN_FOUND)
+    if(NOT CUDNN_FOUND AND NOT CUDNN_ROOT)
       message(FATAL_ERROR "Couldn't find CUDNN. Set CUDNN_ROOT")
     endif()
 endif()

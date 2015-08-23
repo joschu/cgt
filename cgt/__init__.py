@@ -14,3 +14,5 @@ del np
 del cgt
 del operator
 del sys
+
+get_config()

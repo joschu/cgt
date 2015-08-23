@@ -29,58 +29,59 @@ def sleepfor(x, t):
     return cgt.core.Result(SleepFor(), [x, t])
 
 def test_sleeps():
-    x = cgt.scalar('x')
-    y1 = sleepfor(x, .1)
-    y2 = sleepfor(x, .1)
+    with cgt.scoped_update_config(parallel_interp = True, backend="native"):
+        x = cgt.scalar('x')
+        y1 = sleepfor(x, .1)
+        y2 = sleepfor(x, .1)
 
-    z=y1+y2
-    with cgt.scoped_update_config(parallel_interp = True):
+        z=y1+y2
         fpar = cgt.function([x],z)
-    
-    tstart = time.time()
-    fpar(0)
-    elapsed = time.time() - tstart
-    assert elapsed < .11
+        
+        tstart = time.time()
+        fpar(0)
+        elapsed = time.time() - tstart
+        assert elapsed < .11
 
 
 def test_matmuls():
-    m = 8
-    d = 1000
+    with cgt.scoped_update_config(parallel_interp = True, backend="native"):
+        
+        m = 8
+        d = 1000
 
-    # build graph
+        # build graph
 
-    X = cgt.matrix("X")
-    Y = cgt.matrix("Y")
-    loss=0
-    for k in xrange(m):
-        # loss = loss+cgt.sin(X*Y+k).sum()
-        loss = loss+(X.dot(Y+k)).sum()
+        X = cgt.matrix("X")
+        Y = cgt.matrix("Y")
+        loss=0
+        for k in xrange(m):
+            # loss = loss+cgt.sin(X*Y+k).sum()
+            loss = loss+(X.dot(Y+k)).sum()
 
-    with cgt.scoped_update_config(parallel_interp = True):
-        f = cgt.function([X,Y], loss)
+            f = cgt.function([X,Y], loss)
 
-    # test things out!
+        # test things out!
 
-    seed(0)
+        seed(0)
 
-    X_val = randn(d, d)
-    Y_val = randn(d, d)
-    vals = [X_val, Y_val]
+        X_val = randn(d, d)
+        Y_val = randn(d, d)
+        vals = [X_val, Y_val]
 
-    tic = time.time()
-    out = f(*vals)
-    toc = time.time()
+        tic = time.time()
+        out = f(*vals)
+        toc = time.time()
 
-    print toc-tic
+        print toc-tic
     
 
 def test_update():
-    xval = np.array(1.5)
-    x = cgt.shared(xval)
-    with cgt.scoped_update_config(parallel_interp = True):
+    with cgt.scoped_update_config(parallel_interp = True, backend="native"):
+        xval = np.array(1.5)
+        x = cgt.shared(xval)
         f = cgt.function([], x.sum(), updates=[(x,x+1)])
-    before = x.get_value().copy()
-    f()
-    after = x.get_value()
-    assert np.allclose(after , before+1)
+        before = x.get_value().copy()
+        f()
+        after = x.get_value()
+        assert np.allclose(after , before+1)
 
