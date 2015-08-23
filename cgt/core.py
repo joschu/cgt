@@ -1,4 +1,4 @@
-import sys, numpy as np, hashlib, copy, cPickle, ctypes, warnings, os, os.path as osp
+import sys, numpy as np, hashlib, copy, cPickle, ctypes, os, os.path as osp
 from collections import defaultdict,namedtuple
 import __builtin__
 import traceback
@@ -313,7 +313,7 @@ class Op(object):
 
     # attributes that can be overwritten in subclasses
     return_type = "byref" # or "byval"
-    writes_to_input = -1
+    writes_to_input = -1 # whether output is allowed to have same underlying data as input
     available_impls = () # python, native_cpu, native_gpu
 
     # pylint: disable=W0613
@@ -384,13 +384,18 @@ class Op(object):
         """
         raise MethodNotDefined
     def get_native_compile_info(self, inputs, devtype):
+        """
+        returns NativeCompileInfo 
+        """
         raise MethodNotDefined
     def get_py_func(self, input_types):
+        """
+        Returns python function that implements this operation
+        """
         raise MethodNotDefined
     def get_py_callable(self, input_types):
         func = self.get_py_func(input_types)
         return PyCallable(self, len(input_types), func)
-
     def __repr__(self):
         """
         Get a human-readable description of the Op, including its attributes
@@ -425,8 +430,10 @@ class Result(Node):
         config = get_config()
         self.props["default_device"] = config["default_device"]
         if config["debug"] and "stack" not in self.props: self.props["stack"] = traceback.extract_stack()[:-2]
-
-    def get_hash(self, node2hash):        
+    def get_hash(self, node2hash):
+        """
+        Return UNIQUE string identifying this Op (and its attributes)
+        """
         hashobj = hashlib.md5(self.op.get_hash())
         for p in self.parents: 
             hashobj.update(node2hash[p])
@@ -434,6 +441,10 @@ class Result(Node):
     def __repr__(self):
         return "Result{%s}"%(str(self.op))
     def clone(self,newparents):
+        """
+        Create a new node that apply's this node's op to newparents
+        Preserve annotations on this node (.props)
+        """
         return Result(self.op, newparents, typ=self.typ, props = self.props)
 
 class Input(Node):
@@ -487,7 +498,7 @@ class GetData(Op):
         def f(_): 
             return self.datanode.get_value()
         return f
-    def get_native_compile_info(self, input_types, devtype):
+    def get_native_compile_info(self, _input_types, _devtype):
         code=r"""
             CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
                 return *(cgtArray**)cldata->pptr;
@@ -546,7 +557,7 @@ class Data(Input):
         if self.use_numpy:
             self._value = value.copy()
         else:
-            self._value = cgt.cycgt.CppArrayWrapper.from_numpy(value, self.device.devtype, False)
+            self._value = cgt.cycgt.CppArrayWrapper.from_numpy(value, self.device.devtype, False) #pylint: disable=E1101
             self.dataptr.value = self._value.ptr
     def get_pptr(self):
         return ctypes.addressof(self.dataptr)
@@ -572,19 +583,25 @@ def make_argument(typ):
 def differentiably_influences(outputs, nodelist=None):
     """
     Return the set of nodes that differentiably influence `outputs`
+    i.e., the Jacobian doutputs/dnode != 0
     in reverse topological sorted order
+
+    optionally pass in nodelist=topsorted(outputs)
+    (save on recomputation of topsort)
     """
     if nodelist is None: nodelist = list(topsorted(outputs))
-    # find which inputs we're differentiable wrt
     diset = set(outputs)
     for node in reversed(nodelist):
-        # print node, dio.get(node, False),id(node),"updating",[map(id, node.parents)],[map(str, node.parents)]
         if node in diset and not node.is_input():
             for (p,d) in utils.safezip(node.parents, node.get_diff()):
                 if d: diset.add(p)
     return diset
 
 def differentiably_influenced_by(wrt, outputs=None, nodelist=None):
+    """
+    Return the set of nodes that are differentiably influenced by outputs,
+    i.e., the set of x for which Jacobian dx/dwrt is nonzero
+    """
     assert (outputs is None) != (nodelist is None) # one of these are provided
     if nodelist is None: nodelist = list(topsorted(outputs))
     dibset = set(wrt)
@@ -592,11 +609,6 @@ def differentiably_influenced_by(wrt, outputs=None, nodelist=None):
         if any(p in dibset and d for (p,d) in utils.safezip(node.parents, node.get_diff())):
             dibset.add(node)
     return dibset
-
-
-def influences(outputs):
-    return list(topsorted(outputs))
-
 
 def pullback(outputs, goutputs, wrt):
     """    
@@ -614,39 +626,50 @@ def pullback(outputs, goutputs, wrt):
     dio = differentiably_influences(outputs,nodelist=nodelist)
     dibw = differentiably_influenced_by(wrt, nodelist=nodelist)
 
-    # Some checks
+    # Check that each output is differentiably influenced by some input
     badwrtset = set(wrt).difference(dio)
     if badwrtset:
         raise NonDifferentiable("Outputs not differentiable wrt %s"%badwrtset)
 
+    # Check that each input differentiably influences some output
     badoutset = set(outputs).difference(dibw)
     if badoutset:
         raise NonDifferentiable("Outputs %s not differentiable wrt any of %s"%(badoutset, badwrtset))
 
+    # Map node to a list of gradient terms
+    # These gradient terms will be summed up when we visit the node, when iterating through the nodes
+    # in reverse toplogical order
     var2gs = defaultdict(list)
     for (node, gnode) in utils.safezip(outputs, goutputs):
         var2gs[node] = [gnode]
 
+    # "active" nodes are the ones that are differentially influenced by the inputs
+    # and also differentiably influence the outputs. These are the nodes where we need to call the
+    # "pullback" function to backpropagate derivatives
     active = dio.intersection(dibw)
 
-    # TODO: document what's going on here
-
+    # Iterate through nodes in reverse topological order
     for node in reversed(nodelist):
         if node not in active: continue
-        # once we reach a node, we have already backpropagated from all parents
-        # so now we can sum up the gradients
+        # Once we reach a node, we have already backpropagated from all parents
+        # So now we can sum up the gradients
         if len(var2gs[node]) > 1:
             if node.is_array():
                 var2gs[node] = [cgt.add_multi(var2gs[node])]
-        # only one gradient at this point
+        # There's only one gradient in the list at this point
         gnode = var2gs[node][0]
         if isinstance(node, Result):
-            # x       ->      (y, z)      ->      y
-            # input        Result{goofyop}      Result{tupleindex{0}}
-            # so at this point in the code, we just got gy.
-            # we first set the gradient at (y,z) to [[None,None]]
-            # then we set the first element to gy
             if isinstance(node.op, TupleIndex):
+                # A little complication that arises when we have a node of Tuple type
+                # Instead of having a list of gradient terms, we're going to store a list with one element
+                # and inside that list, we have a list of gradient terms for each tuple element
+                # Let's say we have a tuple node (y,z) with predecessor x                
+                # x       ->      (y, z)      ->      y
+                # input        Result{foo_op}      Result{TupleIndex{0}}
+                # At this point in the code, we just got gy.
+                # we first set the gradient at (y,z) to [[None,None]]
+                # then we set the first element to gy to get
+                # [[gy, None]]                
                 par = node.parents[0]
                 if par not in var2gs: var2gs[par] = [[None for _ in par.typ]]
                 var2gs[par][0][node.op.idx] = gnode
@@ -661,7 +684,6 @@ def pullback(outputs, goutputs, wrt):
     # 0th element
     return [var2gs[node][0] for node in wrt]
 
-# XXX fails when non-constant
 def infer_shape(arr):
     return tuple(x.op.value if isinstance(x.op, Constant) else None for x in  CACHER.simplify(cgt.shape(arr)))
 
@@ -670,7 +692,7 @@ def grad(cost, wrt):
     Compute the gradient of scalar-valued `cost` with respect to a list of variables `wrt`
     """
     assert cost.ndim == 0
-    assert all(x.is_input() for x in wrt), "Can only differentiate wrt Input nodes. (Or do you have a good reason to differentiate wrt a non-input? Let us know, we can probably implement it."
+    assert all(x.is_input() for x in wrt), "Can only differentiate wrt Input nodes."
     gout = _singleton_ones(cost.dtype, 0)
     return pullback([cost], [gout], wrt)
 
@@ -679,8 +701,22 @@ def grad(cost, wrt):
 # ================================================================
 
 class NativeCompileInfo(object):
+    """
+    Stores the information necessary to create a NativeCallable object
+    """
     def __init__(self, func_code, lang="c++", closure_triples = None, includes=(), link_flags="", 
             setup=False, teardown=False, gpu_deref_mask=None, store_objects = ()):
+        """
+        func_code : code implementing function
+        lang : c++ or cuda
+        closure_tuples: a list of triples (fieldname, ctypes class, value) that will be provided at each call at runtime
+        includes: list of strings specifying files to includes
+        link flags: string specifying link flags
+        setup: bool specifying if there's a setup method to call once when building a Callable, which should be called $setup in the code string
+        teardown: bool specifying if there's a teardown method, called $teardown
+        gpu_deref_mask : None or tuple of bools specifying which arguments to Op will have data dereferenced on the GPU (i.e., they must be moved to GPU)
+        store_objects : list of python objects which should be stored somewhere as long as the Callable created from this object exists, e.g. because they own some data it uses
+        """
         # To be filled in by caller of constructor
         self.op_str = None
         self.return_type = None
@@ -700,6 +736,9 @@ class NativeCompileInfo(object):
         return self.gpu_deref_mask is not None
 
 class Callable(object):
+    """
+    Callable object built out of an Op
+    """
     def call(self, *args):
         raise NotImplementedError
     @property
@@ -711,9 +750,11 @@ class Callable(object):
     @property
     def n_in(self):
         raise NotImplementedError
-
     
 class PyCallable(Callable):
+    """
+    Callable object with an underlying python function acting on python objects
+    """
     def __init__(self, op,  n_in, func):
         self._op_str = str(op)
         self._return_type = op.return_type
@@ -740,6 +781,9 @@ class PyCallable(Callable):
     
     
 class NativeCallable(object):
+    """
+    Callable object with an underlying function pointer that acts on cgtObject
+    """    
     def __init__(self, n_in, return_type, op_str, fptr, cldata=None, 
             store_objects=None, setup_fptr=None, teardown_fptr=None):
         self._n_in = n_in
@@ -769,9 +813,9 @@ class NativeCallable(object):
         return self._n_in
     def _call_byval(self, inputs):        
         raise Todo
-        cgt.cycgt.apply_byval(self.fptr, self.cldata, inputs)
+        # cgt.cycgt.apply_byval(self.fptr, self.cldata, inputs) #pylint: disable=E1101
     def _call_byref(self, inputs, output):
-        cgt.cycgt.apply_byref(self.fptr, self.cldata, inputs, output)
+        cgt.cycgt.apply_byref(self.fptr, self.cldata, inputs, output) #pylint: disable=E1101
     def call(self, *args):
         if self._return_type == "byval": self._call_byval(*args)
         elif self.return_type == "byref": self._call_byref(*args)
@@ -808,7 +852,7 @@ class ConstantTensor(Constant):
         ndim = self.value.ndim
         return "%g"%self.value if ndim==0 else "%s%g...%s"%("["*ndim, self.value.flat[0], "]"*ndim)        
     def get_py_func(self, input_types):
-        def f(reads, write):
+        def f(_, write):
             np.copyto(write, self.value)
         return f
     # def get_py_func(self, input_types):
@@ -844,11 +888,11 @@ class ConstantTensor(Constant):
         ("data",ctypes.c_void_p,self.value.ctypes.data)]
     def get_native_compile_info(self, input_types, devtype):
         code = None
-        if self.return_type == "byval": code = self._c_code_valret(input_types)
-        elif self.return_type == "byref": code = self._c_code_inplace(input_types)
+        if self.return_type == "byval": code = self._c_code_valret()
+        elif self.return_type == "byref": code = self._c_code_inplace()
         else: raise ValueError
         return NativeCompileInfo(func_code=code, closure_triples=self.get_closure(),store_objects=(self.value,))
-    def _c_code_inplace(self, inputs):
+    def _c_code_inplace(self):
         if isinstance(self.value, tuple):
             raise MethodNotDefined
         return r"""
@@ -856,7 +900,7 @@ class ConstantTensor(Constant):
                 cgt_memcpy(cgtCPU, cgtCPU, write->data(), cldata->data, write->nbytes());
             }
             """
-    def _c_code_valret(self, inputs):
+    def _c_code_valret(self):
         return r"""
             CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
                     auto out = new cgtArray(cldata->ndim, (size_t*)cldata->shape, 
@@ -897,11 +941,9 @@ class Fill(Op):
         assert self.value.dtype != "O"
         self.dtype = self.value.dtype
         assert self.value.ndim==0
-        self.tag = -1 # XXX tag hack
+        self.tag = -1 # @TAG_HACK
     def get_hash(self):
         return cPickle.dumps((self.value,self.tag) ,-1)
-        # XXX seems to be a bug somewhere that causes ntm grad check to
-        # fail when this CSE happens. Probably is a deeper bug :(
     def get_diff(self, num_inputs):
         return [False]*num_inputs
     def __str__(self):
@@ -920,7 +962,8 @@ class Fill(Op):
     def get_closure(self):
         typ = ctypes.c_long if self.value.dtype.kind=='i' else ctypes.c_double
         return [("value", typ, self.value.item())]
-    def get_native_compile_info(self, input_types, devtype):
+    def get_native_compile_info(self, _input_types, devtype):
+        assert devtype == "cpu"
         outdtype = Dtype.canon(self.value.dtype)
         func_code=r"""
             CGT_EXPORT_C void $function($closure* cldata, cgtArray** reads, cgtArray* write) {
@@ -1703,7 +1746,7 @@ class GetSli(Op):
         return f
     def pullback(self, inputs, output, goutput):
         z = cgt.zeros_like(inputs[0])
-        z.op.tag = id(output) # XXX tag hack
+        z.op.tag = id(output) # @TAG_HACK
         return [Result(IncSli(self.axis), [z] + inputs[1:] + [goutput])] + [None]*3
     def shp_apply(self, inputs):
         arr, start, stop, step = inputs
@@ -1753,10 +1796,7 @@ class IncSli(Op):
             write[slices] += y
         return f
     def pullback(self, inputs, output, goutput):
-        raise NotImplementedError
-        # _x, start, stop, step, _y = inputs
-        # gy = Result(GetSli(self.axis), [goutput, start, stop, step])        
-        # return [gx, None, None, None, gy]
+        raise NotImplementedError # TODO
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, input_types):
@@ -1987,7 +2027,7 @@ class Mul22(Op):
     def typ_apply(self, input_types):
         # assertequal1(cgt.size(inputs[0],0 if self.tA else 1),cgt.size(inputs[1],1 if self.tB else 0), 
         #     "shape mismatch at matrix-matrix multiplication")         
-        # TODO put shape check somewhere else
+        # TODO put shape check somewhere
         assert input_types[0].dtype==cgt.floatX and input_types[1].dtype==cgt.floatX
         return input_types[0]
     def get_closure(self):
@@ -2259,7 +2299,7 @@ class Assertion(Op):
     def shp_apply(self, _):
         return []
     def get_py_func(self, input_types):
-        def f(reads, write):
+        def f(reads, _):
             x = reads[0]
             if not x.item():
                 self.display_error()
@@ -2283,7 +2323,7 @@ class DebugFunc(Op):
     def shp_apply(self, _):
         return []
     def get_py_func(self, input_types):
-        def f(reads, write):
+        def f(_, __):
             def fn(*reads):
                 self.yourfunc(*reads)
         return f
@@ -2709,7 +2749,6 @@ class Unreachable(Exception):
     pass
 
 def get_cgt_src_root():
-    osp = os.path
     return osp.dirname(osp.dirname(osp.realpath(__file__)))
 
 # ================================================================
@@ -2781,3 +2820,13 @@ class scoped_update_config(object):
         config = get_config()
         config.update(self.prevsettings)
         for k in self.delkeys: del config[k]
+
+
+# TAGS
+# Just a few labels in the code for assumptions we're making now
+# which we might change later.
+# @TUPLES_OF_TENSORS : assumes all elements of TupleType object are TensorType    
+# @TAG_HACK : a non-local interaction between inplace optimization and other optimizations. 
+#   Certain operations created by pullback should be performed in place, but other optimizations 
+#   like CSE make that impossible. So we add an extra field that associates arrays of zeros with the node that
+#   they represent the gradient for, to prevent CSE from cutting out these nodes

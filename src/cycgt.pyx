@@ -359,7 +359,7 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     return out
 
 def _allscalarinputs(pyinstr):
-    return all(t.ndim == 0 for t in pyinstr.input_types)
+    return all(isinstance(t, core.TensorType) and t.ndim == 0 for t in pyinstr.input_types)
 
 ################################################################
 ### Wrapper classes
