@@ -204,12 +204,12 @@ void ParallelInterpreter::fire_instr(InstrInd instr_ind)
 {
     Instruction* instr = eg_->instrs()[instr_ind];
     
+    // XXX once we do in-place increments we'll have to start locking write location
     // for (auto& m : instr->get_readlocs()) instr2mutex_[m.index()].lock();
     // instr2mutex_[instr->get_writeloc().index()].lock();
     instr->fire(this);
     // for (auto& m : instr->get_readlocs()) instr2mutex_[m.index()].unlock();
     // instr2mutex_[instr->get_writeloc().index()].unlock();
-    // XXX do we need a lock on write location? 
 
     for (InstrInd& nextind : instr2next_[instr_ind]) {
         std::lock_guard<std::mutex> lock(instr2mutex_[nextind]);

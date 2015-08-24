@@ -80,8 +80,8 @@ def test_update():
         xval = np.array(1.5)
         x = cgt.shared(xval)
         f = cgt.function([], x.sum(), updates=[(x,x+1)])
-        before = x.get_value().copy()
+        before = x.op.get_value().copy()
         f()
-        after = x.get_value()
+        after = x.op.get_value()
         assert np.allclose(after , before+1)
 

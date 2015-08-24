@@ -80,7 +80,7 @@ def argmax(x, axis=None, keepdims=False):
     return out
 
 def batched_matmul(x, y):
-    """
+    r"""
     Given two 3-tensors x_nij, and y_njk, loop over 'n' and contract along 'j'
         x_nij, y_njk -> z_nik := \sum_n x_nij y_njk
     A variety of useful tensor contraction operations can be written in this form
@@ -493,11 +493,12 @@ def shape(x):
     else:
         return tuple(map(shape, x.parents))
 
-def shared(val, name='', device=None, fixed_shape_mask=None):
+def shared(val, name=None, device=None, fixed_shape_mask=None):
     """
     Creates a variable that has an underlying data value, which can be changed externally
     """
-    return core.Data(val, name=name, device=device, fixed_shape_mask=fixed_shape_mask)
+    op = core.InMemoryData(val, device=device,fixed_shape_mask=fixed_shape_mask)
+    return core.Result(op, [], name=name)
 
 def size(x, axis):
     """

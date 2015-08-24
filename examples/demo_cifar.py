@@ -9,7 +9,7 @@ def rmsprop_updates(cost, params, stepsize=0.001, rho=0.9, epsilon=1e-6):
     grads = cgt.grad(cost, params)
     updates = []
     for p, g in zip(params, grads):
-        acc = cgt.shared(p.get_value() * 0.)
+        acc = cgt.shared(p.op.get_value() * 0.)
         acc_new = rho * acc + (1 - rho) * cgt.square(g)
         gradient_scaling = cgt.sqrt(acc_new + epsilon)
         g = g / gradient_scaling
@@ -20,6 +20,7 @@ def rmsprop_updates(cost, params, stepsize=0.001, rho=0.9, epsilon=1e-6):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile",action="store_true")
+    parser.add_argument("--unittest",action="store_true")
     parser.add_argument("--epochs",type=int,default=10)
     args = parser.parse_args()
 
@@ -72,6 +73,8 @@ def main():
         if args.profile: 
             cgt.profiler.print_stats()
             return
+        if args.unittest:
+            break
 
 
 

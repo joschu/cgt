@@ -17,10 +17,10 @@ class ParamCollection(object):
         return self._params
 
     def get_values(self):
-        return [param.get_value() for param in self._params]
+        return [param.op.get_value() for param in self._params]
 
     def get_shapes(self):
-        return [param.get_shape() for param in self._params]
+        return [param.op.get_shape() for param in self._params]
 
     def get_total_size(self):
         return sum(np.prod(shape) for shape in self.get_shapes())
@@ -31,8 +31,8 @@ class ParamCollection(object):
     def set_values(self, parvals):
         assert len(parvals) == len(self._params)
         for (param, newval) in zip(self._params, parvals):
-            param.set_value(newval)
-            param.get_shape() == newval.shape
+            param.op.set_value(newval)
+            param.op.get_shape() == newval.shape
 
     def set_value_flat(self, theta):
         theta = theta.astype(cgt.floatX)
@@ -49,8 +49,8 @@ class ParamCollection(object):
         theta = np.empty(self.get_total_size(),dtype=cgt.floatX)
         n = 0
         for param in self._params:
-            s = param.get_size()
-            theta[n:n+s] = param.get_value().flat
+            s = param.op.get_size()
+            theta[n:n+s] = param.op.get_value().flat
             n += s
         assert theta.size == n
         return theta

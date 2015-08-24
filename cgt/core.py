@@ -179,23 +179,96 @@ class Node(object):
     """
     Node in the computation graph    
     """
-    def __init__(self, typ, op, parents, props=None):
+
+    counter = 0 # allows unique identification of argument nodes
+
+    # Constants
+    # ----------------------------------------
+
+    def __init__(self, typ, op, parents, props=None, fixed_shape=None, name=None):
         self.typ = typ
         self.op = op
         self.parents = parents        
         self.props = props or {}
-    def is_input(self):
-        return False
+        self._fixed_shape = fixed_shape
+        self.name = name
+        self.counter = Node.counter
+        Node.counter += 1
+
+    def __repr__(self):
+        if self.op is None:
+            return "Argument{%s,name='%s'}"%(self.typ,self.name)            
+        else:
+            return "Result{%s}"%(str(self.op))
+
+    # CGT-specific
+    # ----------------------------------------
+
+
     def is_argument(self):
-        return False
+        """
+        Returns whether Node is an argument
+        """
+        return self.op is None
     def is_data(self):
-        return False
+        """
+        Returns whether Node's Op is data
+        """
+        return self.op is not None and self.op.is_data_op
+    def is_input(self):
+        """
+        Returns whether this node is either an argument or is data
+        """
+        return self.is_argument() or self.is_data()
     def get_diff(self):
+        """
+        Returns a sequence of bool indicating whether output is differentiable wrt each input
+        """
         return [] if self.op is None else self.op.get_diff(len(self.parents))
-    # Unary ops
+    def is_tensor(self):
+        """
+        Returns whether this node's type (self.typ) is TensorType
+        """
+        return isinstance(self.typ, TensorType)
+    def is_tuple(self):
+        """
+        Returns whether this node's type (self.typ) is TupleType
+        """
+        return isinstance(self.typ, TupleType)
+    def get_hash(self, node2hash):
+        """
+        Return UNIQUE string identifying this Node
+        """
+        if self.is_input():
+            return str(self.counter)
+        else:
+            hashobj = hashlib.md5(self.op.get_hash())
+            for p in self.parents: 
+                hashobj.update(node2hash[p])
+            return hashobj.hexdigest()
+    def clone(self, newparents):
+        """
+        Create a new Node that applies self.op to `newparents`
+        Preserve annotations on this node (.props)
+        """
+        if self.is_input(): return self
+        else: return Node(self.typ, self.op, newparents, props = self.props)
+    def get_fixed_shape(self):
+        """
+        Returns a tuple of int or None. You'll get ints if this is an argument or data node
+        with fixed shape provided
+        """
+        if self.is_data():
+            return self.op.get_fixed_shape()
+        return (None,)*self.ndim if self._fixed_shape is None else self._fixed_shape
+
+    # Math Overloads
+    # ----------------------------------------
+
+    __array_priority__ = 1000 # precedence over numpy operators
+
     def __neg__(self):
         return Result(ElwiseUnary("neg"), [self])
-    # Binary ops
     def __add__(self, other):
         return elwise_binary("+", self, other)
     def __sub__(self, other):
@@ -236,6 +309,24 @@ class Node(object):
         return cgt.constant(other).__rtruediv__(self)
     def __rfloordiv__(self, other):
         return cgt.constant(other).__floordiv__(self)
+    def __getitem__(self, slis):
+        return cgt.getitem(self, slis)
+    def __iter__(self):
+        if self.is_tensor():
+            raise TypeError("Array variable is not iterable")            
+        if self.is_tuple():
+            return iter(unpack(self))
+        else:            
+            raise NotImplementedError
+    def __len__(self):
+        if isinstance(self.typ, TupleType):
+            return len(self.typ)
+        else:
+            raise ValueError("Node of type Tensor has no __len__")
+
+
+    # Properties like numpy ndarray
+    # ----------------------------------------
 
     @property
     def shape(self):
@@ -249,23 +340,9 @@ class Node(object):
     @property
     def T(self):
         return cgt.transpose(self)
-    
-    __array_priority__ = 1000 # precedence over numpy operators
 
-    def __getitem__(self, slis):
-        return cgt.getitem(self, slis)
-    def __iter__(self):
-        if self.is_array():
-            raise TypeError("Array variable is not iterable")            
-        if self.is_tuple():
-            return iter(unpack(self))
-        else:            
-            raise NotImplementedError
-    def __len__(self):
-        if isinstance(self.typ, TupleType):
-            return len(self.typ)
-        else:
-            raise ValueError("Node of type Tensor has no __len__")
+    # More math overloads
+    # ----------------------------------------
 
     def reshape(self, shp):
         assert isinstance(shp, (list,tuple))
@@ -287,10 +364,6 @@ class Node(object):
     def flatten(self):
         return cgt.flatten(self)
 
-    def is_array(self):
-        return isinstance(self.typ, TensorType)
-    def is_tuple(self):
-        return isinstance(self.typ, TupleType)
 
 def _ndarray_type(value):
     assert isinstance(value, np.ndarray)
@@ -315,6 +388,7 @@ class Op(object):
     return_type = "byref" # or "byval"
     writes_to_input = -1 # whether output is allowed to have same underlying data as input
     available_impls = () # python, native_cpu, native_gpu
+    is_data_op = False
 
     # pylint: disable=W0613
 
@@ -416,135 +490,69 @@ def as_node(val_or_node):
     else:
         raise ValueError("expected numeric data or Node, got object of type %s"%type(val_or_node))
 
-class Result(Node):
-    """
-    Node representing an intermediate computational result, which depends on its parents in the graph
-    (TODO: be more precise about semantics. Does it depend ONLY on the parents, or can it depend on 
-    some exogenous input too? What about random variables?)
-    """
-    def __init__(self, op, parents, typ = None, props=None):
-        parents = map(as_node, parents)
-        typ = op.typ_apply([parent.typ for parent in parents]) if typ is None else typ
-        assert op is not None
-        Node.__init__(self, typ, op, parents, props=props)
-        config = get_config()
-        self.props["default_device"] = config["default_device"]
-        if config["debug"] and "stack" not in self.props: self.props["stack"] = traceback.extract_stack()[:-2]
-    def get_hash(self, node2hash):
-        """
-        Return UNIQUE string identifying this Op (and its attributes)
-        """
-        hashobj = hashlib.md5(self.op.get_hash())
-        for p in self.parents: 
-            hashobj.update(node2hash[p])
-        return hashobj.hexdigest()
-    def __repr__(self):
-        return "Result{%s}"%(str(self.op))
-    def clone(self,newparents):
-        """
-        Create a new node that apply's this node's op to newparents
-        Preserve annotations on this node (.props)
-        """
-        return Result(self.op, newparents, typ=self.typ, props = self.props)
+def default_props():
+    props = {}
+    props["default_device"] = _CONFIG["default_device"]
+    if _CONFIG["debug"] and "stack" not in props: props["stack"] = traceback.extract_stack()[:-3]
 
-class Input(Node):
+def Result(op, parents, typ=None, props=None, name=None):
     """
-    Abstract class representing an input to the graph -- a node with no parents, which does not
-    correspond to a computation.
+    Just here as as "damage control" after some refactoring/renaming
     """
-    counter = 0
-    def __init__(self, typ, name=None):
-        self.name = "" if name is None else name
-        assert isinstance(self.name, (str,unicode))
-        Node.__init__(self, typ, None, [])
-        self.counter = Input.counter
-        Input.counter += 1
-    def is_input(self):
-        return True
-    def get_hash(self, _node2hash):
-        return str(self.counter)
-    def __repr__(self):
-        raise NotImplementedError
-    def get_fixed_shape(self):
-        raise NotImplementedError
+    parents = map(as_node, parents)
+    typ = op.typ_apply([parent.typ for parent in parents]) if typ is None else typ
+    return Node(typ, op, parents, props=props or default_props(), name=name)
 
-class Argument(Input):
+def Argument(typ, name=None, fixed_shape=None, props=None):    
     """
-    Input to the graph that is an argument to a function call
+    Just here as as "damage control" after some refactoring/renaming
     """
-    def __init__(self, typ, name=None, fixed_shape=None):    
-        assert isinstance(typ, Type)
-        Input.__init__(self, typ, name)
-        if fixed_shape is not None:
-            assert isinstance(fixed_shape, tuple) and len(fixed_shape) == self.ndim
-            self.fixed_shape = fixed_shape
-        else:
-            self.fixed_shape = (None,)*self.ndim
-    def is_argument(self):
-        return True
-    def __repr__(self):
-        return "Argument{%s,name='%s'}"%(self.typ,self.name)
-    def get_fixed_shape(self):
-        return self.fixed_shape
+    return Node(typ, None, [], props=props or default_props(), fixed_shape=fixed_shape, name=name)
 
-
-# Just here as a temporary  hack so node.op does the right thing in cython
 class GetData(Op):
+    is_data_op=True
     return_type="byval"
     available_impls=("python","native_cpu","native_gpu")
-    def __init__(self, datanode):
-        self.datanode = datanode
+    def __init__(self, typ):
+        self.typ = typ
+    def typ_apply(self, _):
+        return self.typ
+
+class InMemoryData(GetData):
+    def __init__(self, value, device=None, fixed_shape_mask=None):
+        value = as_valid_array(value)
+        GetData.__init__(self, _ndarray_type(value))
+        self.device = device or get_config()["default_device"]
+        self.use_numpy = cgt.get_config()["backend"] == "python" 
+        # use_numpy: whether to store the data as a numpy array or a CppArrayWrapper object
+        if self.use_numpy:
+            assert self.device.devtype=="cpu","can only use numpy for cpu"
+        else:
+            self.dataptr = ctypes.c_long(0)
+        self.set_value(value)
+        assert self._value.dtype != object
+
+
+        if fixed_shape_mask is None:  fixed_shape_mask = (False,)*self._value.ndim
+        elif fixed_shape_mask == "all": fixed_shape_mask = (True,)*self._value.ndim
+        self.fixed_shape = tuple(s if bfixed else None for (s, bfixed) in zip(value.shape, fixed_shape_mask))
+
     def get_py_func(self, _):
         def f(_): 
-            return self.datanode.get_value()
+            return self.get_value()
         return f
     def get_native_compile_info(self, _input_types, _devtype):
         code=r"""
             CGT_EXPORT_C cgtArray* $function($closure* cldata, cgtArray** reads) {
                 return *(cgtArray**)cldata->pptr;
             }"""
-        pptr = self.datanode.get_pptr()
+        pptr = self.get_pptr()
         return NativeCompileInfo(code, closure_triples=[("pptr", ctypes.c_void_p, pptr)], 
-            store_objects=self.datanode._value)
-    
-
-class Data(Input):
-    """
-    An input to the graph, which is associated with a value and implicitly provided
-    during function calls.
-    Data is similar to global variables in standard programming languages.
-    """
-    def __init__(self, value,name=None,device=None, fixed_shape_mask=None):
-        value = as_valid_array(value)
-        Input.__init__(self, _ndarray_type(value), name)
-        self.device = device or get_config()["default_device"]
-
-        self.use_numpy = cgt.get_config()["backend"] == "python"
-        if self.use_numpy:
-            assert self.device.devtype=="cpu","can only use numpy for cpu"
-        else:
-            self.dataptr = ctypes.c_long(0)
-
-        self.set_value(value)
-
-        self.name = "unnamed" if name is None else name
-        assert self._value.dtype != object
-        if fixed_shape_mask is None:  self.fixed_shape_mask = (False,)*self._value.ndim
-        elif fixed_shape_mask == "all": self.fixed_shape_mask = (True,)*self._value.ndim
-        else: self.fixed_shape_mask = fixed_shape_mask
-
-        self.op = GetData(self)
-    def clone(self,*_):
-        return self
-    def is_data(self):
-        return True
+            store_objects=self._value)
     def __repr__(self):
-        return "Data{%s,name='%s'}"%(self.typ,self.name)
+        return "Data{%s}"%(self.typ)
     def get_device(self):
         return self.device
-    def get_fixed_shape(self):
-        shp = self._value.shape
-        return [s if bfixed else None for (bfixed,s) in utils.safezip(self.fixed_shape_mask, shp)]
     def get_value(self):
         return self._value if self.use_numpy else self._value.to_numpy()        
         # XXX use more explicit names
@@ -553,7 +561,7 @@ class Data(Input):
     def get_size(self):
         return self._value.size
     def set_value(self, value):
-        value = value.astype(self.dtype)
+        value = value.astype(self.typ.dtype)
         if self.use_numpy:
             self._value = value.copy()
         else:
@@ -561,9 +569,8 @@ class Data(Input):
             self.dataptr.value = self._value.ptr
     def get_pptr(self):
         return ctypes.addressof(self.dataptr)
-
-
-    # TODO: remove external accesses to .value
+    def get_fixed_shape(self):
+        return self.fixed_shape
 
 def _singleton_ones(dtype, ndim):
     return cgt.constant(np.ones((1,)*ndim, dtype))
@@ -654,11 +661,11 @@ def pullback(outputs, goutputs, wrt):
         # Once we reach a node, we have already backpropagated from all parents
         # So now we can sum up the gradients
         if len(var2gs[node]) > 1:
-            if node.is_array():
+            if node.is_tensor():
                 var2gs[node] = [cgt.add_multi(var2gs[node])]
         # There's only one gradient in the list at this point
         gnode = var2gs[node][0]
-        if isinstance(node, Result):
+        if not node.is_input():
             if isinstance(node.op, TupleIndex):
                 # A little complication that arises when we have a node of Tuple type
                 # Instead of having a list of gradient terms, we're going to store a list with one element
@@ -2488,7 +2495,7 @@ def do_analysis(node, analysis):
         # assert all([s.dtype == "i8" for s in node2shape[node]])
     assert len(node2shape[node]) == node.ndim or isinstance(node.typ,TupleType)
     # -- SCALAR VALUE --
-    if isinstance(node, Result):
+    if not node.is_input():
         op = node.op
         if isinstance(op, Fill):
             node2sv[node] = op.value
@@ -2672,6 +2679,9 @@ def _clone_list(nodes, replace):
     else:
         assert isinstance(replace, dict)
         replace = replace.copy()
+        for (k,v) in replace.iteritems():
+            if not isinstance(v, Node):
+                replace[k] = as_node(v)
     for node in topsorted(nodes):
         if node.is_input():
             if node not in replace:

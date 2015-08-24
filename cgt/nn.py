@@ -3,12 +3,12 @@ Neural network library, drawing inspiration from Torch's nn and nngraph
 """
 
 import cgt
-from cgt import core, size, utils
+from cgt import core, size
 import numpy as np
 from .nn_ops.im2col import im2col
-from .nn_ops.max_pool_2d import max_pool_2d
-from .nn_ops.cross_channel_lrn import cross_channel_lrn
-from .nn_ops import cudnn_ops
+from .nn_ops.max_pool_2d import max_pool_2d #pylint: disable=W0611
+from .nn_ops.cross_channel_lrn import cross_channel_lrn #pylint: disable=W0611
+from .nn_ops import cudnn_ops #pylint: disable=W0611
 from collections import namedtuple
 
 class Module(object):
@@ -20,13 +20,22 @@ class Module(object):
         # tup_out = core.Result(self.c, inputs)
         # return [core.Result(core.TupleIndex(i),[tup_out]) for i in xrange(self.c.n_out)]
     def get_parameters(self):
-        return list(node for node in self.c.get_nodes() if isinstance(node,core.Data))
+        return list(node for node in self.c.get_nodes() if node.is_data())
     def expand(self, inputs):
         return self.c.expand(inputs)
 
+def is_parameter(node):
+    return node.is_data() and node.props["is_parameter"]
 
 def get_parameters(loss):
-    return list(node for node in cgt.core.topsorted([loss]) if isinstance(node,core.Data))
+    return list(node for node in cgt.core.topsorted([loss]) if is_parameter(node))
+
+def parameter(val, name=None, device=None):
+    fixed_shape_mask = "all"
+    out = cgt.shared(val, name=name, device=device, fixed_shape_mask=fixed_shape_mask)
+    out.props["is_parameter"] = True
+    return out
+
 
 # ================================================================
 # Math functions
@@ -120,10 +129,10 @@ class Affine(object):
         output_size = int(output_size)
         name = "unnamed" if name is None else name
 
-        self.weight = cgt.shared(init_array(weight_init, (input_size, output_size)),
-            name=name+".W",fixed_shape_mask=(True,True))
-        self.bias = cgt.shared(init_array(bias_init, (1, output_size)), 
-            name=name+".b",fixed_shape_mask=(True,True))
+        self.weight = parameter(init_array(weight_init, (input_size, output_size)),
+            name=name+".W")
+        self.bias = parameter(init_array(bias_init, (1, output_size)), 
+            name=name+".b")
 
     def __call__(self, x):
         return cgt.broadcast("+", x.dot(self.weight), self.bias, "xx,1x")
@@ -139,10 +148,10 @@ class SpatialConvolution(object):
         self.stride = tuple(map(int,stride))
         name = "unnamed" if name is None else name
 
-        self.weight = cgt.shared(init_array(weight_init, (output_channels, input_channels) + self.kernelshape),
-            name=name+".W",fixed_shape_mask="all")
-        self.bias = cgt.shared(init_array(bias_init, (1, output_channels, 1, 1)), 
-            name=name+".b",fixed_shape_mask="all")
+        self.weight = parameter(init_array(weight_init, (output_channels, input_channels) + self.kernelshape),
+            name=name+".W")
+        self.bias = parameter(init_array(bias_init, (1, output_channels, 1, 1)), 
+            name=name+".b")
 
     def __call__(self, x):
         tmp = conv2d(x, self.weight, self.kernelshape, self.pad, self.stride)

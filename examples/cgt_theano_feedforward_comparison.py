@@ -2,8 +2,11 @@ import cgt, numpy as np
 from cgt import nn
 from example_utils import fetch_dataset
 import time
-import theano.tensor as TT, theano, theano.tensor.signal.downsample #pylint: disable=F0401
-
+try:
+    import theano.tensor as TT, theano, theano.tensor.signal.downsample #pylint: disable=F0401
+    have_theano=True
+except ImportError:
+    have_theano=False
 
 # ================================================================
 # Replicate nn API in theano for the sake of comparison 
@@ -65,14 +68,21 @@ def logsoftmax_theano(x, axis=1):
 
 if __name__ == "__main__":
 
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--unittest", action="store_true")
+    args = parser.parse_args()
+
     # Load data
     # -----------------------
     mnist = fetch_dataset("http://rll.berkeley.edu/cgt-data/mnist.npz")
     Xdata = (mnist["X"]/255.).astype(cgt.floatX)
     ydata = mnist["y"]
-    Xtrain = Xdata[0:10000]
-    ytrain = ydata[0:10000]
-    sortinds = np.random.permutation(10000)
+
+    Ntrain = 1000 if args.unittest else 10000
+    Xtrain = Xdata[0:Ntrain]
+    ytrain = ydata[0:Ntrain]
+    sortinds = np.random.permutation(Ntrain)
     Xtrain = Xtrain[sortinds]
     ytrain = ytrain[sortinds]
     batch_size = 128
@@ -136,9 +146,11 @@ if __name__ == "__main__":
         updates = [(p, p-stepsize*gp) for (p, gp) in zip(params, gparams)]
         return theano.function([X,y, stepsize], loss, updates=updates, allow_input_downcast=True)
 
-    updater_fc_theano = make_updater_fc_theano()
-    print "Theano Fully-Connected Network"
-    run_sgd_epochs(Xtrain, ytrain, updater_fc_theano)
+
+    if not have_theano and not args.unittest:
+        updater_fc_theano = make_updater_fc_theano()
+        print "Theano Fully-Connected Network"
+        run_sgd_epochs(Xtrain, ytrain, updater_fc_theano)
 
 
     # Data parallelism
@@ -235,11 +247,12 @@ if __name__ == "__main__":
         updates = [(p, p-stepsize*gp) for (p, gp) in zip(params, gparams)]
         return theano.function([X,y, stepsize], loss, updates=updates, allow_input_downcast=True)
 
-    updater_convnet_theano = make_updater_convnet_theano()
+    if not have_theano and not args.unittest:
 
-    print "Theano Convnet"
-    Xtrainimgs = Xtrain.reshape(-1,1,28,28)
-    run_sgd_epochs(Xtrainimgs, ytrain, updater_convnet_theano)
+        updater_convnet_theano = make_updater_convnet_theano()
+        print "Theano Convnet"
+        Xtrainimgs = Xtrain.reshape(-1,1,28,28)
+        run_sgd_epochs(Xtrainimgs, ytrain, updater_convnet_theano)
 
     # Data parallelism again
     # -----------------------

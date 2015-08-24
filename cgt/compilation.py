@@ -7,7 +7,7 @@ import logging
 
 def function(inputs, outputs, dbg=None, updates=None, givens=None):
     assert isinstance(inputs, list), "Inputs must be a list"
-    assert all(isinstance(el, core.Argument) for el in inputs), "Invalid input: should be a list of Argument nodes"
+    assert all(el.is_argument() for el in inputs), "Invalid input: should be a list of Argument nodes"
 
     if isinstance(outputs, list): 
         assert all(isinstance(el, core.Node) for el in outputs), "Invalid output: should all be symbolic variables"
@@ -25,7 +25,7 @@ def _function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
                     and isinstance(a[0], core.Node) and isinstance(a[1], core.Node) 
                     for a in updates)), "updates should be a list of pairs (before, after)"
     if givens is None: givens = []
-    else: assert all(isinstance(before, core.Data) for (before,_) in updates), "lhs of updates must be Data instances"
+    else: assert all(before.is_data() for (before,_) in updates), "lhs of updates must be Data instances"
 
     if dbg: raise core.Todo("debug functionality is broken")
     
@@ -56,7 +56,7 @@ def determine_devices(nodes_sorted, updatetarg2src):
         if node in updatetarg2src:
             device = node2dev[updatetarg2src[node]]
         elif node.is_data():
-            device = node.device
+            device = node.op.device
         elif node.is_argument():
             device = home_device
         else:
@@ -400,7 +400,7 @@ def _numeric_eval_listout(outputs, arg2val):
         if node.is_argument():
             node2val[node] = arg2val[node]
         elif node.is_data():
-            node2val[node] = node.get_value()
+            node2val[node] = node.op.get_value()
         else:
             parentvals = [node2val[par] for par in node.parents]
             node2val[node] = core.py_numeric_apply(node, parentvals)
@@ -878,11 +878,6 @@ def _list_to_json(xs):
     return [x.to_json() for x in xs]
 
 def _is_data_mutable(node):
-    if isinstance(node, core.Result):
-        return not isinstance(node.op, core.Constant) 
-    elif isinstance(node, core.Input):
-        return False
-    else:
-        raise RuntimeError
+    return not node.is_input() and not isinstance(node.op, core.Constant)
 
 

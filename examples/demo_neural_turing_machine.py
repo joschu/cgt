@@ -317,6 +317,7 @@ def main():
     parser.add_argument("--grad_check",action="store_true")
     parser.add_argument("--n_batches",type=int,default=1000000)
     parser.add_argument("--profile",action="store_true")
+    parser.add_argument("--unittest", action="store_true")
     args = parser.parse_args()
     np.seterr("raise")
 
@@ -347,8 +348,14 @@ def main():
             ff_hid_sizes = [128,128]
         )
 
-    # task parameters
         seq_length = 10
+
+
+    if args.unittest:
+        seq_length=3
+        args.n_batches=3
+        
+
 
     ntm = make_ntm(opt)
 
@@ -373,6 +380,7 @@ def main():
         print "Gradient check succeeded!"
         print "%i/%i elts of grad are nonzero"%( (g_anal != 0).sum(), g_anal.size )
         return
+
 
     seq_num = 0
     state = make_rmsprop_state(pc.get_value_flat(), .01, .95)
