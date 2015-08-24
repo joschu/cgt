@@ -77,7 +77,7 @@ Thus, when all the predecessors of an instruction fire, we can enqueue that inst
 class ParallelInterpreter: public Interpreter {
 public:
     using InstrInd = size_t;    
-    ParallelInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs);
+    ParallelInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs, int num_threads);
 
     cgtObject * get(const MemLocation& m) {
         return storage_[m.index()].get();
@@ -95,7 +95,7 @@ public:
     void trigger_instr(InstrInd instr_ind);
 
     ~ParallelInterpreter() {
-        delete[] loc2mutex_; 
+        // delete[] loc2mutex_; 
         delete[] instr2mutex_;
     }
 private:
@@ -111,24 +111,24 @@ private:
     vector<int> instr2insofar_;
     atomic<int> n_pending_; // number of pending instrs
     atomic<int> n_total_; // total instructions fired (just for debugging purposes)
-    mutex* loc2mutex_; // lock while writing to loc during execution. using c array because vector requires move constructor
+    // mutex* loc2mutex_; // lock while writing to loc during execution. using c array because vector requires move constructor
     // xxx i think we can remove this
     mutex* instr2mutex_; // lock while checking if this instruction can fire or firing it
 };
 
-ParallelInterpreter::ParallelInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs)
+ParallelInterpreter::ParallelInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs, int num_threads)
   : eg_(eg), 
     output_locs_(output_locs), 
     storage_(eg->n_locs()), 
     args_(NULL),
-    pool_(int(std::thread::hardware_concurrency())),
+    pool_(num_threads),
     instr2next_(eg->n_instrs()),
     instr2indegree_(eg->n_instrs()), 
     no_prereqs_(),
     instr2insofar_(eg->n_instrs()),
     n_pending_(0),
     n_total_(0),
-    loc2mutex_(new mutex[eg->n_locs()]),
+    // loc2mutex_(new mutex[eg->n_locs()]),
     instr2mutex_(new mutex[eg->n_instrs()])
 {
     vector<InstrInd> loc2lastwriter(eg->n_locs()); // for each location, last instruction to write to it
@@ -219,6 +219,9 @@ void ParallelInterpreter::fire_instr(InstrInd instr_ind)
         }
     }
     --n_pending_;    
+    // if (!instr->quick()) printf("finished %i %s\n", instr_ind, instr->repr().c_str());
+
+
 }
 
 void ParallelInterpreter::trigger_instr(InstrInd instr_ind)
@@ -231,6 +234,7 @@ void ParallelInterpreter::trigger_instr(InstrInd instr_ind)
         fire_instr(instr_ind);
     }
     else {
+        // printf("triggered %i %s\n", instr_ind, instr->repr().c_str());
         pool_.enqueue(&ParallelInterpreter::fire_instr, this, instr_ind);        
     }
 }
@@ -297,9 +301,9 @@ ExecutionGraph::~ExecutionGraph() {
     for (auto instr : instrs_) delete instr;
 }
 
-Interpreter* create_interpreter(ExecutionGraph* eg, vector<MemLocation> output_locs, bool parallel) {
-    if (parallel) {
-        return new ParallelInterpreter(eg, output_locs);
+Interpreter* create_interpreter(ExecutionGraph* eg, vector<MemLocation> output_locs, int num_threads) {
+    if (num_threads > 1) {
+        return new ParallelInterpreter(eg, output_locs, num_threads);
     }
     else{
         return new SequentialInterpreter(eg, output_locs);

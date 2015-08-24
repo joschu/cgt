@@ -6,6 +6,6 @@ enable_inplace_opt = True
 enable_simplification = True
 force_python_impl = False
 disallow_python_impl = False
-parallel_interp = False
+parallel = False
 enable_cuda = False
 debug_cpp = False

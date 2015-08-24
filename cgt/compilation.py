@@ -80,19 +80,20 @@ def create_interpreter(inputs, outputs, eg, node2memloc):
     input_types = [input.typ for input in inputs] #pylint: disable=W0622
     output_locs = [node2memloc[node] for node in outputs]
 
-    backend = cgt.get_config()["backend"]
-    parallel_interp = cgt.get_config()["parallel_interp"]
+    config = cgt.get_config()
+    backend = config["backend"]
+    parallel = config["parallel"]
     if backend == "python":
-        if parallel_interp:
-            raise NotImplementedError("For parallel_interp=True, set backend=native")
+        if parallel:
+            raise NotImplementedError("For parallel=True, set backend=native")
             # return ParallelInterpreter(eg, output_locs, input_types)
         else:
             return SequentialInterpreter(eg, output_locs, input_types)
     elif backend == "native":
-        if parallel_interp:
-            return cgt.cycgt.CppInterpreterWrapper(eg, input_types, output_locs, True)
+        if parallel:
+            return cgt.cycgt.CppInterpreterWrapper(eg, input_types, output_locs, config["num_threads"])
         else:
-            return cgt.cycgt.CppInterpreterWrapper(eg, input_types, output_locs, False)
+            return cgt.cycgt.CppInterpreterWrapper(eg, input_types, output_locs, 0)
     else:
         raise NotImplementedError("invalid backend %s"%backend)
 

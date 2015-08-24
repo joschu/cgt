@@ -178,7 +178,7 @@ def ntm_write(M_bnm, w_bhn, e_bhm, a_bhm):
 
 def ntm_step(opt, Mprev_bnm, X_bk, wprev_bHn, rprev_bhm, controller):
     n_heads = opt.h
-    k_bHm, beta_bH, g_bH, s_bH3, gamma_bH, e_bhm, a_bhm, y_bp = controller.expand([rprev_bhm, X_bk])
+    k_bHm, beta_bH, g_bH, s_bH3, gamma_bH, e_bhm, a_bhm, y_bp = controller([rprev_bhm, X_bk])
     w_bHn = ntm_address(opt, wprev_bHn, Mprev_bnm, k_bHm, beta_bH, g_bH, s_bH3, gamma_bH)
     wr_bhn = w_bHn[:,:n_heads,:]
     ww_bhn = w_bHn[:,n_heads:,:]    
@@ -219,7 +219,7 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
 
     state_arrs = initial_states
     for t in xrange(total_time):
-        tmp = ntm.expand([x_tbk[t]] + state_arrs)
+        tmp = ntm([x_tbk[t]] + state_arrs)
         raw_pred = tmp[0]
         state_arrs = tmp[1:4]
 

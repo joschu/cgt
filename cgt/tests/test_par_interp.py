@@ -29,7 +29,7 @@ def sleepfor(x, t):
     return cgt.core.Result(SleepFor(), [x, t])
 
 def test_sleeps():
-    with cgt.scoped_update_config(parallel_interp = True, backend="native"):
+    with cgt.scoped_update_config(parallel = True, backend="native"):
         x = cgt.scalar('x')
         y1 = sleepfor(x, .1)
         y2 = sleepfor(x, .1)
@@ -44,7 +44,7 @@ def test_sleeps():
 
 
 def test_matmuls():
-    with cgt.scoped_update_config(parallel_interp = True, backend="native"):
+    with cgt.scoped_update_config(parallel = True, backend="native"):
 
         m = 8
         d = 1000
@@ -76,7 +76,7 @@ def test_matmuls():
     
 
 def test_update():
-    with cgt.scoped_update_config(parallel_interp = True, backend="native"):
+    with cgt.scoped_update_config(parallel = True, backend="native"):
         xval = np.array(1.5)
         x = cgt.shared(xval)
         f = cgt.function([], x.sum(), updates=[(x,x+1)])

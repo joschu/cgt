@@ -252,14 +252,14 @@ cdef extern from "execution.h" namespace "cgt":
     cppclass BuildTup(Instruction):
         BuildTup(const string&, vector[MemLocation], const MemLocation&)
     cppclass ReturnByRef(Instruction):
-        ReturnByRef(const string&, vector[MemLocation], const MemLocation&, ByRefCallable, bool)
+        ReturnByRef(const string&, vector[MemLocation], const MemLocation&, ByRefCallable, bint)
     cppclass ReturnByVal(Instruction):
-        ReturnByVal(const string&, vector[MemLocation], const MemLocation&, ByValCallable, bool)
+        ReturnByVal(const string&, vector[MemLocation], const MemLocation&, ByValCallable, bint)
 
     cppclass Interpreter:
         cgtTuple* run(cgtTuple*)
 
-    Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation], bint)
+    Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation], int)
 
 cdef vector[size_t] _tovectorlong(object xs):
     cdef vector[size_t] out = vector[size_t]()
@@ -351,15 +351,15 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     elif t == compilation.BuildTup:
         out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == compilation.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(), storage), _allscalarinputs(pyinstr))
+        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(), storage), _isquick(pyinstr))
     elif t == compilation.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage), _allscalarinputs(pyinstr))
+        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage), _isquick(pyinstr))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out
 
-def _allscalarinputs(pyinstr):
-    return all(isinstance(t, core.TensorType) and t.ndim == 0 for t in pyinstr.input_types)
+def _isquick(pyinstr):
+    return all(isinstance(t, core.TensorType) and t.ndim == 0 for t in pyinstr.input_types) or isinstance(pyinstr.op, (core.Constant, core.Size))
 
 ################################################################
 ### Wrapper classes

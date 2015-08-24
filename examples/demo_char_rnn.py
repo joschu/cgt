@@ -114,7 +114,7 @@ def make_loss_and_grad_and_step(arch, size_input, size_output, size_mem, size_ba
     cur_hiddens = init_hiddens
     loss = 0
     for t in xrange(n_unroll):
-        outputs = network.expand([x_tnk[t]] + cur_hiddens)
+        outputs = network([x_tnk[t]] + cur_hiddens)
         cur_hiddens, prediction_logprobs = outputs[:-1], outputs[-1]
         # loss = loss + nn.categorical_negloglik(prediction_probs, targ_tnk[t]).sum()
         loss = loss - (prediction_logprobs*targ_tnk[t]).sum()
@@ -135,7 +135,7 @@ def make_loss_and_grad_and_step(arch, size_input, size_output, size_mem, size_ba
     assert len(init_hiddens) == len(final_hiddens)
 
     x_nk = cgt.matrix('x')
-    outputs = network.expand([x_nk] + init_hiddens)
+    outputs = network([x_nk] + init_hiddens)
     f_step = cgt.function([x_nk]+init_hiddens, outputs)
 
     return network, f_loss, f_loss_and_grad, f_step

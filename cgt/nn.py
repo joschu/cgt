@@ -15,12 +15,12 @@ class Module(object):
     def __init__(self, inputs, outputs):
         self.c = core.Composition(inputs, outputs)
     def __call__(self, inputs):
-        assert all(isinstance(x,core.Node) for x in inputs)
-        tup_out = core.Result(self.c, inputs)
-        return [core.Result(core.TupleIndex(i),[tup_out]) for i in xrange(self.c.n_out)]
+        return self.c.expand(inputs)        
+        # assert all(isinstance(x,core.Node) for x in inputs)
+        # tup_out = core.Result(self.c, inputs)
+        # return [core.Result(core.TupleIndex(i),[tup_out]) for i in xrange(self.c.n_out)]
     def get_parameters(self):
         return list(node for node in self.c.get_nodes() if isinstance(node,core.Data))
-
     def expand(self, inputs):
         return self.c.expand(inputs)
 
@@ -95,7 +95,7 @@ IIDGaussian.__new__.__defaults__ = (0, 1)
 IIDUniform = namedtuple("IIDUniform", ["low","high"])
 Zeros = namedtuple("Zeros",[])
 
-def _init_array(init, shape):
+def init_array(init, shape):
     if isinstance(init, IIDGaussian):
         return (np.random.randn(*shape)*init.std + init.mean).astype(cgt.floatX)
     elif isinstance(init, IIDUniform):
@@ -120,9 +120,9 @@ class Affine(object):
         output_size = int(output_size)
         name = "unnamed" if name is None else name
 
-        self.weight = cgt.shared(_init_array(weight_init, (input_size, output_size)),
+        self.weight = cgt.shared(init_array(weight_init, (input_size, output_size)),
             name=name+".W",fixed_shape_mask=(True,True))
-        self.bias = cgt.shared(_init_array(bias_init, (1, output_size)), 
+        self.bias = cgt.shared(init_array(bias_init, (1, output_size)), 
             name=name+".b",fixed_shape_mask=(True,True))
 
     def __call__(self, x):
@@ -139,9 +139,9 @@ class SpatialConvolution(object):
         self.stride = tuple(map(int,stride))
         name = "unnamed" if name is None else name
 
-        self.weight = cgt.shared(_init_array(weight_init, (output_channels, input_channels) + self.kernelshape),
+        self.weight = cgt.shared(init_array(weight_init, (output_channels, input_channels) + self.kernelshape),
             name=name+".W",fixed_shape_mask="all")
-        self.bias = cgt.shared(_init_array(bias_init, (1, output_channels, 1, 1)), 
+        self.bias = cgt.shared(init_array(bias_init, (1, output_channels, 1, 1)), 
             name=name+".b",fixed_shape_mask="all")
 
     def __call__(self, x):

@@ -78,7 +78,7 @@ class TensorType(Type):
     def __init__(self, dtype, ndim):
         self.dtype = Dtype.canon(dtype)
         self.ndim = ndim
-    def __str__(self):
+    def __repr__(self):
         return "Tensor(%s,%s)"%(self.dtype, self.ndim)
     def __eq__(self, other):
         return self.dtype == other.dtype and self.ndim == other.ndim
@@ -2818,6 +2818,8 @@ def reset_config():
 def update_config(**kws):
     config = get_config()
     for (name,val) in kws.iteritems():
+        if name not in config:
+            raise ValueError("%s is not a valid config option"%name)
         config[name] = val
 
 class scoped_update_config(object):
@@ -2825,12 +2827,12 @@ class scoped_update_config(object):
         self.kw = kw
         config = get_config()
         self.prevsettings = {}
-        self.delkeys = []
         for k in kw.iterkeys(): 
             if k in config: 
                 self.prevsettings[k] = config[k]
             else:
-                self.delkeys.append(k)                
+                raise ValueError("%s is not a valid config option"%k)
+
     def __enter__(self):
         config = get_config()
         config.update(self.kw)
@@ -2838,7 +2840,6 @@ class scoped_update_config(object):
     def __exit__(self, *args):
         config = get_config()
         config.update(self.prevsettings)
-        for k in self.delkeys: del config[k]
 
 
 # TAGS

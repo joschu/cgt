@@ -95,7 +95,7 @@ public:
 };
 
 // pass by value because of cython
-Interpreter* create_interpreter(ExecutionGraph*, vector<MemLocation> output_locs, bool parallel);
+Interpreter* create_interpreter(ExecutionGraph*, vector<MemLocation> output_locs, int num_threads);
 
 class LoadArgument : public Instruction  {
 public:
