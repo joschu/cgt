@@ -363,6 +363,21 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
 # ================================================================
 
 def numeric_eval(output, arg2val):
+    """
+    Numerically evaluates symbolic variable without any compilation,
+    by associating each argument with a value (via `arg2val`) and traversing the
+    computation graph
+
+
+    Inputs
+    ------
+    output: symbolic variable or list of variables we would like to evaluate
+    arg2val: dictionary assigning each argument that output depends on to a numerical value
+
+    Returns
+    -------
+    Numeric value or list of numeric values of variables corresponding to output
+    """
     if isinstance(output, list):
         assert all(isinstance(x, core.Node) for x in output), "expected a list of Nodes"
         return _numeric_eval_listout(output, arg2val)
@@ -780,6 +795,9 @@ class SequentialInterpreter(Interpreter):
 
 
 class _Profiler(object):
+    """
+    Profiler for Python backend, i.e. Interpreter
+    """
     def __init__(self):
         self.instr2stats = {}
         self.on = False

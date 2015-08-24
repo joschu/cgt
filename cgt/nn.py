@@ -149,33 +149,3 @@ class SpatialConvolution(object):
         return cgt.broadcast("+", tmp, self.bias, "xxxx,1x11")
 
 
-# ================================================================
-# Deprecated
-# ================================================================
-
-
-
-def setup_contiguous_storage(shareds):
-    """
-    Moves the data stored in a bunch of Data variables to be slices of a single contiguous vector,
-    and return a view on that vector.
-    This facilitates writing optimization code that acts on flat vectors.
-    """
-    FIXME
-    if core.get_config()["backend"]=="native":
-        utils.warn("setup_contiguous_storage is broken for backend=native. this will probably fail")
-    dtype = cgt.floatX
-    # assert utils.allsame([s.get_device() for s in shareds])
-    tot_size = sum(s.get_size() for s in shareds)
-    flatvec = np.empty(tot_size, dtype=dtype)
-    start = 0
-    for s in shareds:
-        assert s.dtype == dtype
-        v = s.get_value()
-        size = v.size #pylint: disable=W0621
-        flatvec[start:start+size] = v.ravel()
-        s.set_value(flatvec[start:start+size].reshape(v.shape))
-        start += size
-    return flatvec
-
-

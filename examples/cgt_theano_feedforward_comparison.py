@@ -187,8 +187,7 @@ if __name__ == "__main__":
         d0,d1,d2,d3 = pool2.shape
         flatlayer = pool2.reshape([d0,d1*d2*d3])
         nfeats = cgt.infer_shape(flatlayer)[1]
-        ip1 = nn.Affine(nfeats, 10)(flatlayer)
-        logprobs = nn.logsoftmax(ip1)
+        logprobs = nn.logsoftmax(nn.Affine(nfeats, 10)(flatlayer))
         loss = -logprobs[cgt.arange(X.shape[0]), y].mean()
         return loss
 

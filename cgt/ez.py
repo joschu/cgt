@@ -2,8 +2,14 @@ import cgt
 from cgt import core
 
 class EasyCustomOp(core.Op):
+    """
+    Will provide an easier method to define a custom Op, where you just have to create one class
+    and write the numerical forward and backpropagation methods
+    currently broken / untested
+    """
     return_type = "byval"
     def __init__(self, input_types, output_type, forward_impl, pullback_impl=None,shapefun=None):
+        raise core.Todo
         assert all(isinstance(typ, core.TensorType) for typ in input_types)
         assert isinstance(output_type, core.Type)
         self.input_types = input_types

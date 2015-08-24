@@ -80,6 +80,10 @@ def print_text(outputs, o=sys.stdout):
                 for parent in node.parents)))
 
 def as_dot(nodes):
+    """
+    Returns graphviz Digraph object that contains the nodes of the computation graph
+    with names assigned.
+    """
     if isinstance(nodes, core.Node):
         nodes = [nodes]
     from graphviz import Digraph

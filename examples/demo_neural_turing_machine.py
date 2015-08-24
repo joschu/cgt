@@ -37,6 +37,8 @@ from cgt import core, nn
 from collections import namedtuple
 from cgt.core import infer_shape
 from example_utils import fmt_row
+from param_collection import ParamCollection
+
 
 # Subscript indicate dimensions of array, and what each dimension indexes over
 NTMOpts = namedtuple("NTMOpts",[
@@ -234,7 +236,7 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
     loss01 = loss01 / (len(loss_timesteps) * opt.p * opt.b)
     gradloss = cgt.grad(lossCE, params)
 
-    flatgrad = cgt.flatcat(gradloss)
+    flatgrad = flatcat(gradloss)
 
     f_loss = cgt.function([x_tbk, y_tbp], lossCE)
     f_loss_and_grad = cgt.function([x_tbk, y_tbp], [lossCE, loss01, flatgrad])
@@ -243,6 +245,9 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
 
 def round01(x):
     return cgt.cast(x>.5,cgt.floatX)
+
+def flatcat(xs):
+    return cgt.concatenate([x.flatten() for x in xs])
 
 class CopyTask(object):
     def __init__(self, batch_size, seq_length, output_dim):
@@ -315,7 +320,7 @@ def main():
     args = parser.parse_args()
     np.seterr("raise")
 
-    cgt.set_precision("quad" if args.grad_check else "single")
+    cgt.set_precision("quad" if args.grad_check else "double")
     np.random.seed(0)
 
     # model parameters
@@ -334,7 +339,7 @@ def main():
     else:
         opt = NTMOpts(
             b = 64, # batch size
-            h = 1, # number of heads
+            h = 3, # number of heads
             n = 128, # number of memory sites
             m = 20, # dimension at each memory site
             k = 3, # dimension of input
@@ -349,38 +354,28 @@ def main():
 
     task = CopyTask(opt.b, seq_length, opt.p)
     f_loss, f_loss_and_grad, params = make_funcs(opt, ntm, task.total_time(), task.loss_timesteps())
-    th = nn.setup_contiguous_storage(params)
+
+    pc = ParamCollection(params)
+    pc.set_value_flat(nr.uniform(-.1, .1, size=(pc.get_total_size(),)))
 
     if args.grad_check:
         x,y = task.gen_batch()
         def f(thnew):
             thold = th.copy()
-            th[:] = thnew
+            pc.set_value_flat(thnew)
             loss = f_loss(x,y)
-            th[:] = thold
+            pc.set_value_flat(thold)
             return loss
         from cgt.numeric_diff import numeric_grad
         g_num = numeric_grad(f, th,eps=1e-8)
         _, _, g_anal = f_loss_and_grad(x,y)
         assert np.allclose(g_num, g_anal, atol=1e-8)
-        # print "Gradient check succeeded!"
+        print "Gradient check succeeded!"
         print "%i/%i elts of grad are nonzero"%( (g_anal != 0).sum(), g_anal.size )
-
-        import matplotlib.pyplot as plt
-        im = g_anal[:params[0].get_size()].reshape(params[0].get_shape())!=0
-        plt.imshow(im,interpolation='none')
-        print im.mean()
-        H = opt.h*2
-        sizes = [H*opt.m,H,H,3*H,H,opt.h*opt.m,opt.h*opt.m,opt.p]
-        edges = np.cumsum(sizes)
-        ax = plt.gca()
-        ax.set_xticks(edges-.5)
-        ax.set_xticklabels(["k","beta","g","s","gamma","e","a","y"])
-        plt.show()
         return
 
     seq_num = 0
-    state = make_rmsprop_state(th, .003, .95)
+    state = make_rmsprop_state(pc.get_value_flat(), .01, .95)
     print fmt_row(13, ["seq num", "CE (bits)", "accuracy", "|g|_inf"], header=True)
     
     if args.profile: cgt.profiler.start()
@@ -391,6 +386,9 @@ def main():
         l,l01,g = f_loss_and_grad(x,y)
         print fmt_row(13, [seq_num, l,l01,np.abs(g).max()])
         rmsprop_update(g, state)        
+        pc.set_value_flat(state.theta)
+        if not np.isfinite(l): break
+
     
     if args.profile: cgt.profiler.print_stats()
 

@@ -1,3 +1,8 @@
+"""
+A nearly direct translation of Andrej's code
+https://github.com/karpathy/char-rnn
+"""
+
 from __future__ import division
 import cgt
 from cgt import nn, utils, profiler
@@ -66,7 +71,6 @@ def make_deep_lstm(size_input, size_mem, n_layers, size_output, size_batch):
 
     return nn.Module(inputs, outputs)
 
-# XXX move elsewhere
 def flatcat(xs):
     return cgt.concatenate([x.flatten() for x in xs])
 
@@ -305,7 +309,7 @@ def main():
             grad = out[1]
             cur_hiddens = out[2:]
             rmsprop_update(grad, optim_state)
-            pc.set_value_flat(optim_state["theta"])
+            pc.set_value_flat(optim_state.theta)
             losses.append(loss)
         print "%.3f s/batch. avg loss = %.3f"%((time()-tstart)/len(losses), np.mean(losses))
         optim_state.step_size *= .95 #pylint: disable=E1101

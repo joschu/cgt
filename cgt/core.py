@@ -685,6 +685,9 @@ def pullback(outputs, goutputs, wrt):
     return [var2gs[node][0] for node in wrt]
 
 def infer_shape(arr):
+    """
+    Infer the shape of `arr` and return a tuple of int and None
+    """
     return tuple(x.op.value if isinstance(x.op, Constant) else None for x in  CACHER.simplify(cgt.shape(arr)))
 
 def grad(cost, wrt):    
@@ -1083,39 +1086,39 @@ def _nu_divide(x, y, out=None):
 UnaryInfo = namedtuple("UnaryInfo", ("short","pyfunc","diff","typeinfo", "gradexpr", "cexpr"))
 
 UNARY_INFO = {
-    "abs" : UnaryInfo(   "Abs", np.abs,  True,   's', lambda x, y, gy: gy*cgt.sign(x), "fabs(x)"),
-    "ceil" : UnaryInfo(  "Ceil", np.ceil, False,  'i',  lambda x, y, gy: _no_grad(), "ceil(x)"),
-    "cos" : UnaryInfo(   "Cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*cgt.sin(x), "cos(x)"),
-    "exp" : UnaryInfo(   "Exp", np.exp,  True,   'f',   lambda x, y, gy: gy*cgt.exp(x), "exp(x)"),
-    "iceil" : UnaryInfo( "Iceil", _nu_iceil, False, 'i',   lambda x, y, gy: _no_grad(), "(int)ceil(x)"),
-    "ifloor" : UnaryInfo( "Ifloor", _nu_ifloor, False, 'i',   lambda x, y, gy: _no_grad(), "(int)floor(x)"),
-    "log" : UnaryInfo(   "Log", np.log,  True,   'f', lambda x, y, gy: gy/x, "log(x)"),
-    "neg" : UnaryInfo(   "Negative", np.negative, True, 's', lambda x, y, gy: -gy, "(-x)"),
-    "sign" : UnaryInfo(   "Sign", np.sign, False,   's',  lambda x, y, gy: _no_grad(), "2*(x>0)-1"),
-    "sin" : UnaryInfo(    "Sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cgt.cos(x), "sin(x)"),
-    "square" : UnaryInfo( "Square", np.square, True, 's',  lambda x, y, gy: 2.0*gy*x, "x*x"),
-    "sqrt" : UnaryInfo( "Sqrt", np.sqrt, True, 'f', lambda x, y, gy: gy/(2.0*y), "sqrt(x)"),
-    "tanh" : UnaryInfo(   "Tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-cgt.square(y)), "tanh(x)"),
-    "sigmoid" : UnaryInfo( "Sigmoid", _nu_sigmoid, True, 'f', lambda x, y, gy: gy*y*(1-y), "1.0/(1.0+exp(-x))"),
-    "conj" : UnaryInfo( "Conj", np.conj, True, 'c', lambda x, y, gy: cgt.conj(gy), "conj(x)")
+    "abs" : UnaryInfo(   "abs", np.abs,  True,   's', lambda x, y, gy: gy*cgt.sign(x), "fabs(x)"),
+    "ceil" : UnaryInfo(  "ceil", np.ceil, False,  'i',  lambda x, y, gy: _no_grad(), "ceil(x)"),
+    "cos" : UnaryInfo(   "cos", np.cos,  True,   'f',   lambda x, y, gy: -gy*cgt.sin(x), "cos(x)"),
+    "exp" : UnaryInfo(   "exp", np.exp,  True,   'f',   lambda x, y, gy: gy*cgt.exp(x), "exp(x)"),
+    "iceil" : UnaryInfo( "iceil", _nu_iceil, False, 'i',   lambda x, y, gy: _no_grad(), "(int)ceil(x)"),
+    "ifloor" : UnaryInfo( "ifloor", _nu_ifloor, False, 'i',   lambda x, y, gy: _no_grad(), "(int)floor(x)"),
+    "log" : UnaryInfo(   "log", np.log,  True,   'f', lambda x, y, gy: gy/x, "log(x)"),
+    "neg" : UnaryInfo(   "negative", np.negative, True, 's', lambda x, y, gy: -gy, "(-x)"),
+    "sign" : UnaryInfo(   "sign", np.sign, False,   's',  lambda x, y, gy: _no_grad(), "2*(x>0)-1"),
+    "sin" : UnaryInfo(    "sin", np.sin,    True, 'f',  lambda x, y, gy: gy*cgt.cos(x), "sin(x)"),
+    "square" : UnaryInfo( "square", np.square, True, 's',  lambda x, y, gy: 2.0*gy*x, "x*x"),
+    "sqrt" : UnaryInfo( "sqrt", np.sqrt, True, 'f', lambda x, y, gy: gy/(2.0*y), "sqrt(x)"),
+    "tanh" : UnaryInfo(   "tanh", np.tanh, True,   'f', lambda x, y, gy: gy*(1-cgt.square(y)), "tanh(x)"),
+    "sigmoid" : UnaryInfo( "sigmoid", _nu_sigmoid, True, 'f', lambda x, y, gy: gy*y*(1-y), "1.0/(1.0+exp(-x))"),
+    "conj" : UnaryInfo( "conj", np.conj, True, 'c', lambda x, y, gy: cgt.conj(gy), "conj(x)")
 }
 
-BinaryInfo = namedtuple("BinaryInfo", ("short","pyfunc","commutes","diff","typeinfo","gradexpr", "cexpr"))
+BinaryInfo = namedtuple("BinaryInfo", ("short", "pyfunc","commutes","diff","typeinfo","gradexpr", "cexpr"))
 
 
 BINARY_INFO = {
     #infix             short      pyfunc    commutes     diff        typeinfo
-    "*"   : BinaryInfo("Multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
-    "+"   : BinaryInfo("Add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
-    "-"   : BinaryInfo("Subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
-    "/"   : BinaryInfo("Divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(x+0.0)/y"),
-    "<"   : BinaryInfo("Less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
-    ">"   : BinaryInfo("Greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
-    "<="   : BinaryInfo("LessEqual",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
-    ">="   : BinaryInfo("GreaterEqual",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
-    "**"   : BinaryInfo("Power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), 
-    "=="  : BinaryInfo("Equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
-    "!="  : BinaryInfo("NotEqual", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
+    "*"   : BinaryInfo("multiply",  np.multiply, True,    (True,True),    'p',        lambda x, y, z, gz: [y*gz,x*gz], "x*y"),
+    "+"   : BinaryInfo("add",  np.add,   True,    (True,True),    'p',        lambda x, y, z, gz: [gz,gz], "x+y"),
+    "-"   : BinaryInfo("subtract",  np.subtract, False,    (True,True),   'p',       lambda x, y, z, gz: [gz,-gz], "x-y"),
+    "/"   : BinaryInfo("divide",  _nu_divide,  False,    (True,True),    'f',       lambda x, y, z, gz: [gz/y,-gz*z/y], "(x+0.0)/y"),
+    "<"   : BinaryInfo("less",   np.less,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<y"),
+    ">"   : BinaryInfo("greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
+    "<="   : BinaryInfo("less_equal",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
+    ">="   : BinaryInfo("greater_equal",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
+    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), 
+    "=="  : BinaryInfo("equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
+    "!="  : BinaryInfo("not_equal", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
 }
 
 
@@ -2536,6 +2539,10 @@ def maybe_replace(node, analysis, repl):
     return None
 
 def simplify(xs):
+    """
+    xs : a variable or list of variables
+    Compute equivalent expression(s) in which simplifications have been applied
+    """
     assert isinstance(xs, list)
     return simplify_and_analyze(xs)[0]
 
@@ -2776,6 +2783,10 @@ def get_cgt_src_root():
  
 _CONFIG = None
 def get_config(force_reload = False):
+    """
+    Return the global configuration, which is loaded from your rcfile
+    and the environment variables CGT_FLAGS
+    """
     global _CONFIG
     if _CONFIG is None or force_reload:
         _CONFIG = _load_config()
@@ -2813,9 +2824,16 @@ def _load_config():
     return config
 
 def reset_config():
+    """
+    Reload config from CGT_FLAGS and cgtrc
+    I.e., discard values set at runtime, e.g. through update_config and set_precision
+    """
     get_config(True)
 
 def update_config(**kws):
+    """
+    Globally update the provided configuration variables
+    """
     config = get_config()
     for (name,val) in kws.iteritems():
         if name not in config:
@@ -2823,6 +2841,15 @@ def update_config(**kws):
         config[name] = val
 
 class scoped_update_config(object):
+    """
+    example usage: 
+
+    with scoped_update_config(precision='single',backend='native', parallel=True)
+        ...
+
+    Changes relevant config variables in the scope of the `with` statements, and change them
+    back when we leave this scope
+    """
     def __init__(self, **kw):
         self.kw = kw
         config = get_config()
@@ -2850,3 +2877,4 @@ class scoped_update_config(object):
 #   Certain operations created by pullback should be performed in place, but other optimizations 
 #   like CSE make that impossible. So we add an extra field that associates arrays of zeros with the node that
 #   they represent the gradient for, to prevent CSE from cutting out these nodes
+# @SHAPE_CHECK : eventually we should check the shape while building up the graph, but this functionality isn't set up in a fully coherent way yet
