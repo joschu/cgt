@@ -610,7 +610,7 @@ def _red_axes(axis, ndim):
     else:
         raise ValueError("invalid argument 'axis'=%s" % axis)
 
-def dim_shuffle(arr, pattern):
+def dimshuffle(arr, pattern):
     """
     Similar to theano dim_shuffle. Can do arbitrary permutation and add dimensions.
     However, you can not drop dimensions. Use dropdims for that.

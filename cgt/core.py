@@ -364,7 +364,7 @@ class Node(object):
     def flatten(self):
         return cgt.flatten(self)
     def dim_shuffle(self, pattern):
-        return cgt.dim_shuffle(self, pattern)
+        return cgt.dimshuffle(self, pattern)
 
 
 def _ndarray_type(value):
