@@ -3,7 +3,7 @@ import sys
 from time import time
 
 elapsed = []
-horizons = 2**np.arange(14)
+horizons = 2**np.arange(2, 10)
 
 for horizon in horizons:
     print "HORIZON",horizon
@@ -40,6 +40,6 @@ for horizon in horizons:
     elapsed.append(time()-tstart)
 
 import matplotlib.pyplot as plt
-plt.plot(horizons,elapsed)
+plt.plot(horizons,elapsed,'x-')
 plt.show()
 

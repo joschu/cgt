@@ -133,15 +133,18 @@ def make_loss_and_grad_and_step(arch, size_input, size_output, size_mem, size_ba
 
     flatgrad = flatcat(gradloss)
 
-    f_loss_and_grad = cgt.function([x_tnk, targ_tnk] + init_hiddens, [loss, flatgrad] + final_hiddens)
+    with utils.Message("compiling loss+grad"):
+        f_loss_and_grad = cgt.function([x_tnk, targ_tnk] + init_hiddens, [loss, flatgrad] + final_hiddens)
     f_loss = cgt.function([x_tnk, targ_tnk] + init_hiddens, loss)
 
     assert len(init_hiddens) == len(final_hiddens)
 
     x_nk = cgt.matrix('x')
     outputs = network([x_nk] + init_hiddens)
+
     f_step = cgt.function([x_nk]+init_hiddens, outputs)
 
+    # print "node count", cgt.count_nodes(flatgrad)
     return network, f_loss, f_loss_and_grad, f_step
 
 
@@ -257,6 +260,7 @@ def main():
     parser.add_argument("--arch",choices=["lstm","gru"],default="lstm")
     parser.add_argument("--grad_check",action="store_true")
     parser.add_argument("--profile",action="store_true")
+    parser.add_argument("--unittest",action="store_true")
 
     args = parser.parse_args()
 
@@ -311,10 +315,11 @@ def main():
             rmsprop_update(grad, optim_state)
             pc.set_value_flat(optim_state.theta)
             losses.append(loss)
+            if args.unittest: return
         print "%.3f s/batch. avg loss = %.3f"%((time()-tstart)/len(losses), np.mean(losses))
-        optim_state.step_size *= .95 #pylint: disable=E1101
+        optim_state.step_size *= .98 #pylint: disable=E1101
 
-        sample(f_step, initialize_hiddens(1), char2ind =loader.char2ind, n_steps=300, temp=1.0, seed_text = "")
+        sample(f_step, initialize_hiddens(1), char2ind=loader.char2ind, n_steps=300, temp=1.0, seed_text = "")
 
     if args.profile: profiler.print_stats()
 

@@ -1,7 +1,7 @@
 from .api import *
 from .display import print_tree, print_expr, print_text, as_dot
 from .compilation import function, numeric_eval, profiler
-from .core import grad, get_config, update_config, simplify, reset_config, Device, scoped_update_config, infer_shape
+from .core import grad, get_config, update_config, simplify, reset_config, Device, scoped_update_config, infer_shape, count_nodes
 from .ez import EasyCustomOp
 try: 
     import cycgt

@@ -38,7 +38,7 @@ from collections import namedtuple
 from cgt.core import infer_shape
 from example_utils import fmt_row
 from param_collection import ParamCollection
-
+import time
 
 # Subscript indicate dimensions of array, and what each dimension indexes over
 NTMOpts = namedtuple("NTMOpts",[
@@ -241,6 +241,8 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
     f_loss = cgt.function([x_tbk, y_tbp], lossCE)
     f_loss_and_grad = cgt.function([x_tbk, y_tbp], [lossCE, loss01, flatgrad])
 
+    print "number of nodes in computation graph:", core.count_nodes([lossCE, loss01, flatgrad])
+
     return f_loss, f_loss_and_grad, params
 
 def round01(x):
@@ -357,10 +359,11 @@ def main():
         
 
 
+    tstart = time.time()
     ntm = make_ntm(opt)
-
     task = CopyTask(opt.b, seq_length, opt.p)
     f_loss, f_loss_and_grad, params = make_funcs(opt, ntm, task.total_time(), task.loss_timesteps())
+    print "graph construction and compilation took %g seconds"%(time.time()-tstart)
 
     pc = ParamCollection(params)
     pc.set_value_flat(nr.uniform(-.1, .1, size=(pc.get_total_size(),)))

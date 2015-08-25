@@ -324,6 +324,11 @@ def getitem_nonfancy(arr, slis):
             step = (1 if sli.step is None else sli.step)
             if (isinstance(stop, int) and (stop < 0)):
                 stop = size(arr, ax) - stop
+            if isinstance(step, int):
+                assert step != 0
+                if step < 0:
+                    raise NotImplementedError("negative `step parameter is not implemented. use flip(x,0) instead of x[::-1]")
+
             out = core.Result(core.GetSli(ax), [out, start, stop, step])
         ax += 1
     if all(((x == 'k') for x in shapedesc)):
@@ -441,7 +446,7 @@ def repeat(x, repeats, axis):
     """
     Like numpy.repeat
     """
-    return core.Result(core.Repeat([axis]), [x, constant(repeats)])
+    return core.Result(core.Repeat([axis]), [x, core.as_node(repeats)])
 
 def reshape(x, shp):
     """

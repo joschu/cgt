@@ -2666,6 +2666,9 @@ def topsorted(outputs):
     return out
 
 def count_nodes(outputs):
+    """
+    Given a list of output nodes, compute the number of ancestors
+    """
     if isinstance(outputs, Node): outputs = [outputs]
     return len(list(topsorted(outputs)))
 

@@ -1,6 +1,6 @@
 from . import core, utils
 import cgt
-import ctypes, os.path as osp, hashlib, numpy as np, sys, subprocess, string, os, time, traceback
+import ctypes, os.path as osp, hashlib, numpy as np, sys, subprocess, string, os, time, traceback, cPickle
 from collections import defaultdict, namedtuple
 from StringIO import StringIO
 import logging
@@ -38,9 +38,15 @@ def _function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
 # Execution
 # ================================================================
 
+def python_only():
+    return not hasattr(cgt,"cycgt")
+
 def determine_devices(nodes_sorted, updatetarg2src):
     # Op definitions (available impls, inplace-ness, etc) define constraints
     # on possible devices for a node
+
+    if python_only():
+        return {node:Device() for node in nodes_sorted}
 
     # (1) Get available devices for nodes, determined by which impls are available and node types
     compile_info = get_compile_info()
@@ -263,7 +269,6 @@ def get_callable(op, input_types, devtype, prefer_python=False):
                 return get_native_callable(op, input_types, "gpu")
             else:
                 raise RuntimeError("Tried to put Op %s on the GPU but I only have a python impl :("%op)
-
 
 def get_native_callable(op, input_types, devtype):
     nci = op.get_native_compile_info(input_types, devtype)
@@ -711,6 +716,9 @@ _ctypes2str = {
     ctypes.c_float : "float"
 }
 
+
+_struct_cache = {} # because creating ctypes.Structure class is slow for some reason
+
 def _build_closure(triples):
     if triples is None:
         return ctypes.c_void_p(0)
@@ -719,8 +727,13 @@ def _build_closure(triples):
     for (fieldname,fieldtype,val) in triples:
         vals.append(val)
         fields.append((fieldname,fieldtype))
-    class S(ctypes.Structure):
-        _fields_ = fields
+    try:
+        key = cPickle.dumps(fields)
+        S = _struct_cache[key]
+    except KeyError:
+        class S(ctypes.Structure):
+            _fields_ = fields
+        _struct_cache[key] = S
     closure = S(*vals)    
     return closure
 

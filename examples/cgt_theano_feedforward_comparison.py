@@ -147,7 +147,7 @@ if __name__ == "__main__":
         return theano.function([X,y, stepsize], loss, updates=updates, allow_input_downcast=True)
 
 
-    if not have_theano and not args.unittest:
+    if have_theano and not args.unittest:
         updater_fc_theano = make_updater_fc_theano()
         print "Theano Fully-Connected Network"
         run_sgd_epochs(Xtrain, ytrain, updater_fc_theano)
@@ -247,7 +247,7 @@ if __name__ == "__main__":
         updates = [(p, p-stepsize*gp) for (p, gp) in zip(params, gparams)]
         return theano.function([X,y, stepsize], loss, updates=updates, allow_input_downcast=True)
 
-    if not have_theano and not args.unittest:
+    if False:#have_theano and not args.unittest:
 
         updater_convnet_theano = make_updater_convnet_theano()
         print "Theano Convnet"

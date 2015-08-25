@@ -67,10 +67,10 @@ def check_affine(f, *nu_inputs):
     for (g_cgt, g_true) in zip(grads_cgt, grads_true):
         np.testing.assert_allclose(g_cgt, g_true,rtol=rtol)
 
-    result_count = core.count_nodes(sy_result_simple)
-    grad_count = core.count_nodes(sy_grads_simple)
-    maybeprint("Result before: %i. after: %i"%(core.count_nodes([sy_result]), result_count))
-    maybeprint("Grad before: %i. after: %i"%(core.count_nodes(sy_grads), grad_count))
+    result_count = cgt.count_nodes(sy_result_simple)
+    grad_count = cgt.count_nodes(sy_grads_simple)
+    maybeprint("Result before: %i. after: %i"%(cgt.count_nodes([sy_result]), result_count))
+    maybeprint("Grad before: %i. after: %i"%(cgt.count_nodes(sy_grads), grad_count))
 
     PROB2RESULT[f.__name__] = {}    
     PROB2RESULT[f.__name__]["fn"] = result_count
@@ -241,6 +241,16 @@ def flip1(x, y):
         return (cgt.flip(x, [1])*y).sum()
 
 
+def negsli0(x,y):
+    return (x[::-1]*y).sum()
+
+def negsli1(x,y):
+    return (x[:, ::-1]*y).sum()
+
+def negsli01(x,y):
+    return (x[::-1, ::-1]*y).sum()
+
+
 def convlike(F_abcd, y_e_bcd, q_ae):
     a,b,c,d = F_abcd.shape
     F_a_bcd = F_abcd.reshape([a,b*c*d])
@@ -337,6 +347,10 @@ def check_affine_funcs(precision, backend):
 
     check_affine(flip0, M23, nr.randn(2,3))
     check_affine(flip1, M23, nr.randn(2,3))
+
+    # check_affine(negsli0, M23, nr.randn(2,3))
+    # check_affine(negsli1, M23, nr.randn(2,3))
+    # check_affine(negsli01, M23, nr.randn(2,3))
 
     # check_affine(rfft, M35)
     check_affine(convlike, T2357, nr.randn(11,3*5*7), nr.randn(2,11))

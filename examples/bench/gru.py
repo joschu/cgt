@@ -40,13 +40,14 @@ class GRUCell(object):
 
     def __call__(self,M,*inputs):
         assert len(inputs) == len(self.Wizs)
-        summands = [Xi.dot(Wiz) for (Xi,Wiz) in zip(inputs,self.Wizs)] + [M.dot(self.Wmz),self.bz]
+        n = M.shape[0]
+        summands = [Xi.dot(Wiz) for (Xi,Wiz) in zip(inputs,self.Wizs)] + [M.dot(self.Wmz),cgt.repeat(self.bz,n, axis=0)]
         z = cgt.sigmoid(cgt.add_multi(summands))
 
-        summands = [Xi.dot(Wir) for (Xi,Wir) in zip(inputs,self.Wirs)] + [M.dot(self.Wmr),self.br]
+        summands = [Xi.dot(Wir) for (Xi,Wir) in zip(inputs,self.Wirs)] + [M.dot(self.Wmr),cgt.repeat(self.br,n, axis=0)]
         r = cgt.sigmoid(cgt.add_multi(summands))
 
-        summands = [Xi.dot(Wim) for (Xi,Wim) in zip(inputs,self.Wims)] + [(r*M).dot(self.Wmm),self.bm]
+        summands = [Xi.dot(Wim) for (Xi,Wim) in zip(inputs,self.Wims)] + [(r*M).dot(self.Wmm),cgt.repeat(self.bm,n, axis=0)]
         Mtarg = cgt.tanh(cgt.add_multi(summands)) #pylint: disable=E1111
 
         Mnew = (1-z)*M + z*Mtarg
