@@ -15,7 +15,7 @@ if osp.exists(fname):
     print "already downloaded openblas.tar.gz"
 else:
     print "will download openblas and unpack to %s"%unpack_dir
-    urllib.urlretrieve(url, fname)
+    urllib.urlretrieve(url, fname+".part")
     shutil.move("{fname}.part".format(fname=fname),"{fname}".format(fname=fname))
 call_and_print("mkdir -p {unpack_dir} && tar -xf {fname} --directory {unpack_dir}  --strip-components=1".format(
     fname=fname,unpack_dir=unpack_dir))
