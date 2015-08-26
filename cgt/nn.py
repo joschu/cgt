@@ -100,21 +100,66 @@ def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
 # ================================================================
 
 
-IIDGaussian = namedtuple("IIDGaussian", ["mean","std"])
+IIDGaussian = namedtuple("IIDGaussian", ["mean", "std"])
 IIDGaussian.__new__.__defaults__ = (0, 1)
-IIDUniform = namedtuple("IIDUniform", ["low","high"])
-Zeros = namedtuple("Zeros",[])
+IIDUniform = namedtuple("IIDUniform", ["low", "high"])
+Constant = namedtuple("Constant", ["constant"])
+XavierNormal = namedtuple("XavierNormal", ["scale"])
+XavierUniform = namedtuple("XavierUniform", ["scale"])
+HeNormal = namedtuple("HeNormal", ["scale"])
+HeUniform = namedtuple("HeUniform", ['scale'])
+
 
 def init_array(init, shape):
     if isinstance(init, IIDGaussian):
         return (np.random.randn(*shape)*init.std + init.mean).astype(cgt.floatX)
     elif isinstance(init, IIDUniform):
         return (np.random.rand(*shape)*(init.high-init.low) + init.low).astype(cgt.floatX)
-    elif isinstance(init, Zeros):
-        return np.zeros(shape, cgt.floatX)
+    elif isinstance(init, Constant):
+        return init.constant*np.ones(shape, cgt.floatX)
+    elif isinstance(init, XavierNormal):
+        std = get_xavier_weight(init, shape)
+        return (np.random.randn(*shape)*std).astype(cgt.floatX)
+    elif isinstance(init, XavierUniform):
+        std = get_xavier_weight(init, shape)
+        high = -np.sqrt(3) * std
+        low = np.sqrt(3) * std
+        return (np.random.rand(*shape)*(high-low) + low).astype(cgt.floatX)
+    elif isinstance(init, HeNormal):
+        std = get_he_weight(init, shape)
+        return (np.random.randn(*shape)*std).astype(cgt.floatX)
+    elif isinstance(init, HeUniform):
+        std = get_he_weight(init, shape)
+        low = -np.sqrt(3) * std
+        high = np.sqrt(3) * std
+        return (np.random.rand(*shape)*(high-low) + low).astype(cgt.floatX)
     else:
         raise ValueError("Invalid initializer %s"%init)
 
+
+def get_xavier_weight(init, shape):
+        if len(shape) < 2:
+            raise RuntimeError("Shape length must be greater than two")
+        n1, n2 = shape[:2]
+        field_size = np.prod(shape[2:])
+        if init.scale == 'relu':
+            scale = np.sqrt(2)
+        else:
+            scale = init.scale
+        std = scale * np.sqrt(2.0 / ((n1 + n2) * field_size))
+        return std
+
+
+def get_he_weight(init, shape):
+    if len(shape) == 2:
+        fan_in = shape[0]
+    elif len(shape) > 2:
+        fan_in = np.prod(shape[1:])
+    else:
+        raise RuntimeError("This initializer does not work with shapes of length less than two")
+
+    std = init.scale * np.sqrt(1.0 / fan_in)
+    return std
 
 
 # ================================================================
