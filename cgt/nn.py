@@ -99,6 +99,7 @@ def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
 # Initializations
 # ================================================================
 
+
 IIDGaussian = namedtuple("IIDGaussian", ["mean","std"])
 IIDGaussian.__new__.__defaults__ = (0, 1)
 IIDUniform = namedtuple("IIDUniform", ["low","high"])
@@ -158,3 +159,94 @@ class SpatialConvolution(object):
         return cgt.broadcast("+", tmp, self.bias, "xxxx,1x11")
 
 
+
+# ================================================================
+# Optimization
+# ================================================================
+
+def sgd(cost, params, learning_rate):
+    updates = []
+    grads = cgt.grad(cost, params)
+    for param, grad in zip(params, grads):
+        updates.append((param, param - learning_rate * grad))
+
+    return updates
+
+
+def momentum(cost, params, learning_rate, momentum=0.9):
+    updates = []
+    grads = cgt.grad(cost, params)
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        velocity = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        x = momentum * velocity + param - learning_rate * grad
+        updates.append((velocity, x-param))
+        updates.append((param, x))
+
+    return updates
+
+
+def nesterov_momentum(cost, params, learning_rate, momentum=0.9):
+    updates = []
+    grads = cgt.grad(cost, params)
+
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        velocity = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        x = momentum * velocity + param - learning_rate * grad - param
+        updates.append((velocity, x))
+        updates.append((param, momentum*x + param - learning_rate * grad))
+
+    return updates
+
+
+def adagrad(cost, params, learning_rate=1.0, epsilon=1e-6):
+
+    updates = []
+    grads = cgt.grad(cost, params)
+
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        accu_new = accu + grad ** 2
+        updates.append((accu, accu_new))
+        updates.append((param, param - (learning_rate * grad) / cgt.sqrt(accu_new + epsilon)))
+
+    return updates
+
+
+def rmsprop(cost, params, learning_rate=1.0, rho=0.9, epsilon=1e-6):
+
+    updates = []
+    grads = cgt.grad(cost, params)
+
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        accu_new = rho * accu + (1 - rho) * grad ** 2
+        updates.append((accu, accu_new))
+        updates.append((param, param - (learning_rate * grad / cgt.sqrt(accu_new + epsilon))))
+
+    return updates
+
+
+def adadelta(cost, params, learning_rate=1.0, rho=0.95, epsilon=1e-6):
+
+    updates = []
+    grads = cgt.grad(cost, params)
+
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        delta_accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+
+        accu_new = rho * accu + (1 - rho) * grad ** 2
+        updates.append((accu, accu_new))
+
+        update = (grad * cgt.sqrt(delta_accu + epsilon) / cgt.sqrt(accu_new + epsilon))
+        updates.append((param, param - learning_rate * update))
+
+        delta_accu_new = rho * delta_accu + (1 - rho) * update ** 2
+        updates.append((delta_accu, delta_accu_new))
+
+    return updates
