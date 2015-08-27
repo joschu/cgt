@@ -185,7 +185,7 @@ class Affine(object):
 
 
 class SpatialConvolution(object):
-    def __init__(self, input_channels, output_channels, kernelshape, pad, stride=(1,1), name=None, weight_init=Zeros(), bias_init=Zeros()):
+    def __init__(self, input_channels, output_channels, kernelshape, pad, stride=(1,1), name=None, weight_init=Constant(0), bias_init=Constant(0)):
         # type conversion
         input_channels = int(input_channels)
         output_channels = int(output_channels)
