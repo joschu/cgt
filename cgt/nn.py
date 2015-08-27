@@ -170,7 +170,7 @@ class Affine(object):
     """
     Like torch's nn.Linear
     """
-    def __init__(self, input_size, output_size, name=None, weight_init=Zeros(), bias_init=Zeros()):
+    def __init__(self, input_size, output_size, name=None, weight_init=Constant(0), bias_init=Constant(0)):
         input_size = int(input_size)
         output_size = int(output_size)
         name = "unnamed" if name is None else name
