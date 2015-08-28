@@ -313,7 +313,6 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     # Phase 1: simplification and analysis of expression graph
     # ------------------------------------------------------
     # Add add update targets to outputs
-    logging.info("Simplification")
     outputs_updatetargs = outputs + [after for (_before, after) in updates]
     if givens: outputs_updatetargs = core.clone(outputs_updatetargs, dict(givens))
     # Do simplification + analysis pass on expression graph
@@ -324,7 +323,6 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
 
     # Phase 2: device targeting
     # ------------------------------------------------------
-    logging.info("Device targeting")
     outputs_updatetargs_simple = cgt.core.clone(outputs_updatetargs_simple)
     analysis = core.analyze(outputs_updatetargs_simple) 
     # XXX inefficient to just copy the graph and redo analysis
@@ -337,8 +335,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     # Phase 3: build execution graph
     # ------------------------------------------------------
     # Sort nodes so that shape elements appear before a given node
-    logging.info("Build execution graph")
-    nodes_sorted = topsorted_shapes_first(outputs_updatetargs_simple, analysis["node2shape"])
+    nodes_sorted = topsorted_shapes_first(outputs_updatetargs_simple, analysis["node2shape"]) # XXX don't need shapes for byval ops
     # For each node, figure out if its output should be written to a previous node's memory
     # (memowner : "memory owner")
     updatetargs_simple = outputs_updatetargs_simple[len(outputs):]

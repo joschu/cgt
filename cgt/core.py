@@ -4,20 +4,6 @@ import __builtin__
 import traceback
 import cgt
 from . import utils
-import logging.config
-
-logging.config.dictConfig({
-    "version" : 1,
-    "root" : {
-        "level" : "WARN",
-        "formatters" : {
-            "simple" : {
-                "format" : "%(name)s:%(levelname)s:%(asctime)s:%(msecs)d %(message)s",
-                "datefmt" : "%H:%M:%S"
-            }
-        }
-    }
-})
 
 # ================================================================
 # Datatypes
