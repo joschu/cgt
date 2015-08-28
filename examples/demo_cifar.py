@@ -1,5 +1,5 @@
 
-from example_utils import download, fmt_row
+from example_utils import fmt_row, fetch_dataset
 import cPickle, numpy as np
 import cgt
 from cgt import nn
@@ -34,7 +34,7 @@ def main():
     relu1 = nn.rectify(conv1)
     pool1 = nn.max_pool_2d(relu1, kernelshape=(3,3), stride=(2,2))
     conv2 = nn.SpatialConvolution(32, 32, kernelshape=(5,5), pad=(2,2), 
-        weight_init=nn.IIDGaussian(std=0.01))(relu1)
+        weight_init=nn.IIDGaussian(std=0.01))(pool1)
     relu2 = nn.rectify(conv2)
     pool2 = nn.max_pool_2d(relu2, kernelshape=(3,3), stride=(2,2))
     conv3 = nn.SpatialConvolution(32, 64, kernelshape=(5,5), pad=(2,2), 
@@ -55,7 +55,7 @@ def main():
 
     if args.profile: cgt.profiler.start()
 
-    data = np.load("/Users/joschu/Data/cifar-10-batches-py/cifar10.npz")
+    data = fetch_dataset("http://rll.berkeley.edu/cgt-data/cifar10.npz")
     Xtrain = data["X_train"]
     ytrain = data["y_train"]
 
