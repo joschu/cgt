@@ -3,7 +3,7 @@ Computation Graph Toolkit
 *************************
 
 Computation Graph Toolkit (CGT) is a library for evaluation and differentiation of functions of multidimensional arrays.
-
+Source code is available on `GitHub <https://github.com/joschu/cgt>`_.
 
 What Does It Do?
 ================
@@ -13,8 +13,8 @@ The core features are as follows:
 - Automatic differentiation of functions involving multidimensional arrays, using computation graphs
 - Compile fast implementations of array computations that can be run in parallel on multiple CPUs and GPUs. (GPU and multi-GPU support is currently in work-in-progress)
 - A compilation process that simplifies your function through arithmetic identities and in-place optimizations, which readily handles extremely large graphs.
-- Supports both forward and backward derivative propagation, as well as higher-order differentiation.
-- CGT can export standalone C++ code for of your functions.
+.. - Supports both forward and backward derivative propagation, as well as higher-order differentiation.
+.. - CGT can export standalone C++ code for of your functions.
 
 CGT is motivated by large-scale machine learning and AI problems, however, the core library will focus on the more abstract problems of evaluating and differentiating mathematical expressions. This will ensure that CGT is flexible enough to handle use-cases that are completely unanticipated by the software authors. Libraries for numerical optimization and convenient construction of neural networks will be built on top of CGT’s core functionality.
 
@@ -93,6 +93,45 @@ Tutorial
 ========
 
 .. notebook:: ../examples/tutorial.ipynb
+
+Configuration
+=============
+
+CGT uses a some global configuration options that you should be aware of.
+You can set these options in the file ``~/.cgtrc``; see ``cgtrc.example`` in the source directory for a template.
+You can also modify these values via the command line, e.g. ``CGT_FLAGS=backend=native,precision=double``.
+The file, ``cgtrc_spec.ini``, included below, provides a listing of the configuration variables.
+
+.. literalinclude:: ../cgtrc_spec.ini
+    :lines: 5-
+
+For best performance, set ``backend=native, but for development you should set ``backend=python`` because the error handling is better.
+
+Guide to Porting Theano Code to CGT
+===================================
+
+CGT mostly replicates Theano's API, but there are a few gotchas.
+
+- CGT does not allow automatic broadcasting of singleton dimensions (for elementwise binary operations like addition and multiplication.) Use the ``broadcast`` function::
+  
+    def broadcast(opname, a, b, bcpat):
+        """
+        Perform elementwise binary operation such as addition or multiplication, and expand
+        singleton dimensions when appropriate.
+
+        opname: string name of operation: *,+,-,/,<,>,<=,>=,**,==,!=
+        a, b: variables
+        bcpat: a string of x,1 specifying which dimensions are singletons in both a and b. Here are some examples:
+            "x1,1x":        a.shape[1] == 1 and b.shape[0] == 1
+            "xx1,xxx":      a.shape[2] == 1, but we should have a.shape[0]==b.shape[0] and a.shape[1]==b.shape[1]
+
+        E.g., here's an example of using this function
+        a = np.zeros((2,3))
+        b = np.zeros((2,1))
+        z = cgt.broadcast("+", a, b, "xx,x1")
+        """  
+        ...
+
 
 nn: Neural Network Module
 =========================
@@ -187,18 +226,6 @@ Now, we can split the data along the zeroth apply the module `m` separately to e
     gparams = cgt.grad(split_loss, params)
     updates2 = [(p, p-stepsize*gp) for (p, gp) in zip(params, gparams)]
     updater =  cgt.function([X,y, stepsize], split_loss, updates=updates2)
-
-Configuration
-=============
-
-CGT sets a number of variables that you should be aware of.
-The file, ``cgtrc_spec.ini``, included below, provides a listing of the configuration variables.
-
-.. literalinclude:: ../cgtrc_spec.ini
-    :lines: 5-
-
-You can modify these values through the file ``~/.cgtrc`` or via the command line.
-See ``cgtrc.example`` in the source directory for a template.
 
 
 Debugging
