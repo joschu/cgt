@@ -18,7 +18,15 @@ def f(X, scale):
     return (scale*X**2).sum()
 
 
-def test_sgd():
+def test_optimizers():
+    tests = [run_sgd, run_momentum, run_nesterov_momenutm, run_adagrad, run_rmsprop, run_adagrad]
+
+    for backend in ["python","native"]:
+        with cgt.scoped_update_config(backend=backend):
+            for test in tests:
+                yield test
+
+def run_sgd():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -29,12 +37,12 @@ def test_sgd():
             do_update()
 
         assert np.allclose(A.op.get_value(), B.op.get_value())
-        results.append(A.op.get_value())
+        results.append(A.op.get_value().copy())
 
     assert np.allclose(results, torch_values['sgd'])
 
 
-def test_momentum():
+def run_momentum():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -45,12 +53,12 @@ def test_momentum():
             do_update()
 
         assert np.allclose(A.op.get_value(), B.op.get_value())
-        results.append(A.op.get_value())
+        results.append(A.op.get_value().copy())
 
     assert np.allclose(results, torch_values['momentum'])
 
 
-def test_nesterov_momenutm():
+def run_nesterov_momenutm():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -61,12 +69,12 @@ def test_nesterov_momenutm():
             do_update()
 
         assert np.allclose(A.op.get_value(), B.op.get_value())
-        results.append(A.op.get_value())
+        results.append(A.op.get_value().copy())
 
     assert np.allclose(results, torch_values['nesterov_momentum'])
 
 
-def test_adagrad():
+def run_adagrad():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -77,12 +85,12 @@ def test_adagrad():
             do_update()
 
         assert np.allclose(A.op.get_value(), B.op.get_value())
-        results.append(A.op.get_value())
+        results.append(A.op.get_value().copy())
 
     assert np.allclose(results, torch_values['adagrad'])
 
 
-def test_rmsprop():
+def run_rmsprop():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -93,12 +101,12 @@ def test_rmsprop():
             do_update()
 
         assert np.allclose(A.op.get_value(), B.op.get_value())
-        results.append(A.op.get_value())
+        results.append(A.op.get_value().copy())
 
     assert np.allclose(results, torch_values['rmsprop'])
 
 
-def test_adadelta():
+def run_adadelta():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -109,6 +117,6 @@ def test_adadelta():
             do_update()
 
         assert np.allclose(A.op.get_value(), B.op.get_value())
-        results.append(A.op.get_value())
+        results.append(A.op.get_value().copy())
 
     assert np.allclose(results, torch_values['adadelta'])
