@@ -16,7 +16,7 @@ class AffineTheano(object):
     """
     Theano equivalent of nn.affine
     """
-    def __init__(self, input_size, output_size, name=None, weight_init=nn.Zeros(), bias_init=nn.Zeros()):
+    def __init__(self, input_size, output_size, name=None, weight_init=nn.Constant(0), bias_init=nn.Constant(0)):
         input_size = int(input_size)
         output_size = int(output_size)
         name = "unnamed" if name is None else name
@@ -32,7 +32,7 @@ class AffineTheano(object):
 
         
 class SpatialConvolutionTheano(object):
-    def __init__(self, input_channels, output_channels, kernelshape, pad, stride=(1,1), name=None, weight_init=nn.Zeros(), bias_init=nn.Zeros()):
+    def __init__(self, input_channels, output_channels, kernelshape, pad, stride=(1,1), name=None, weight_init=nn.Constant(0), bias_init=nn.Constant(0)):
         # type conversion
         self.input_channels = int(input_channels)
         self.output_channels = int(output_channels)
