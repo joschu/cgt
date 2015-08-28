@@ -480,6 +480,7 @@ def default_props():
     props = {}
     props["default_device"] = _CONFIG["default_device"]
     if _CONFIG["debug"] and "stack" not in props: props["stack"] = traceback.extract_stack()[:-3]
+    return props
 
 def Result(op, parents, typ=None, props=None, name=None):
     """

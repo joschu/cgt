@@ -1,4 +1,5 @@
 import cgt, numpy as np
+from nose.tools import raises
 from StringIO import StringIO
 import sys
 
@@ -12,16 +13,16 @@ class CaptureStderr(object):
     def __exit__(self, *args):
         self.stderr = self.origstderr
 
+@raises(RuntimeError)
 def test_shape_err():
-    try:
-        with CaptureStderr() as s:
-            with cgt.scoped_update_config(debug=True):
-                x = cgt.vector()
-                y = cgt.vector()
-                f = cgt.function([x,y],x+y)
-                f(np.zeros(3),np.zeros(4))
-    except Exception as e:
-        assert "f = cgt.function([x,y],x+y)" in s.getvalue()
+    with CaptureStderr():
+        with cgt.scoped_update_config(debug=True, backend="python"):
+            x = cgt.vector()
+            y = cgt.vector()
+            f = cgt.function([x,y],x+y)
+            f(np.zeros(3),np.zeros(4))
+
+
 
 if __name__ == "__main__":
     test_shape_err()
