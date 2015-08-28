@@ -612,14 +612,21 @@ def _red_axes(axis, ndim):
 
 def dimshuffle(arr, pattern):
     """
-    Similar to theano dimshuffle. Can do arbitrary permutation and add dimensions.
-    However, you can not drop dimensions. Use dropdims for that.
-    inputs:
-    pattern: list to dimshuffle
-    arr: array to dimshuffle
-    returns: dim_shuffled array. 
+    Based on theano's dimshuffle function.
+    Permutes the axes of an array and inserts new singleton axes.
+    e.g. if x has shape (2,3), then dimshuffle(x, [1,0,'x']) has shape (3,2,1)
+    note that dimshuffle can not drop dimensions.
+    
+    inputs
+    ------
+    pattern: list of ints and 'x'
+    arr: symbolic array to dimshuffle
+
+    returns
+    --------
+    variable with permuted axes
     """
-    assert isinstance(pattern, list) is True
+    assert isinstance(pattern, list)
     if pattern == range(arr.ndim):
         return arr
     else:

@@ -331,25 +331,35 @@ class Node(object):
     # ----------------------------------------
 
     def reshape(self, shp):
+        "see cgt.reshape"
         assert isinstance(shp, (list,tuple))
         return cgt.reshape(self, shp)
     def dot(self, other):
+        "see cgt.dot"
         return cgt.dot(self, other)
     def sum(self, axis=None, keepdims=False):
+        "see cgt.sum"
         return cgt.sum(self, axis=axis, keepdims=keepdims)
     def prod(self, axis=None, keepdims=False):
+        "see cgt.prod"
         return cgt.prod(self, axis=axis, keepdims=keepdims)
     def max(self, axis=None, keepdims=False):
+        "see cgt.max"
         return cgt.max(self, axis=axis, keepdims=keepdims)
     def argmax(self, axis=None, keepdims=False):
+        "see cgt.argmax"
         return cgt.argmax(self, axis=axis, keepdims=keepdims)
     def mean(self, axis=None, keepdims=False):
+        "see cgt.mean"
         return cgt.mean(self, axis=axis, keepdims=keepdims)
     def transpose(self, axes=None):
+        "see cgt.transpose"
         return cgt.transpose(self, axes=axes)
     def flatten(self):
+        "see cgt.flatten"
         return cgt.flatten(self)
-    def dim_shuffle(self, pattern):
+    def dimshuffle(self, pattern):
+        "see cgt.dimshuffle"
         return cgt.dimshuffle(self, pattern)
 
 

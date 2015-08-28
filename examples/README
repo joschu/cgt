@@ -1,0 +1,6 @@
+Here you can find examples of using CGT.
+All of the scripts can be run without arguments.
+(If one fails, please notify us or open an issue.)
+
+For best performance, set backend=native, via .cgtrc or CGT_FLAGS=backend=native
+Also try parallel=True, but that only helps sometimes.
