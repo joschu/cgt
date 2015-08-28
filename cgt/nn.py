@@ -99,21 +99,67 @@ def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
 # Initializations
 # ================================================================
 
-IIDGaussian = namedtuple("IIDGaussian", ["mean","std"])
+
+IIDGaussian = namedtuple("IIDGaussian", ["mean", "std"])
 IIDGaussian.__new__.__defaults__ = (0, 1)
-IIDUniform = namedtuple("IIDUniform", ["low","high"])
-Zeros = namedtuple("Zeros",[])
+IIDUniform = namedtuple("IIDUniform", ["low", "high"])
+Constant = namedtuple("Constant", ["constant"])
+XavierNormal = namedtuple("XavierNormal", ["scale"])
+XavierUniform = namedtuple("XavierUniform", ["scale"])
+HeNormal = namedtuple("HeNormal", ["scale"])
+HeUniform = namedtuple("HeUniform", ['scale'])
+
 
 def init_array(init, shape):
     if isinstance(init, IIDGaussian):
         return (np.random.randn(*shape)*init.std + init.mean).astype(cgt.floatX)
     elif isinstance(init, IIDUniform):
         return (np.random.rand(*shape)*(init.high-init.low) + init.low).astype(cgt.floatX)
-    elif isinstance(init, Zeros):
-        return np.zeros(shape, cgt.floatX)
+    elif isinstance(init, Constant):
+        return init.constant*np.ones(shape, cgt.floatX)
+    elif isinstance(init, XavierNormal):
+        std = get_xavier_weight(init, shape)
+        return (np.random.randn(*shape)*std).astype(cgt.floatX)
+    elif isinstance(init, XavierUniform):
+        std = get_xavier_weight(init, shape)
+        high = -np.sqrt(3) * std
+        low = np.sqrt(3) * std
+        return (np.random.rand(*shape)*(high-low) + low).astype(cgt.floatX)
+    elif isinstance(init, HeNormal):
+        std = get_he_weight(init, shape)
+        return (np.random.randn(*shape)*std).astype(cgt.floatX)
+    elif isinstance(init, HeUniform):
+        std = get_he_weight(init, shape)
+        low = -np.sqrt(3) * std
+        high = np.sqrt(3) * std
+        return (np.random.rand(*shape)*(high-low) + low).astype(cgt.floatX)
     else:
         raise ValueError("Invalid initializer %s"%init)
 
+
+def get_xavier_weight(init, shape):
+        if len(shape) < 2:
+            raise RuntimeError("Shape length must be greater than two")
+        n1, n2 = shape[:2]
+        field_size = np.prod(shape[2:])
+        if init.scale == 'relu':
+            scale = np.sqrt(2)
+        else:
+            scale = init.scale
+        std = scale * np.sqrt(2.0 / ((n1 + n2) * field_size))
+        return std
+
+
+def get_he_weight(init, shape):
+    if len(shape) == 2:
+        fan_in = shape[0]
+    elif len(shape) > 2:
+        fan_in = np.prod(shape[1:])
+    else:
+        raise RuntimeError("This initializer does not work with shapes of length less than two")
+
+    std = init.scale * np.sqrt(1.0 / fan_in)
+    return std
 
 
 # ================================================================
@@ -124,7 +170,7 @@ class Affine(object):
     """
     Like torch's nn.Linear
     """
-    def __init__(self, input_size, output_size, name=None, weight_init=Zeros(), bias_init=Zeros()):
+    def __init__(self, input_size, output_size, name=None, weight_init=Constant(0), bias_init=Constant(0)):
         input_size = int(input_size)
         output_size = int(output_size)
         name = "unnamed" if name is None else name
@@ -139,7 +185,7 @@ class Affine(object):
 
 
 class SpatialConvolution(object):
-    def __init__(self, input_channels, output_channels, kernelshape, pad, stride=(1,1), name=None, weight_init=Zeros(), bias_init=Zeros()):
+    def __init__(self, input_channels, output_channels, kernelshape, pad, stride=(1,1), name=None, weight_init=Constant(0), bias_init=Constant(0)):
         # type conversion
         input_channels = int(input_channels)
         output_channels = int(output_channels)
@@ -158,3 +204,94 @@ class SpatialConvolution(object):
         return cgt.broadcast("+", tmp, self.bias, "xxxx,1x11")
 
 
+
+# ================================================================
+# Optimization
+# ================================================================
+
+def sgd(cost, params, learning_rate):
+    updates = []
+    grads = cgt.grad(cost, params)
+    for param, grad in zip(params, grads):
+        updates.append((param, param - learning_rate * grad))
+
+    return updates
+
+
+def momentum(cost, params, learning_rate, momentum=0.9):
+    updates = []
+    grads = cgt.grad(cost, params)
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        velocity = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        x = momentum * velocity + param - learning_rate * grad
+        updates.append((velocity, x-param))
+        updates.append((param, x))
+
+    return updates
+
+
+def nesterov_momentum(cost, params, learning_rate, momentum=0.9):
+    updates = []
+    grads = cgt.grad(cost, params)
+
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        velocity = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        x = momentum * velocity + param - learning_rate * grad - param
+        updates.append((velocity, x))
+        updates.append((param, momentum*x + param - learning_rate * grad))
+
+    return updates
+
+
+def adagrad(cost, params, learning_rate=1.0, epsilon=1e-6):
+
+    updates = []
+    grads = cgt.grad(cost, params)
+
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        accu_new = accu + grad ** 2
+        updates.append((accu, accu_new))
+        updates.append((param, param - (learning_rate * grad) / cgt.sqrt(accu_new + epsilon)))
+
+    return updates
+
+
+def rmsprop(cost, params, learning_rate=1.0, rho=0.9, epsilon=1e-6):
+
+    updates = []
+    grads = cgt.grad(cost, params)
+
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        accu_new = rho * accu + (1 - rho) * grad ** 2
+        updates.append((accu, accu_new))
+        updates.append((param, param - (learning_rate * grad / cgt.sqrt(accu_new + epsilon))))
+
+    return updates
+
+
+def adadelta(cost, params, learning_rate=1.0, rho=0.95, epsilon=1e-6):
+
+    updates = []
+    grads = cgt.grad(cost, params)
+
+    for param, grad in zip(params, grads):
+        value = param.op.get_value()
+        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        delta_accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+
+        accu_new = rho * accu + (1 - rho) * grad ** 2
+        updates.append((accu, accu_new))
+
+        update = (grad * cgt.sqrt(delta_accu + epsilon) / cgt.sqrt(accu_new + epsilon))
+        updates.append((param, param - learning_rate * update))
+
+        delta_accu_new = rho * delta_accu + (1 - rho) * update ** 2
+        updates.append((delta_accu, delta_accu_new))
+
+    return updates

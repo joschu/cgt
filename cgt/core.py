@@ -349,6 +349,8 @@ class Node(object):
         return cgt.transpose(self, axes=axes)
     def flatten(self):
         return cgt.flatten(self)
+    def dim_shuffle(self, pattern):
+        return cgt.dimshuffle(self, pattern)
 
 
 def _ndarray_type(value):
