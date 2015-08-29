@@ -1,5 +1,6 @@
 import cgt
 from cgt import core
+from cgt.tests import across_configs
 import numpy as np
 import numpy.random as nr
 
@@ -267,16 +268,9 @@ def convlike(F_abcd, y_e_bcd, q_ae):
 ################################################################
 
 
+@across_configs(backends=("python", "native"), precisions=("double",))
 def test_affine():
-    for backend in ("python","native"):
-        for precision in ("double",):
-            yield check_affine_funcs, precision, backend
-
-def check_affine_funcs(precision, backend):
-    cgt.reset_config()
     np.random.seed(0)
-    cgt.set_precision(precision)
-    cgt.core.update_config(backend=backend)
 
     sA = np.array(nr.rand())
     sB = np.array(nr.rand())

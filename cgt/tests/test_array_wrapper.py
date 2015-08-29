@@ -1,12 +1,8 @@
 import cgt, numpy as np
+from cgt.tests import across_configs
 
+@cgt.tests.across_configs
 def test_array_wrapper():
-    for backend in ("python","native"):
-        for precision in ("single","double"):
-            yield runtest, backend, precision
-
-def runtest(backend, precision):
-    with cgt.scoped_update_config(backend='native',precision=precision):
         xval = np.zeros(10)
         x = cgt.shared(xval)
         f = cgt.function([],[],updates=[(x,x+1)])
@@ -21,6 +17,3 @@ def runtest(backend, precision):
         f()
         assert np.allclose(x.op.get_value(), xval2+1)
         assert g() == (xval2+1).sum()
-
-if __name__ == "__main__":
-    test_array_wrapper()
