@@ -2685,9 +2685,10 @@ def _clone_list(nodes, replace):
             if not isinstance(v, Node):
                 replace[k] = as_node(v)
     for node in topsorted(nodes):
-        if node.is_input():
-            if node not in replace:
-                replace[node] = node
+        if node in replace:
+            pass
+        elif node.is_input():
+            replace[node] = node
         else:
             replace[node] = node.clone([replace[p] for p in node.parents])
     return [replace[node] for node in nodes]
