@@ -5,8 +5,11 @@ from .core import grad, get_config, update_config, simplify, reset_config, Devic
 from .ez import EasyCustomOp
 try: 
     import cycgt
-except ImportError as e: 
-    utils.warn("cgt/__init__.py: 'import cycgt' failed. Exception: %s"%e)
+except ImportError:
+    import warnings
+    msg = "Could not import the compiled extension module cycgt. Only pure python mode is available. If you have compiled this extension (via 'make'), you may need to add build/lib to your PYTHONPATH"
+    warnings.warn(msg, UserWarning)
+    del warnings
 
 
 floatX = "f4"
