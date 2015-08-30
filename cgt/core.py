@@ -703,9 +703,17 @@ def grad(cost, wrt):
     Compute the gradient of scalar-valued `cost` with respect to a list of variables `wrt`
     """
     assert cost.ndim == 0
-    assert all(x.is_input() for x in wrt), "Can only differentiate wrt Input nodes."
+    single_wrt = not (isinstance(wrt, list) or isinstance(wrt, tuple))
+    if single_wrt:
+        wrtl = [wrt]
+    else:
+        wrtl = wrt
+    assert all(x.is_input() for x in wrtl), "Can only differentiate wrt Input nodes."
     gout = _singleton_ones(cost.dtype, 0)
-    return pullback([cost], [gout], wrt)
+    retval = pullback([cost], [gout], wrtl)
+    if single_wrt:
+        retval = retval[0]
+    return retval
 
 # ================================================================
 # Compilation 
