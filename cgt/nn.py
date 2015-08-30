@@ -61,6 +61,9 @@ def softmax(x,axis=1):
 def logsoftmax(x, axis=1):
     return cgt.log(softmax(x, axis=axis))
 
+def binary_crossentropy(x, y):
+    return -(y * cgt.log(x) + (1 - y) * cgt.log(1 - x))
+
 def zero_one_loss(x, y):
     assert x.ndim == 2 and y.ndim in (1,2) and core.dtype_kind(y.dtype)=='i'
     return cgt.equal(x.argmax(axis=1,keepdims=False),y.flatten())
@@ -150,7 +153,7 @@ def get_xavier_weight(init, shape):
            networks. International conference on artificial intelligence and
            statistics."""
     if len(shape) < 2:
-        raise RuntimeError("Shape length must be greater than two")
+        raise RuntimeError("Shape length must at least 2")
     n1, n2 = shape[:2]
     field_size = np.prod(shape[2:])
     scale = init.scale

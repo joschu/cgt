@@ -1,3 +1,4 @@
+import cPickle as pickle
 import os, os.path as osp, shutil, numpy as np, urllib
 
 def train_val_test_slices(n, trainfrac, valfrac, testfrac):
@@ -34,12 +35,15 @@ def download(url):
     return datapath
 
 
-def fetch_dataset(url):    
+def fetch_dataset(url):
     datapath = download(url)
     fname = osp.basename(url)
     extension =  osp.splitext(fname)[-1]
-    assert extension in [".npz"]    
+    assert extension in [".npz", ".pkl"]
     if extension == ".npz":
         return np.load(datapath)
+    elif extension == ".pkl":
+        with open(datapath, 'rb') as fin:
+            return pickle.load(fin)
     else:
         raise NotImplementedError
