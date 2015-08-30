@@ -3,7 +3,7 @@ import cgt
 from cgt.tests import across_configs
 from nose.plugins.skip import SkipTest
 
-@across_configs
+@across_configs(backends=("native",))
 def test_devices():
     N = 10
     K = 3
