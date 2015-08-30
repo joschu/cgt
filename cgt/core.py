@@ -309,6 +309,8 @@ class Node(object):
             return len(self.typ)
         else:
             raise ValueError("Node of type Tensor has no __len__")
+    def __nonzero__(self):
+        return False
 
 
     # Properties like numpy ndarray
