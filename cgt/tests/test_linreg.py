@@ -41,3 +41,7 @@ def test_linreg():
     np.testing.assert_allclose(cgt.numeric_eval(g[0],d), 2 * Xval.T.dot(Xval.dot(wval) + bval - yval))
     np.testing.assert_allclose(cgt.numeric_eval(g[1],d), 2 *  np.sum(Xval.dot(wval) + bval - yval, 0))
     # add_log_entry("linreg", collect(values(d)), collect(keys(d)), [err], [g])
+
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

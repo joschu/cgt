@@ -118,3 +118,7 @@ def test_adadelta():
         results.append(A.op.get_value().copy())
 
     assert np.allclose(results, torch_values['adadelta'])
+
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

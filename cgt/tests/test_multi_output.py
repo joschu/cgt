@@ -69,4 +69,6 @@ def test_multi_output():
             f = cgt.function([x],[y,z])
             np.testing.assert_allclose(f(xnum), correct)
 
-
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

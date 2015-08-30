@@ -22,7 +22,6 @@ def test_shape_err():
             f = cgt.function([x,y],x+y)
             f(np.zeros(3),np.zeros(4))
 
-
-
 if __name__ == "__main__":
-    test_shape_err()
+    import nose
+    nose.runmodule()

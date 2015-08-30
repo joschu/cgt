@@ -89,3 +89,7 @@ def test_update():
         after = x.op.get_value()
         assert np.allclose(after , before+1)
 
+
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

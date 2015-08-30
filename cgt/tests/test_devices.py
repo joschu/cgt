@@ -39,4 +39,5 @@ def test_devices():
 
 
 if __name__ == "__main__":
-    test_devices()
+    import nose
+    nose.runmodule()

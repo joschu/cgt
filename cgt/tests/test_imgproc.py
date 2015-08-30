@@ -95,5 +95,6 @@ def test_lrn():
     gradcheck_model(loss, [X],eps=1e-5)
 
 
-if __name__=="__main__":
-    test_lrn()
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

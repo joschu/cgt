@@ -1,6 +1,7 @@
 import cgt, numpy as np
 from cgt.tests import across_configs
 
+
 @across_configs
 def test_array_wrapper():
     xval = np.zeros(10)
@@ -17,3 +18,8 @@ def test_array_wrapper():
     f()
     assert np.allclose(x.op.get_value(), xval2+1)
     assert g() == (xval2+1).sum()
+
+
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

@@ -24,4 +24,5 @@ def test_einsum():
 
 
 if __name__ == "__main__":
-    EinsumTestCase().runTest()
+    import nose
+    nose.runmodule()

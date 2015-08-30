@@ -356,4 +356,5 @@ def test_affine():
 
 
 if __name__ == "__main__":
-    for fargs in test_affine(): fargs[0](*fargs[1:])
+    import nose
+    nose.runmodule()

@@ -5,10 +5,8 @@ from cgt.tests import across_configs
 
 DISPLAY=False
 
-@across_configs(pass_settings=True)
-def test_scalars(**settings):
-    precision = settings['precision']
-
+@across_configs
+def test_scalars():
     np.random.seed(0)
     x = cgt.scalar('x')
     y = cgt.scalar('y')
@@ -50,10 +48,10 @@ def test_scalars(**settings):
         grads_simple = core.simplify(grads)
         if DISPLAY: cgt.print_tree(grads_simple)
         gradf = cgt.function(inputvars, grads)
-        eps = {"single":1e-4,"double":1e-9}[precision]
+        eps = {"single":1e-4,"double":1e-9}[cgt.get_precision()]
         nugrad = numeric_grad(lambda li: f(*li), inputvals,eps=eps) #pylint: disable=W0640
         cgtgrad = gradf(*inputvals)
-        np.testing.assert_almost_equal(nugrad,cgtgrad,decimal={"single":3,"double":6}[precision])
+        np.testing.assert_almost_equal(nugrad,cgtgrad,decimal={"single":3,"double":6}[cgt.get_precision()])
 
         grad_count = core.count_nodes(grads_simple)
         PROB2RESULT[key] = {}
@@ -63,4 +61,6 @@ def test_scalars(**settings):
         from thirdparty.tabulate import tabulate
         print tabulate([[key,val["grad"]] for (key,val) in PROB2RESULT.iteritems()],headers=["funcname","gradcount"])    
 
-
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

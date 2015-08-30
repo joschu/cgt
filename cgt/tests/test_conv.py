@@ -4,14 +4,12 @@ from cgt import nn
 from cgt.tests import across_configs
 from nose.plugins.skip import SkipTest
 
-@across_configs(pass_settings=True)
-def test_conv(**kwargs):
+@across_configs()
+def test_conv():
     try:
         import scipy.signal
     except ImportError:
         raise SkipTest("skipping because we don't have ndimage")
-
-    precision = kwargs['precision']
 
     np.random.seed(0)
     x = np.random.randn(2,2,5,17)
@@ -32,4 +30,8 @@ def test_conv(**kwargs):
     f = cgt.function([], nn.conv2d(cgt.constant(x), cgt.constant(filt), kernelshape=(filtrows,filtcols), pad=(filtrows-1, filtcols-1)))
     out1 = f()
     # out1 = cgt.numeric_eval1(nn.conv2d(cgt.constant(x), cgt.constant(f), kersize=(filtrows,filtcols)), {})
-    np.testing.assert_allclose(out, out1, atol={"single":1e-3,"double":1e-6}[precision])
+    np.testing.assert_allclose(out, out1, atol={"single":1e-3,"double":1e-6}[cgt.get_precision()])
+
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()
