@@ -384,7 +384,7 @@ def numeric_eval(output, arg2val):
         assert all(isinstance(x, core.Node) for x in output), "expected a list of Nodes"
         return _numeric_eval_listout(output, arg2val)
     elif isinstance(output, core.Node):
-        return _numeric_eval_listout([output],arg2val)[0]
+        return _numeric_eval_listout([output], arg2val)[0]
     else:
         raise ValueError("expected `output` to be a Node or a list of Nodes. Got an object of type %s"%type(output))
 
@@ -400,7 +400,7 @@ def _numeric_eval_listout(outputs, arg2val):
     node2val = {}
     for node in nodes:
         if node.is_argument():
-            node2val[node] = arg2val[node]
+            node2val[node] = core.as_valid_array(arg2val[node])
         elif node.is_data():
             node2val[node] = node.op.get_value()
         else:

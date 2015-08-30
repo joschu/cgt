@@ -1,5 +1,6 @@
 import cgt
 import cgt.nn as nn
+from cgt.tests import across_configs
 import numpy as np
 
 # Torch values obtained via this script: https://gist.github.com/ebenolson/931e879ed38f257253d2
@@ -17,16 +18,8 @@ scales = [0.1, 0.2, 0.3]
 def f(X, scale):
     return (scale*X**2).sum()
 
-
-def test_optimizers():
-    tests = [run_sgd, run_momentum, run_nesterov_momenutm, run_adagrad, run_rmsprop, run_adagrad]
-
-    for backend in ["python","native"]:
-        with cgt.scoped_update_config(backend=backend):
-            for test in tests:
-                yield test
-
-def run_sgd():
+@across_configs
+def test_sgd():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -42,7 +35,8 @@ def run_sgd():
     assert np.allclose(results, torch_values['sgd'])
 
 
-def run_momentum():
+@across_configs
+def test_momentum():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -58,7 +52,8 @@ def run_momentum():
     assert np.allclose(results, torch_values['momentum'])
 
 
-def run_nesterov_momenutm():
+@across_configs
+def test_nesterov_momentum():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -74,7 +69,8 @@ def run_nesterov_momenutm():
     assert np.allclose(results, torch_values['nesterov_momentum'])
 
 
-def run_adagrad():
+@across_configs
+def test_adagrad():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -90,7 +86,8 @@ def run_adagrad():
     assert np.allclose(results, torch_values['adagrad'])
 
 
-def run_rmsprop():
+@across_configs
+def test_rmsprop():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -106,7 +103,8 @@ def run_rmsprop():
     assert np.allclose(results, torch_values['rmsprop'])
 
 
-def run_adadelta():
+@across_configs
+def test_adadelta():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)
@@ -120,3 +118,7 @@ def run_adadelta():
         results.append(A.op.get_value().copy())
 
     assert np.allclose(results, torch_values['adadelta'])
+
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

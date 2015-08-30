@@ -1,5 +1,6 @@
 import cgt
 from cgt.core import Op
+from cgt.tests import across_configs
 import time
 import numpy as np
 from numpy.random import randn, seed
@@ -28,8 +29,9 @@ class SleepFor(Op):
 def sleepfor(x, t):
     return cgt.core.Result(SleepFor(), [x, t])
 
+@across_configs(backends=("native",))
 def test_sleeps():
-    with cgt.scoped_update_config(parallel = True, backend="native"):
+    with cgt.scoped_update_config(parallel=True):
         x = cgt.scalar('x')
         y1 = sleepfor(x, .1)
         y2 = sleepfor(x, .1)
@@ -43,8 +45,9 @@ def test_sleeps():
         assert elapsed < .11
 
 
+@across_configs(backends=("native",))
 def test_matmuls():
-    with cgt.scoped_update_config(parallel = True, backend="native"):
+    with cgt.scoped_update_config(parallel=True):
 
         m = 8
         d = 1000
@@ -75,8 +78,9 @@ def test_matmuls():
         print toc-tic
     
 
+@across_configs(backends=("native",))
 def test_update():
-    with cgt.scoped_update_config(parallel = True, backend="native"):
+    with cgt.scoped_update_config(parallel=True):
         xval = np.array(1.5)
         x = cgt.shared(xval)
         f = cgt.function([], x.sum(), updates=[(x,x+1)])
@@ -85,3 +89,7 @@ def test_update():
         after = x.op.get_value()
         assert np.allclose(after , before+1)
 
+
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()

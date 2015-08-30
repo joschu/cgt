@@ -1,8 +1,9 @@
 import cgt, numpy as np,numpy.random as nr
+from cgt.tests import across_configs
 
+
+@across_configs
 def test_einsum():
-    cgt.reset_config()
-    cgt.set_precision("double")
     x = cgt.tensor3()
     y = cgt.tensor3()
 
@@ -19,8 +20,10 @@ def test_einsum():
         yval = nr.randn(*(sizes[c] for c in yperm))
         np.testing.assert_allclose(
             cgt.numeric_eval(z, {x : xval, y : yval}),
-            np.einsum(desc, xval, yval))
+            np.einsum(desc, xval, yval),
+            atol={"single":1e-3,"double":1e-6}[cgt.get_precision()])
 
 
 if __name__ == "__main__":
-    EinsumTestCase().runTest()
+    import nose
+    nose.runmodule()

@@ -26,3 +26,7 @@ def test_examples():
         yield run_example, runipycmd
     except ImportError:
         yield skip_example, runipycmd
+
+if __name__ == "__main__":
+    import nose
+    nose.runmodule()
