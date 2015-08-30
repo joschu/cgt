@@ -2752,12 +2752,11 @@ def get_numeric_shape_fun(node):
 
 def py_numeric_apply(node, vals):
     try:
-        # py_func = node.op.get_py_func(node.parents)
         callable = cgt.compilation.get_callable(node.op, [par.typ for par in node.parents],"cpu", True)
-
     except MethodNotDefined:
         print 'Op %s has no Python implementation' % repr(node.op)
         raise
+
     if node.op.return_type == "byval":
         out = callable.call(vals)
     else:

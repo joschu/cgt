@@ -20,7 +20,8 @@ def test_einsum():
         yval = nr.randn(*(sizes[c] for c in yperm))
         np.testing.assert_allclose(
             cgt.numeric_eval(z, {x : xval, y : yval}),
-            np.einsum(desc, xval, yval))
+            np.einsum(desc, xval, yval),
+            atol={"single":1e-3,"double":1e-6}[cgt.get_precision()])
 
 
 if __name__ == "__main__":
