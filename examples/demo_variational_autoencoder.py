@@ -211,15 +211,21 @@ def main():
     if args.epochs > 100:
         print("NOTE: training might take a while. You may want to first sanity check by setting --epochs to something like 20 (manifold will be fuzzy).")
 
+    # set up dataset
+
+    mnist = fetch_dataset("http://rll.berkeley.edu/cgt-data/mnist.npz")
+    X = (mnist["X"]/255.).astype(cgt.floatX)
+    y = mnist["y"]
+    np.random.seed(0)
+    sortinds = np.random.permutation(70000)
+    X = X[sortinds]
+    y = y[sortinds]
+    train_x = X[0:50000]
+    train_y = y[0:50000]
+    valid_x = X[50000:60000]
+    valid_y = y[50000:60000]
+
     # run SGVB algorithm
-
-    # unzipped from http://deeplearning.net/data/mnist/mnist.pkl.gz
-    train_data, valid_data, test_data = fetch_dataset("http://rll.berkeley.edu/cgt-data/mnist_splits.pkl")
-
-    train_x, train_y = train_data
-    #print(train_x[0, :])  # values in [0, 1]
-    #print(train_y[0:10])  # seems to already be shuffled
-    valid_x, valid_y = valid_data
 
     model = VAE(train_x.shape[1], args, dec="bernoulli")
 
