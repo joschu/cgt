@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import subprocess,sys,os,shutil,os.path as osp
-import cgt, urllib
+import urllib
 
 unpack_dir = sys.argv[1]
 
