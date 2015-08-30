@@ -53,7 +53,7 @@ def test_momentum():
 
 
 @across_configs
-def test_nesterov_momenutm():
+def test_nesterov_momentum():
     results = []
     for scale in scales:
         A = cgt.shared(1.0)

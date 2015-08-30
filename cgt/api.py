@@ -82,7 +82,7 @@ def argmax(x, axis=None, keepdims=False):
 def batched_matmul(x, y):
     r"""
     Given two 3-tensors x_nij, and y_njk, loop over 'n' and contract along 'j'
-        x_nij, y_njk -> z_nik := \sum_n x_nij y_njk
+        x_nij, y_njk -> z_nik := \sum_j x_nij y_njk
     A variety of useful tensor contraction operations can be written in this form
     after permuting axes and reshaping.
     """

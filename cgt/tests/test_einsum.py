@@ -1,8 +1,9 @@
 import cgt, numpy as np,numpy.random as nr
+from cgt.tests import across_configs
 
+
+@across_configs
 def test_einsum():
-    cgt.reset_config()
-    cgt.set_precision("double")
     x = cgt.tensor3()
     y = cgt.tensor3()
 

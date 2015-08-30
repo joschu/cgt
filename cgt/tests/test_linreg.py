@@ -1,9 +1,9 @@
 import numpy as np
 import cgt
+from cgt.tests import across_configs
 
+@across_configs
 def test_linreg():
-    cgt.reset_config()
-    cgt.set_precision('double')
     N = 10
     K = 3
 

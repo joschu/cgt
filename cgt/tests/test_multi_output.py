@@ -1,5 +1,6 @@
 import cgt, numpy as np
 from cgt import core
+from cgt.tests import across_configs
 
 class SinCos(core.Op):
     return_type = "byval"
@@ -56,9 +57,8 @@ CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtTuple* write) {
 }"""
         return core.NativeCompileInfo(code, includes=["math.h"], link_flags="-lm")
 
+@across_configs(precisions=("single",))
 def test_multi_output():
-    cgt.reset_config()
-    cgt.set_precision("single")    
     for x in (cgt.scalar('x'), cgt.vector('x'), cgt.matrix('x')):
         for cls in (SinCos, SinCos2):
             y,z = core.unpack(core.Result(cls(), [x]))

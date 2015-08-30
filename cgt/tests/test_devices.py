@@ -1,11 +1,10 @@
 import numpy as np
 import cgt
+from cgt.tests import across_configs
 from nose.plugins.skip import SkipTest
 
-
+@across_configs
 def test_devices():
-    cgt.set_precision('double')
-    cgt.update_config(backend="native")
     N = 10
     K = 3
 

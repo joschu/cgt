@@ -45,7 +45,7 @@ class Im2Col(core.Op):
     def get_native_compile_info(self, input_types, devtype):
         assert devtype == "cpu"
         d = dict(cdtype=core.np2c[input_types[0].dtype])
-        d.update(self.info.__dict__)
+        d.update(self.info._asdict())
         code = r"""
             CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
                 cgtArray* im = reads[0];
@@ -77,7 +77,7 @@ class Col2Im(core.Op):
         return info2closure(self.info)
     def get_native_compile_info(self, input_types, devtype):
         d = dict(cdtype=core.np2c[input_types[0].dtype])
-        d.update(self.info.__dict__)
+        d.update(self.info._asdict())
         code = r"""
             CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
                 cgtArray* col = reads[0];
