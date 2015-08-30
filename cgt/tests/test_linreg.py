@@ -37,7 +37,8 @@ def test_linreg():
 
     d = {X_nk : Xval, w_k : wval, b : bval, y_n : yval}
 
-    np.testing.assert_allclose(cgt.numeric_eval(err,d), np.linalg.norm(Xval.dot(wval) + bval - yval)**2)
+    np.testing.assert_allclose(cgt.numeric_eval(err,d), np.linalg.norm(Xval.dot(wval) + bval - yval)**2,
+        atol={"single":1e-3,"double":1e-6}[cgt.get_precision()])
     np.testing.assert_allclose(cgt.numeric_eval(g[0],d), 2 * Xval.T.dot(Xval.dot(wval) + bval - yval),
         atol={"single":1e-3,"double":1e-6}[cgt.get_precision()])
     np.testing.assert_allclose(cgt.numeric_eval(g[1],d), 2 *  np.sum(Xval.dot(wval) + bval - yval, 0),
