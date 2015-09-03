@@ -21,12 +21,13 @@ class Dtype: #pylint: disable=W0232
         Note that quad precision is very useful for gradient checking
         """
         dt = np.dtype(dt)
-        if dt.char in 'fdg':
+        k = dt.kind
+        if k=='f':
             return cgt.floatX
-        elif dt.char in 'iulBb?':
+        elif k in 'biu':
             return 'i'+str(dt.itemsize)
-        elif dt.char in 'FDG':
-            return 'c'+str(dt.itemsize)
+        elif k=='c':
+            return cgt.complexX
         else:
             raise ValueError("Invalid dtype %s"%dt)
 
@@ -2451,7 +2452,7 @@ def update_simplify_map(node, analysis, repl):
     Compute a fully simplified version of `node` and its ancestors
     When this function finishes, `repl[node]` is the simplified version of `node`,
     and repl[anc] is the simplified version of each node `anc` which is an ancestor of `node`.
-    MOreover, analysis contains 
+    Moreover, analysis contains 
 
     This algorithm is most simply described recursively, and the implementation below is
     a conversion of the recursive algorithm into a stack-based algorithm (to avoid
