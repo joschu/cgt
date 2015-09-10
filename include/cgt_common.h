@@ -162,6 +162,9 @@ void cgtObject::Release() const {
   }
 }
 
+/*
+Copy from -> to, transfering data between between devices if necessary
+*/
 void cgt_copy_object(cgtObject* to, cgtObject* from);
 void cgt_copy_array(cgtArray* to, cgtArray* from);
 void cgt_copy_tuple(cgtTuple* to, cgtTuple* from);

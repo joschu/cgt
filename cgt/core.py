@@ -140,6 +140,7 @@ def dtype_kind(dtype):
     """
     one of f,c,i
     """
+    assert isinstance(dtype, str)
     return dtype[0]
 
 def _dtype_itemsize(dtype):
@@ -1768,6 +1769,8 @@ class Argmax(Op):
 # Slicing
 # ----------------------------------------------------------------
 
+
+
 class GetSli(Op):
     available_impls = ("python","native_cpu")
     def __init__(self, axis):
@@ -1777,10 +1780,9 @@ class GetSli(Op):
     def get_py_func(self, input_types):
         def f(reads, write):
             x,start,stop,step=reads
+            if step<0 and stop==-1: stop=None
             slices = [slice(None,None,None) for _ in xrange(x.ndim)]
             slices[self.axis] = slice(start,stop,step)
-            if step < 0:
-                raise NotImplementedError
             write[:] = x[slices]
         return f
     def pullback(self, inputs, output, goutput):
@@ -1827,6 +1829,7 @@ class IncSli(Op):
     def get_py_func(self, input_types):
         def f(reads, write):
             x, start, stop, step, y=reads
+            if step<0 and stop==-1: stop=None            
             slices = [slice(None,None,None) for _ in xrange(x.ndim)]
             slices[self.axis] = slice(start,stop,step)          
             if x.data != write.data:
@@ -1835,7 +1838,7 @@ class IncSli(Op):
             write[slices] += y
         return f
     def pullback(self, inputs, output, goutput):
-        raise NotImplementedError # TODO
+        raise NotImplementedError
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, input_types):
@@ -1855,7 +1858,7 @@ class IncSli(Op):
                 long start = reads[1]->at<size_t>(0);
                 long step = reads[3]->at<size_t>(0);
                 cgt_assert(in->size() == write->size());
-                cgt_copy_array(write, in);
+                if (write->data() != in->data()) cgt_copy_array(write, in);
                 %(openloops)s
                     write->at<%(cdtype)s>(%(outidxexpr)s) += inc->at<%(cdtype)s>(%(incidxexpr)s);
                 %(closeloops)s
@@ -1863,6 +1866,103 @@ class IncSli(Op):
             """%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops,
     cdtype=np2c[input_types[0].dtype], incidxexpr=incidxexpr)
         return NativeCompileInfo(code)
+
+
+class GetFancySli(Op):
+    available_impls = ("python","native_cpu")
+    def __init__(self, axis):
+        self.axis = axis
+    def get_diff(self, _):
+        return [True,False]
+    def get_py_func(self, input_types):
+        def f(reads, write):
+            x,inds=reads
+            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+            slices[self.axis] = inds
+            write[:] = x[slices]
+        return f
+    def pullback(self, inputs, output, goutput):
+        z = cgt.zeros_like(inputs[0])
+        z.op.tag = id(output) # @TAG_HACK
+        return [Result(IncFancySli(self.axis), [z, inputs[1], goutput]), None]
+    def shp_apply(self, inputs):
+        arr, inds = inputs
+        s = cgt.shape(arr) #pylint: disable=W0621
+        newshape = copy.copy(s)
+        newshape[self.axis] = cgt.size(inds,0)
+        return newshape
+    def typ_apply(self, input_types):
+        assert input_types[1] == TensorType('i8', 1)
+        return input_types[0]
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        closeloops = "}"*x.ndim
+
+        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        inidxexpr = ",".join([("inds->at<size_t>(i%(ax)s)" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+
+        code = r"""
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                cgtArray *x=reads[0], *inds=reads[1];
+                size_t start = reads[1]->at<size_t>(0);
+                size_t step = reads[3]->at<size_t>(0);
+                %(openloops)s
+                    write->at<%(cdtype)s>(%(outidxexpr)s) = x->at<%(cdtype)s>(%(inidxexpr)s);
+                %(closeloops)s
+            }
+            """%dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
+    cdtype=np2c[input_types[0].dtype])
+        return NativeCompileInfo(code)
+
+class IncFancySli(Op):
+    available_impls = ("python","native_cpu")
+    writes_to_input = 0
+    def __init__(self, axis):
+        self.axis = axis
+    def get_diff(self, _):
+        return [True,False,True,True]
+    def get_py_func(self, input_types):
+        def f(reads, write):
+            x, inds, y=reads
+            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+            slices2 = [slice(None,None,None) for _ in xrange(x.ndim)]
+            if x.data != write.data:
+                utils.warn("incsli not inplace!")
+                np.copyto(write, x)
+            for (i,ind) in enumerate(inds):
+                slices[self.axis]=ind
+                slices2[self.axis]=i
+                write[slices] += y[slices2]
+        return f
+    def pullback(self, inputs, output, goutput):
+        raise NotImplementedError
+    def shp_apply(self, inputs):
+        return cgt.shape(inputs[0])
+    def typ_apply(self, input_types):
+        return input_types[0]
+    def get_native_compile_info(self, input_types, devtype):
+        x = input_types[0]
+        openloops = " ".join(
+            ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        closeloops = "}"*x.ndim
+
+        incidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        outidxexpr = ",".join([("inds->at<size_t>(i%(ax)s)" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+
+        code = r"""
+            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
+                cgtArray *x=reads[0], *inds=reads[1], *inc = reads[2];
+                cgt_assert(x->size() == write->size());
+                if (write->data() != x->data()) cgt_copy_array(write, x);
+                %(openloops)s
+                    write->at<%(cdtype)s>(%(outidxexpr)s) += inc->at<%(cdtype)s>(%(incidxexpr)s);
+                %(closeloops)s
+            }
+            """%dict(openloops=openloops, outidxexpr=outidxexpr, closeloops=closeloops,
+    cdtype=np2c[input_types[0].dtype], incidxexpr=incidxexpr)
+        return NativeCompileInfo(code)
+
 
 class GetFlatIndices(Op):
     available_impls = ("python","native_cpu")        
@@ -2167,7 +2267,7 @@ class Outer(Op):
         return [cgt.size(inputs[0],0), cgt.size(inputs[1],0)]
     def typ_apply(self, input_types):
         assert input_types[0] == input_types[1]
-        return TensorType(cgt.floatX, 2)
+        return TensorType(input_types[0].dtype, 2)
     def get_native_compile_info(self, input_types, devtype):
         npdtype = input_types[0].dtype
         code = r"""

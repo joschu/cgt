@@ -139,7 +139,7 @@ def cast(x, dtype):
         diff = (core.dtype_kind(dtype) in 'cf')
         opname = 'cast_to_%s' % dtype
         ui = core.UnaryInfo(opname, _get_nu_cast(dtype), diff, dtype,  
-            lambda x,y,gy : (cast(gy, x.dtype) if diff else core._nondiff()), 'x')
+            lambda x,y,gy : cast(gy, x.dtype) if diff else None, 'x')
         return core.Result(core.ElwiseUnary(opname, ui), [x])
 
 def ceil_divide(x, y):
@@ -268,86 +268,123 @@ def floor_divide(x, y):
     """
     return ifloor(x / y)
 
-def getitem(arr, slis):
+
+def _iscolon(sli):
+    return isinstance(sli, slice) and sli.start is None and sli.stop is None and sli.step is None
+
+def getitem(x, slis):
     """
-    Used internally for array indexing/slicing, though we will specify it's behavior later
+    Used for indexing/slicing.
+
+    Tensor indexing expressions supported:
+    1. sequence of ":" or None
+    2. sequence of ":", slice, or int
+    3. sequence of intarray of length x.ndim
+    4. sequence of intarray or ":", with a single intarray
+
+    where intarray denotes either an
+    - cgt node with ndim=1 and dtype=int
+    - numpy ndarray with ndim=1 and dtype=int
+
+    If x is a tuple, then it should be indexed by a single int.
+
     """
-    arr = core.as_node(arr)
-    if isinstance(arr.typ, core.TupleType):
-        assert isinstance(slis, int)
-        return tuple_index(arr, slis)
-    if (not _is_list_or_tuple(slis)):
+    x = core.as_node(x)
+
+    # Tuple case
+    if x.is_tuple():
+        assert isinstance(slis, int), "TupleType can be only be indexed by an int"
+        return tuple_index(x, slis)
+
+    # Make sure slis is an int
+    if not isinstance(slis, (list, tuple)):
         slis = [slis]
-    if all(isinstance(sli, (int, slice, type(None))) for sli in slis):
-        return getitem_nonfancy(arr, slis)
-    elif all((isinstance(sli, (np.ndarray, core.Node)) for sli in slis)):
-        return getitem_fancy(arr, slis)
     else:
-        raise ValueError('Tried to index with slices %s. Either all should be in {slice,int,colon} or all must be a ndarray of ints' % str(slis))
+        slis = list(slis)
 
-def getitem_fancy(arr, indarrs):
-    """
-    Used internally for fancy indexing
-    """
-    assert all(((indarr.ndim == 1) for indarr in indarrs))
-    indarrs = map(core.as_node, indarrs)
-    flatinds = sub2ind(indarrs, shape(arr))
-    return core.Result(core.GetFlatIndices(), [arr, flatinds])
 
-def getitem_nonfancy(arr, slis):
-    """
-    Used internally for slicing
-    """
-    out = arr
-    ax = 0
-    shapedesc = []
-    if (not _is_list_or_tuple(slis)):
-        slis = [slis]
+    # Case 1.
+    if all(_iscolon(sli) or sli is None  for sli in slis):
+        return _getitem1(x, slis)
+    # Case 2.
+    elif all(_iscolon(sli) or isinstance(sli, (slice,int)) for sli in slis):
+        return _getitem2(x, slis)
+    # Case 3.
+    elif len(slis) == x.ndim and all(_is1dintarray(sli) for sli in slis):
+        return _getitem3(x, slis)
+    # Case 4.
+    elif all(_is1dintarray(sli) or _iscolon(sli) for sli in slis) and np.sum([_is1dintarray(sli) for sli in slis])==1:        
+        return _getitem4(x, slis)
+    else:
+        raise ValueError('Tried to index with slices %s. See cgt.getitem docstring for description of valid indexing expressions'%slis)
+
+def _getitem1(x, slis):
+
+    axidx = 0 # number of axes from x matched to ":"s so far
+    newshape = []
+
     for sli in slis:
-        if isinstance(sli, slice) and all(x is None for x in (sli.start, sli.stop, sli.step)):
-            shapedesc.append(ax)
-        elif (sli is None):
-            shapedesc.append('+')
-            ax -= 1
-        elif isinstance(sli, bool):
-            raise ValueError('tried to index with a bool')
+        if _iscolon(sli):
+            newshape.append(size(x, axidx))
+            axidx += 1
         else:
-            if isinstance(sli, slice):
-                shapedesc.append('k')
-            elif isinstance(sli, int):
-                sli = slice(sli, sli + 1, 1)
-                shapedesc.append('-')
-            else:
-                raise NotImplementedError
-            start = (0 if sli.start is None else sli.start)
-            stop = size(arr, ax) if (sli.stop is None) else sli.stop
-            step = (1 if sli.step is None else sli.step)
-            if (isinstance(stop, int) and (stop < 0)):
-                stop = size(arr, ax) - stop
-            if isinstance(step, int):
-                assert step != 0
-                if step < 0:
-                    raise NotImplementedError("negative `step parameter is not implemented. use flip(x,0) instead of x[::-1]")
+            assert sli is None
+            newshape.append(1)
 
-            out = core.Result(core.GetSli(ax), [out, start, stop, step])
-        ax += 1
-    if all(((x == 'k') for x in shapedesc)):
-        return out
+    return x.reshape(newshape)
+
+def _getitem2(x, slis):
+
+    dims2drop = []
+    for (ax,sli) in enumerate(slis):
+        if isinstance(sli, int):
+            sli = slice(sli, sli + 1, 1)
+            dims2drop.append(ax)
+
+        assert isinstance(sli.step, int) or sli.step is None
+        step = 1 if sli.step is None else sli.step
+
+        if step < 0:
+            start = size(x, ax)-1 if sli.start is None else sli.start
+            stop = -1 if sli.stop is None else sli.stop
+        else:
+            start = 0 if sli.start is None else sli.start
+            stop = size(x, ax) if sli.stop is None else sli.stop
+
+        assert isinstance(step, (int, core.Node)), "step argument of a slice should be an integer or a symbolic variable"
+
+        x = core.Result(core.GetSli(ax), [x, start, stop, step])
+
+    x = _dropdims(x, dims2drop)
+
+    return x
+
+
+
+def _getitem3(x, slis):
+    """
+    Index x with x.ndim arrays of int.
+    """
+    assert all(((indarr.ndim == 1) for indarr in slis))
+    slis = map(core.as_node, slis)
+    flatinds = sub2ind(slis, shape(x))
+    return core.Result(core.GetFlatIndices(), [x, flatinds])
+
+def _getitem4(x, slis):
+    for (ax,sli) in enumerate(slis):
+        if _is1dintarray(sli):
+            return core.Result(core.GetFancySli(ax), [x, sli])
+    assert 0, "should be unreachable"
+
+
+def _is1dintarray(x):
+    if isinstance(x, core.Node) and x.ndim == 1 and core.dtype_kind(x.dtype)=='i':
+        return True
+    elif isinstance(x, np.ndarray) and x.ndim == 1 and x.dtype.kind == 'i':
+        return True
     else:
-        axidx = 0
-        newshape = []
-        for d in shapedesc:
-            if (d == '+'):
-                newshape.append(1)
-            elif (d == '-'):
-                axidx += 1
-            else:
-                newshape.append(size(out, axidx))
-                axidx += 1
-        for axidx in xrange(axidx, out.ndim):
-            newshape.append(size(out, axidx))
-        out = reshape(out, newshape)
-    return out
+        return False
+
 
 def irfft(x, axes):
     """

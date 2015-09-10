@@ -180,7 +180,7 @@ def max1(X):
 def max2(X):
     return sum(max(X*1e4,1))
 
-def fancysli0(X):
+def flatfancysli0(X):
     return sum(X[np.array([1,0]),np.array([0,1])])
     
 def xm1(x):
@@ -251,6 +251,18 @@ def negsli1(x,y):
 def negsli01(x,y):
     return (x[::-1, ::-1]*y).sum()
 
+def fancysli0(x, y):
+    inds = np.array([0,0,1,0,1])
+    return (x[inds]*y).sum()
+
+def fancysli0a(x, y):
+    inds = np.array([0,0,1,0,1])
+    return (x[inds,:]*y).sum()
+
+def fancysli1(x, y):
+    inds = np.array([0,0,1,0,1])
+    return (x[:, inds]*y).sum()
+
 
 def convlike(F_abcd, y_e_bcd, q_ae):
     a,b,c,d = F_abcd.shape
@@ -267,8 +279,7 @@ def convlike(F_abcd, y_e_bcd, q_ae):
 ### Tests 
 ################################################################
 
-
-@across_configs(backends=("python", "native"), precisions=("double",))
+@across_configs(backends=("python","native"), precisions=("double",))
 def test_affine():
     np.random.seed(0)
 
@@ -294,7 +305,7 @@ def test_affine():
     check_affine(max0, mA)
     check_affine(max1, mA)
     check_affine(max2, mA)
-    check_affine(fancysli0, mA)
+    check_affine(flatfancysli0, mA)
     check_affine(sum10, mA)
     check_affine(sum01, mA)
     check_affine(repeat0, mA[0:1, :], nr.randn(7,3))
@@ -342,9 +353,13 @@ def test_affine():
     check_affine(flip0, M23, nr.randn(2,3))
     check_affine(flip1, M23, nr.randn(2,3))
 
-    # check_affine(negsli0, M23, nr.randn(2,3))
-    # check_affine(negsli1, M23, nr.randn(2,3))
-    # check_affine(negsli01, M23, nr.randn(2,3))
+    check_affine(negsli0, M23, nr.randn(2,3))
+    check_affine(negsli1, M23, nr.randn(2,3))
+    check_affine(negsli01, M23, nr.randn(2,3))
+
+    check_affine(fancysli0, M23, nr.randn(5,3))
+    check_affine(fancysli0a, M23, nr.randn(5,3))
+    check_affine(fancysli1, M23, nr.randn(2,5))
 
     # check_affine(rfft, M35)
     check_affine(convlike, T2357, nr.randn(11,3*5*7), nr.randn(2,11))
