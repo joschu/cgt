@@ -298,7 +298,11 @@ class Node(object):
     def __rfloordiv__(self, other):
         return cgt.constant(other).__floordiv__(self)
     def __getitem__(self, slis):
-        return cgt.getitem(self, slis)
+        if self.is_tuple():
+            assert isinstance(slis, int), "TupleType can be only be indexed by an int"
+            return cgt.tuple_index(self, slis)
+        else:            
+            return cgt.subtensor(self, slis)
     def __iter__(self):
         if self.is_tensor():
             raise TypeError("Array variable is not iterable")            
@@ -2004,7 +2008,10 @@ class IncFlatIndices(Op):
             if x.data != write.data:
                 utils.warn("incsli not inplace!")
                 np.copyto(write, x)
-            write.flat[inds] += y # XXX
+            for (i,ind) in enumerate(inds):
+                write.flat[ind] += y[i] 
+            # This is unvectorized so it gives the right answer when inds are non-unique
+            # faster vectorized version: write[inds] += y
         return f
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])

@@ -19,6 +19,7 @@ def function(inputs, outputs, dbg=None, updates=None, givens=None):
         raise ValueError("Expected `outputs` to be a Node or a list of Nodes. Got an object of type %s"%type(outputs))
 
 def _function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
+    if isinstance(updates,dict): updates=updates.items()
     if updates is None:  updates = []
     else: assert (isinstance(updates, list) and 
                 all(isinstance(a,tuple) and len(a)==2 

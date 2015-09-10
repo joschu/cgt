@@ -272,11 +272,14 @@ def floor_divide(x, y):
 def _iscolon(sli):
     return isinstance(sli, slice) and sli.start is None and sli.stop is None and sli.step is None
 
-def getitem(x, slis):
-    """
-    Used for indexing/slicing.
 
-    Tensor indexing expressions supported:
+def subtensor(x, slis):
+    """
+    Index or slice array `x` with the sequence of slices `slis`
+
+    x : cgt.Node or ndarray
+    slis : list of slices, which is one of the following format:
+
     1. sequence of ":" or None
     2. sequence of ":", slice, or int
     3. sequence of intarray of length x.ndim
@@ -286,15 +289,28 @@ def getitem(x, slis):
     - cgt node with ndim=1 and dtype=int
     - numpy ndarray with ndim=1 and dtype=int
 
-    If x is a tuple, then it should be indexed by a single int.
-
     """
-    x = core.as_node(x)
+    return _subtensor(x, slis)
 
-    # Tuple case
-    if x.is_tuple():
-        assert isinstance(slis, int), "TupleType can be only be indexed by an int"
-        return tuple_index(x, slis)
+def inc_subtensor(x, slis, y):
+    """
+    Increment array x[slis] by y
+    See subtensor docstring for a list of appropriate formats for `slis`
+    Only formats 2-4 are allowed for inc_subtensor
+    """
+    return _subtensor(x, slis, y)
+
+def _subtensor(x, slis, y=None):
+    """
+    To reduce code duplication, we use the same underlying function for
+    subtensor and inc_subtensor
+    if y is None, we're just slicing
+    otherwise, we're incrementing the slice
+    """
+
+    x = core.as_node(x)
+    if y is not None: y = core.as_node(y)
+    assert x.is_tensor()
 
     # Make sure slis is an int
     if not isinstance(slis, (list, tuple)):
@@ -303,22 +319,23 @@ def getitem(x, slis):
         slis = list(slis)
 
 
-    # Case 1.
+    # Case 1. (see subtensor docstring)
     if all(_iscolon(sli) or sli is None  for sli in slis):
-        return _getitem1(x, slis)
+        assert y is None
+        return _subtensor1(x, slis)
     # Case 2.
     elif all(_iscolon(sli) or isinstance(sli, (slice,int)) for sli in slis):
-        return _getitem2(x, slis)
+        return _subtensor2(x, slis, y)
     # Case 3.
     elif len(slis) == x.ndim and all(_is1dintarray(sli) for sli in slis):
-        return _getitem3(x, slis)
+        return _subtensor3(x, slis, y)
     # Case 4.
     elif all(_is1dintarray(sli) or _iscolon(sli) for sli in slis) and np.sum([_is1dintarray(sli) for sli in slis])==1:        
-        return _getitem4(x, slis)
+        return _subtensor4(x, slis, y)
     else:
-        raise ValueError('Tried to index with slices %s. See cgt.getitem docstring for description of valid indexing expressions'%slis)
+        raise ValueError('Tried to index with slices %s. See cgt.subtensor docstring for description of valid indexing expressions'%slis)
 
-def _getitem1(x, slis):
+def _subtensor1(x, slis):
 
     axidx = 0 # number of axes from x matched to ":"s so far
     newshape = []
@@ -333,7 +350,7 @@ def _getitem1(x, slis):
 
     return x.reshape(newshape)
 
-def _getitem2(x, slis):
+def _subtensor2(x, slis, y):
 
     dims2drop = []
     for (ax,sli) in enumerate(slis):
@@ -353,28 +370,37 @@ def _getitem2(x, slis):
 
         assert isinstance(step, (int, core.Node)), "step argument of a slice should be an integer or a symbolic variable"
 
-        x = core.Result(core.GetSli(ax), [x, start, stop, step])
+        if y is None:
+            x = core.Result(core.GetSli(ax), [x, start, stop, step])
+        else:
+            x = core.Result(core.IncSli(ax), [x, start, stop, step, y])
 
     x = _dropdims(x, dims2drop)
 
     return x
 
-
-
-def _getitem3(x, slis):
+def _subtensor3(x, slis, y):
     """
     Index x with x.ndim arrays of int.
     """
     assert all(((indarr.ndim == 1) for indarr in slis))
     slis = map(core.as_node, slis)
     flatinds = sub2ind(slis, shape(x))
-    return core.Result(core.GetFlatIndices(), [x, flatinds])
+    if y is None:
+        return core.Result(core.GetFlatIndices(), [x, flatinds])
+    else:
+        return core.Result(core.IncFlatIndices(), [x, flatinds, y])
 
-def _getitem4(x, slis):
+def _subtensor4(x, slis, y):
     for (ax,sli) in enumerate(slis):
         if _is1dintarray(sli):
-            return core.Result(core.GetFancySli(ax), [x, sli])
+            if y is None:
+                return core.Result(core.GetFancySli(ax), [x, sli])
+            else:
+                return core.Result(core.IncFancySli(ax), [x, sli, y])
     assert 0, "should be unreachable"
+
+
 
 
 def _is1dintarray(x):
