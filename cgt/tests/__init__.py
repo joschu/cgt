@@ -52,12 +52,13 @@ def across_configs(*args, **kwargs):
     assert not args
     backends = kwargs.get("backends", ("python", "native"))
     precisions = kwargs.get("precisions", ("single", "double"))
+    devtypes = kwargs.get("devtypes",("cpu",))
     pass_settings = kwargs.get("pass_settings", False)
 
     def decorator(check_func):
         @wraps(check_func)
-        def check_func_with_config(backend, precision):
-            with cgt.scoped_update_config(backend=backend, precision=precision):
+        def check_func_with_config(backend, precision, devtype):
+            with cgt.scoped_update_config(backend=backend, precision=precision, default_device=cgt.core.Device(devtype=devtype)):
                 if pass_settings:
                     check_func(backend=backend, precision=precision)
                 else:
@@ -65,8 +66,8 @@ def across_configs(*args, **kwargs):
 
         @wraps(check_func_with_config)
         def wrapper():
-            for backend, precision in itertools.product(backends, precisions):
-                yield check_func_with_config, backend, precision
+            for backend, precision, devtype in itertools.product(backends, precisions, devtypes):
+                yield check_func_with_config, backend, precision, devtype
         return wrapper
 
     return decorator

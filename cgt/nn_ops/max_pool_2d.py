@@ -8,12 +8,6 @@ import numpy as np
 # <Copied from im2col.py>
 PoolInfo = namedtuple("PoolInfo", ["kernel_h", "kernel_w", "pad_h", "pad_w", "stride_h", "stride_w"])
 
-def max_pool_2d(x, kernelshape, pad = (0,0), stride=(1,1)):
-    kernel_h, kernel_w = kernelshape
-    pad_h, pad_w = pad
-    stride_h, stride_w = stride
-    return core.Result(MaxPool(PoolInfo(kernel_h, kernel_w, pad_h, pad_w, stride_h, stride_w)), [x])[0]
-
 def info2closure(info):
     return [
         ("kernel_h", ctypes.c_int, info.kernel_h),
@@ -77,5 +71,3 @@ CGT_EXPORT_C void $function(conv_closure* cl, cgtArray** reads, cgtArray* write)
 }"""%dict(cdtype=core.np2c[input_types[0].dtype])
         return core.NativeCompileInfo(code, closure_triples=info2closure(self.info), includes=["pooling.h"])
 
-if __name__ == "__main__":
-    test()

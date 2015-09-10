@@ -9,36 +9,17 @@
     if (status != CUDNN_STATUS_SUCCESS) {printf("%s (%s:%d)\n", cudnnGetErrorString(status), __FILE__, __LINE__); abort();} \
   } while (0)
 
-const char* cudnnGetErrorString(cudnnStatus_t status) {
-  switch (status) {
-    case CUDNN_STATUS_SUCCESS:
-      return "CUDNN_STATUS_SUCCESS";
-    case CUDNN_STATUS_NOT_INITIALIZED:
-      return "CUDNN_STATUS_NOT_INITIALIZED";
-    case CUDNN_STATUS_ALLOC_FAILED:
-      return "CUDNN_STATUS_ALLOC_FAILED";
-    case CUDNN_STATUS_BAD_PARAM:
-      return "CUDNN_STATUS_BAD_PARAM";
-    case CUDNN_STATUS_INTERNAL_ERROR:
-      return "CUDNN_STATUS_INTERNAL_ERROR";
-    case CUDNN_STATUS_INVALID_VALUE:
-      return "CUDNN_STATUS_INVALID_VALUE";
-    case CUDNN_STATUS_ARCH_MISMATCH:
-      return "CUDNN_STATUS_ARCH_MISMATCH";
-    case CUDNN_STATUS_MAPPING_ERROR:
-      return "CUDNN_STATUS_MAPPING_ERROR";
-    case CUDNN_STATUS_EXECUTION_FAILED:
-      return "CUDNN_STATUS_EXECUTION_FAILED";
-    case CUDNN_STATUS_NOT_SUPPORTED:
-      return "CUDNN_STATUS_NOT_SUPPORTED";
-    case CUDNN_STATUS_LICENSE_ERROR:
-      return "CUDNN_STATUS_LICENSE_ERROR";
-  }
-  return "Unknown cudnn status";
-}
-
 struct conv_closure {
   int pad_height, pad_width, stride_vertical, stride_horizontal;
+  cudnnHandle_t handle;
+  cudaStream_t stream;
+};
+
+
+struct pooling_closure {
+  int kernel_height, kernel_width, 
+      pad_height, pad_width, 
+      stride_vertical, stride_horizontal;
   cudnnHandle_t handle;
   cudaStream_t stream;
 };
@@ -66,10 +47,18 @@ cudnnDataType_t cudnnDataType(cgtDtype d) {
 }
 
 cudnnConvolutionDescriptor_t createConvDescr(conv_closure* cl) {
+  int padA[2] = {cl->pad_height, cl->pad_width};
+  int strideA[2] = {cl->stride_vertical, cl->stride_horizontal};
+  int upscaleA[2] = {1, 1};
+  int ndims = 2;
   cudnnConvolutionDescriptor_t desc;
   CUDNN_CHECK(cudnnCreateConvolutionDescriptor(&desc));
-  CUDNN_CHECK(cudnnSetConvolution2dDescriptor(desc, cl->pad_height,
-   cl->pad_width, cl->stride_vertical, cl->stride_horizontal, 1, 1, CUDNN_CONVOLUTION));
+  CUDNN_CHECK(cudnnSetConvolutionNdDescriptor(desc, 
+    ndims,
+    padA,
+    strideA,
+    upscaleA,    
+    CUDNN_CONVOLUTION));
   return desc;
 }
 
@@ -97,6 +86,22 @@ cudnnFilterDescriptor_t createFilterDescr(cgtArray* a) {
   return desc;
 }
 
+cudnnPoolingDescriptor_t createPoolingDescr(pooling_closure* pc) {
+  cudnnPoolingDescriptor_t desc;
+  cudnnPoolingMode_t mode = CUDNN_POOLING_MAX;
+  int ndims=2;
+  int windowDimA[2] = {pc->kernel_height, pc->kernel_width};
+  int paddingA[2] = {pc->pad_height, pc->pad_width};
+  int strideA[2] = {pc->stride_vertical, pc->stride_horizontal};
+  CUDNN_CHECK(cudnnCreatePoolingDescriptor(&desc));
+  CUDNN_CHECK(cudnnSetPoolingNdDescriptor(desc, 
+    mode,
+    ndims,
+    windowDimA,
+    paddingA,
+    strideA));
+  return desc;  
+}
 
 void destroyConvDescr(cudnnConvolutionDescriptor_t desc) {
   CUDNN_CHECK(cudnnDestroyConvolutionDescriptor(desc));
@@ -110,13 +115,19 @@ void destroyFilterDescr(cudnnFilterDescriptor_t desc) {
   CUDNN_CHECK(cudnnDestroyFilterDescriptor(desc));  
 }
 
-void setupConv(conv_closure* cl) {
+void destroyPoolingDescr(cudnnPoolingDescriptor_t desc) {
+  CUDNN_CHECK(cudnnDestroyPoolingDescriptor(desc));
+}
+
+template <typename ClType>
+void setup_cudnn(ClType* cl) {
   CUDA_CHECK(cudaStreamCreate(&cl->stream));
   CUDNN_CHECK(cudnnCreate(&cl->handle));
   CUDNN_CHECK(cudnnSetStream(cl->handle, cl->stream));
 }
 
-void teardownConv(conv_closure* cl) {
+template <typename ClType>
+void teardown_cudnn(ClType* cl) {
   CUDNN_CHECK(cudnnDestroy(cl->handle));
   CUDA_CHECK(cudaStreamDestroy(cl->stream));
 }
@@ -203,3 +214,50 @@ void performConvBackwardBias(conv_closure* cl, cgtArray* top_diff, cgtArray* bia
   destroyTensorDescr(bias_diff_desc);
   destroyTensorDescr(top_diff_desc);
 }
+
+void performPoolingForward(pooling_closure* cl, cgtArray* bottom, cgtArray* top) {
+  cgt_assert(bottom->devtype() == cgtGPU && top->devtype() == cgtGPU);
+
+  auto bottom_desc = createTensorDescr(bottom);  
+  auto top_desc = createTensorDescr(top);  
+  auto pooling_desc = createPoolingDescr(cl);
+
+  // int outputdim[4] = {0,0,0,0};
+  // CUDNN_CHECK(cudnnGetPoolingNdForwardOutputDim(pooling_desc, bottom_desc, 4, outputdim));
+  // for (int i=0; i < top->ndim(); ++i) cgt_assert(outputdim[i]==top->shape()[i]);
+
+  FloatOrDouble zero=value2union(0, bottom->dtype()), one = value2union(1, bottom->dtype());
+  CUDNN_CHECK(cudnnPoolingForward(cl->handle, pooling_desc, &one, bottom_desc, bottom->data(), &zero, top_desc, top->data()));
+  CUDA_CHECK(cudaStreamSynchronize(cl->stream));  // Synchronize before destruction
+
+  destroyPoolingDescr(pooling_desc);
+  destroyTensorDescr(top_desc);
+  destroyTensorDescr(bottom_desc);  
+}
+
+void performPoolingBackward(pooling_closure* cl, cgtArray* bottom, cgtArray* top, cgtArray* top_diff, cgtArray* bottom_diff) {
+  cgt_assert(bottom->devtype() == cgtGPU && top->devtype() == cgtGPU && top_diff->devtype() == cgtGPU && bottom_diff->devtype() == cgtGPU);
+
+  auto bottom_desc = createTensorDescr(bottom);  
+  auto top_desc = createTensorDescr(top);  
+  auto top_diff_desc = createTensorDescr(top_diff);
+  auto bottom_diff_desc = createTensorDescr(bottom_diff);
+  auto pooling_desc = createPoolingDescr(cl);
+
+  FloatOrDouble zero=value2union(0, bottom->dtype()), one = value2union(1, bottom->dtype());
+  CUDNN_CHECK(cudnnPoolingBackward(cl->handle, pooling_desc, &one, 
+    top_desc, top->data(), 
+    top_diff_desc, top_diff->data(),
+    bottom_desc, bottom->data(), 
+    &zero, 
+    bottom_diff_desc, bottom_diff->data()
+  ));
+  CUDA_CHECK(cudaStreamSynchronize(cl->stream));  // Synchronize before destruction
+
+  destroyTensorDescr(bottom_desc);
+  destroyTensorDescr(top_desc);
+  destroyTensorDescr(top_diff_desc); 
+  destroyTensorDescr(bottom_diff_desc);
+  destroyPoolingDescr(pooling_desc);
+}
+

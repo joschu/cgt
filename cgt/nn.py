@@ -6,9 +6,9 @@ import cgt
 from cgt import core, size
 import numpy as np
 from .nn_ops.im2col import im2col
-from .nn_ops.max_pool_2d import max_pool_2d #pylint: disable=W0611
 from .nn_ops.cross_channel_lrn import cross_channel_lrn #pylint: disable=W0611
 from .nn_ops import cudnn_ops #pylint: disable=W0611
+from .nn_ops.max_pool_2d import MaxPool
 from collections import namedtuple
 
 class Module(object):
@@ -77,26 +77,37 @@ def dropout(x, p=0):
         x = x /(1.0-p)
         return x
 
-def conv2d_fft(x_BKRC, f_LKrc, subsample, pad):
-    # TODO add shape assertion
-    f_LKrc = cgt.flip(f_LKrc, [2,3])
-    padnrows = size(x_BKRC, 2) + size(f_LKrc, 2) - 1
-    padncols = size(x_BKRC, 3) + size(f_LKrc, 3) - 1
-    tx = cgt.rfft(x_BKRC, (padnrows,padncols), (2,3))
-    tf = cgt.rfft(f_LKrc, (padnrows,padncols), (2,3))
-    out = cgt.irfft( cgt.einsum("BKrc,LKrc->BLrc",tx, tf), (2,3))
-    out = out[:,:,pad[0]:(padnrows-pad[0]):subsample[0],pad[1]:(padncols-pad[1]):subsample[1]] #pylint: disable=E1127
-    return out
+
+# ================================================================
+# Image processing functions
+# ================================================================
+
+PoolInfo = namedtuple("PoolInfo", ["kernel_h", "kernel_w", "pad_h", "pad_w", "stride_h", "stride_w"])
 
 def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
-    col_BmnZ = im2col(x_BKRC, kernelshape, pad, stride)
-    L,K,r,c = f_LKrc.shape
-    f_LZ = f_LKrc.reshape([L, K*r*c])
-    B,m,n,Z = col_BmnZ.shape
-    col_Bmn_Z = col_BmnZ.reshape([B*m*n, Z])
-    col_Bmn_L = core.Result(core.Mul22(False,True), [col_Bmn_Z, f_LZ])
-    return col_Bmn_L.reshape([B,m,n,L]).transpose([0,3,1,2])
+    devtype = cgt.get_config()["default_device"].devtype
+    if devtype == "gpu":        
+        return cudnn_ops.CudnnConvForward(pad[0],pad[1],stride[0],stride[1])
+    else:
+        assert devtype == "cpu"
+        col_BmnZ = im2col(x_BKRC, kernelshape, pad, stride)
+        L,K,r,c = f_LKrc.shape
+        f_LZ = f_LKrc.reshape([L, K*r*c])
+        B,m,n,Z = col_BmnZ.shape
+        col_Bmn_Z = col_BmnZ.reshape([B*m*n, Z])
+        col_Bmn_L = core.Result(core.Mul22(False,True), [col_Bmn_Z, f_LZ])
+        return col_Bmn_L.reshape([B,m,n,L]).transpose([0,3,1,2])
 
+def max_pool_2d(x, kernelshape, pad = (0,0), stride=(1,1)):
+    devtype = cgt.get_config()["default_device"].devtype
+    kernel_h, kernel_w = kernelshape
+    pad_h, pad_w = pad
+    stride_h, stride_w = stride
+    info = PoolInfo(kernel_h, kernel_w, pad_h, pad_w, stride_h, stride_w)
+    if devtype == "gpu":        
+        return core.Result(cudnn_ops.CudnnPoolForward(info), [x])
+    else:
+        return core.Result(MaxPool(info), [x])[0]
 
 # ================================================================
 # Initializations

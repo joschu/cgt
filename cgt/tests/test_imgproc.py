@@ -35,7 +35,7 @@ def test_cudnn():
     for (nugrad,angrad) in zip(nugrads,angrads):
         assert np.allclose(nugrad, angrad)
 
-@across_configs(precisions=("quad",), backends=("native",))
+@across_configs(precisions=("double",), backends=("native",),devtypes=("cpu","gpu"))
 def test_cpu_pool(**kwargs):
     np.random.seed(0)
     x = cgt.tensor4("x", fixed_shape=(2,3,5,7))
