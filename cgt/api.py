@@ -276,6 +276,7 @@ def _iscolon(sli):
 def subtensor(x, slis):
     """
     Index or slice array `x` with the sequence of slices `slis`
+    Corresponds to the numpy code x[slis]
 
     x : cgt.Node or ndarray
     slis : list of slices, which is one of the following format:
@@ -294,7 +295,14 @@ def subtensor(x, slis):
 
 def inc_subtensor(x, slis, y):
     """
-    Increment array x[slis] by y
+    Returns the array that is obtained by incrementing x[slis] by y
+    This function corresponds to the following numpy code:
+        out = x.copy()
+        out[slis] += y
+        return out
+    Note that due to an in-place optimization, the copy operation is
+    usually not performed.
+
     See subtensor docstring for a list of appropriate formats for `slis`
     Only formats 2-4 are allowed for inc_subtensor
     """
