@@ -216,7 +216,7 @@ def text_to_tensor(text_file, preproc_file):
 def get_num_hiddens(arch, n_layers):
     return {"lstm" : 2 * n_layers, "gru" : n_layers}[arch]
 
-def sample(f_step, init_hiddens, char2ind, n_steps, temp, seed_text = ""):
+def sample(f_step, init_hiddens, char2ind, n_steps, temperature, seed_text = ""):
     vocab_size = len(char2ind)
     ind2char = {ind:char for (char,ind) in char2ind.iteritems()}
     cur_hiddens = init_hiddens
@@ -232,8 +232,8 @@ def sample(f_step, init_hiddens, char2ind, n_steps, temp, seed_text = ""):
     
 
     for _ in xrange(n_steps):        
-        logprobs_1k /= temp
-        probs_1k = np.exp(logprobs_1k)
+        logprobs_1k /= temperature
+        probs_1k = np.exp(logprobs_1k*2)
         probs_1k /= probs_1k.sum()
         index = cat_sample(probs_1k)[0]
         char = ind2char[index]
@@ -261,6 +261,7 @@ def main():
     parser.add_argument("--grad_check",action="store_true")
     parser.add_argument("--profile",action="store_true")
     parser.add_argument("--unittest",action="store_true")
+    parser.add_argument("--temperature",type=float,default=1)
 
     args = parser.parse_args()
 
@@ -268,7 +269,7 @@ def main():
 
     assert args.n_unroll > 1
 
-    loader = Loader(args.data_dir,args.size_batch, args.n_unroll, (.8,.1,.1))
+    loader = Loader(args.data_dir,args.size_batch, args.n_unroll, (1.0,0,0))
 
     network, f_loss, f_loss_and_grad, f_step = make_loss_and_grad_and_step(args.arch, loader.size_vocab, 
         loader.size_vocab, args.size_mem, args.size_batch, args.n_layers, args.n_unroll)
@@ -319,7 +320,7 @@ def main():
         print "%.3f s/batch. avg loss = %.3f"%((time()-tstart)/len(losses), np.mean(losses))
         optim_state.step_size *= .98 #pylint: disable=E1101
 
-        sample(f_step, initialize_hiddens(1), char2ind=loader.char2ind, n_steps=300, temp=1.0, seed_text = "")
+        sample(f_step, initialize_hiddens(1), char2ind=loader.char2ind, n_steps=1000, temperature=args.temperature, seed_text = "")
 
     if args.profile: profiler.print_stats()
 

@@ -359,7 +359,8 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     return out
 
 def _isquick(pyinstr):
-    return all(isinstance(t, core.TensorType) and t.ndim == 0 for t in pyinstr.input_types) or isinstance(pyinstr.op, (core.Constant, core.Size))
+    return all(isinstance(t, core.TensorType) and t.ndim == 0 for t in pyinstr.input_types) \
+        or isinstance(pyinstr.op, (core.Constant, core.Size, core.Reshape, core.MakeTuple, core.TupleIndex))
 
 ################################################################
 ### Wrapper classes

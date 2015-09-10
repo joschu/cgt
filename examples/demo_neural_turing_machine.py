@@ -275,6 +275,57 @@ class CopyTask(object):
     def total_time(self):
         return 2*self.t+2
 
+class ReverseCopyTask(object):
+    def __init__(self, batch_size, seq_length, output_dim):
+        self.b = batch_size
+        self.t = seq_length
+        self.k = output_dim+2
+        self.p = output_dim
+    def gen_batch(self):
+        assert self.k == self.p + 2
+        x_tbk = np.zeros((2*self.t + 2, self.b, self.k),cgt.floatX)
+        x_tbk[0, :, 0] = 1 # start symbol
+        message = (nr.rand(self.t, self.b, self.p) > .5).astype(cgt.floatX)
+        # message = (nr.rand(self.t, self.b, self.p)).astype(cgt.floatX)
+
+        x_tbk[1:self.t+1,:,2:] = message
+        x_tbk[self.t+1, :, 1] = 1 # end symbol
+        y_tbk = np.zeros((2*self.t+2, self.b, self.p),cgt.floatX)
+        y_tbk[self.t+2:] = message[::-1] # desired output
+
+        return x_tbk, y_tbk
+    def loss_timesteps(self):
+        return range(self.t+1, 2*self.t+2)
+    def total_time(self):
+        return 2*self.t+2
+
+class RepeatCopyTask(object):
+    def __init__(self, batch_size, seq_length, output_dim, n_copies):
+        self.b = batch_size
+        self.t = seq_length
+        self.k = output_dim+2
+        self.p = output_dim
+        self.n_copies = n_copies
+    def gen_batch(self):
+        assert self.k == self.p + 2
+        x_tbk = np.zeros(((1+self.n_copies)*self.t + 2, self.b, self.k),cgt.floatX)
+        x_tbk[0, :, 0] = 1 # start symbol
+        message = (nr.rand(self.t, self.b, self.p) > .5).astype(cgt.floatX)
+        # message = (nr.rand(self.t, self.b, self.p)).astype(cgt.floatX)
+
+        x_tbk[1:self.t+1,:,2:] = message
+        x_tbk[self.t+1, :, 1] = 1 # end symbol
+        y_tbk = np.zeros((2*self.t+2, self.b, self.p),cgt.floatX)
+        for i in xrange(self.n_copies):
+            start=self.t+2+i*self.t
+            y_tbk[start:start+self.t] = message # desired output
+        return x_tbk, y_tbk
+    def loss_timesteps(self):
+        return range(self.t+1, 2*self.t+2)
+    def total_time(self):
+        return 2*self.t+2        
+
+
 def circ_conv_1d(wg_bhn, s_bh3, axis=2):
     "VERY inefficient way to implement circular convolution for the special case of filter size 3"
     assert axis == 2
