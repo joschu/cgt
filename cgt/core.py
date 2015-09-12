@@ -223,6 +223,8 @@ class Node(object):
         Returns whether this node's type (self.typ) is TupleType
         """
         return isinstance(self.typ, TupleType)
+    def is_scalar(self):
+        return self.is_tensor() and self.ndim==0
     def get_hash(self, node2hash):
         """
         Return UNIQUE string identifying this Node
@@ -533,7 +535,7 @@ class InMemoryData(GetData):
         self.use_numpy = cgt.get_config()["backend"] == "python" 
         # use_numpy: whether to store the data as a numpy array or a CppArrayWrapper object
         if self.use_numpy:
-            assert self.device.devtype=="cpu","can only use numpy for cpu"
+            assert self.device.devtype=="cpu","can only use numpy for cpu. maybe you need to set backend=native?"
         else:
             self.dataptr = ctypes.c_long(0)
         self.set_value(value)
@@ -1233,7 +1235,7 @@ class ElwiseUnary(Op):
             raise Unreachable
 
 class ElwiseBinary(Op):
-    available_impls = ("python","native_cpu")        
+    available_impls = ("python","native_cpu","native_gpu")        
     # +, -, *, /, <, ^, //
     def __init__(self, opname, scalar_mask, info=None):
         assert opname in BINARY_INFO        
@@ -1352,19 +1354,19 @@ class ElwiseBinary(Op):
                     z[i] = $function(x[%(index0)s], y[%(index1)s]);
                   }
                 }
-                void launchker_$function(size_t n, %(cdtype0)s* x, %(cdtype1)s* y, %(cdtype2)s* write) {
+                void launchker_$function(size_t n, %(cdtype0)s* x, %(cdtype1)s* y, %(cdtype2)s* z) {
                     int num_blocks,num_threads;                    
                     cgt_get_bt(n, num_blocks, num_threads);
                     ${function}_kernel<<<num_blocks, num_threads>>>(n, x, y, z);                
                 }
             """%d
             cpp_code = """
-                extern void launchker_${function}(size_t, %(cdtype0)s*, %(cdtype1)s*), %(cdtype2)s*);
+                extern void launchker_${function}(size_t, %(cdtype0)s*, %(cdtype1)s*, %(cdtype2)s*);
                 CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
                     size_t n = reads[%(ind4shape)s]->size();
                     launchker_${function}(n, (%(cdtype0)s*)reads[0]->data(), (%(cdtype1)s*)reads[1]->data(), (%(cdtype2)s*)write->data());
                 }"""%d
-            return NativeCompileInfo(func_code=cpp_code, includes=["math.h"], gpu_deref_mask=(True,True),
+            return NativeCompileInfo(func_code=cpp_code, includes=["math.h"], link_flags="-lm -lcudart", gpu_deref_mask=(True,True),
                 extra_srcs=[SrcFile("cuda",cuda_code)])
 
 def elwise_binary(opname, x, y):
@@ -1695,6 +1697,7 @@ def gen_reduction_code(dtype, axes, ndim, reduction_expr, initval):
             %(closeloops)s
         }
         """%d
+
 class Sum(Op):
     available_impls = ("python","native_cpu")
     def __init__(self, axes):
@@ -2096,7 +2099,7 @@ class Mul21(Op):
     def typ_apply(self, input_types):
         return TensorType(input_types[0].dtype, 1)
     def get_closure(self):
-        return [("tA",ctypes.c_bool, self.tA)]
+        return [("tA",ctypes.c_bool, self.tA),("handle", ctypes.c_void_p, 0)]
     # gemv docs: https://software.intel.com/en-us/node/520750
     def get_native_compile_info(self, input_types, devtype):
         npdtype = input_types[0].dtype
@@ -2104,18 +2107,32 @@ class Mul21(Op):
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
-        code = r"""
-            CGT_EXPORT_C void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
-                cgtArray *A=Ax[0], *x=Ax[1];
-                int lda = A->shape()[1];
-                int M = A->shape()[0];
-                int N = A->shape()[1];
-                const %(cdtype)s alpha=1, beta=0;
-                int incx = 1, incy = 1;
-              cblas_%(letter)sgemv(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), M, N, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
-                  incx, beta, (%(cdtype)s*)y->data(), incy);
-            }
-            """%dict(letter=letter, cdtype = np2c[npdtype])
+        if devtype == "cpu":            
+            code = r"""
+                CGT_EXPORT_C void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
+                    cgtArray *A=Ax[0], *x=Ax[1];
+                    int lda = A->shape()[1];
+                    int M = A->shape()[0];
+                    int N = A->shape()[1];
+                    const %(cdtype)s alpha=1, beta=0;
+                    int incx = 1, incy = 1;
+                  cblas_%(letter)sgemv(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), M, N, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
+                      incx, beta, (%(cdtype)s*)y->data(), incy);
+                }
+                """%dict(letter=letter, cdtype = np2c[npdtype])
+        elif devtype == "gpu":
+            code = r"""
+                CGT_EXPORT_C void $function($closure* cl, cgtArray** Ax, cgtArray* y) {
+                    if (!cl->handle) cublasCreate_v2((cublasHandle_t*)&cl->handle);                                    
+                    cgtArray *A=Ax[0], *x=Ax[1];
+                    int lda = A->shape()[1];
+                    int M = A->shape()[0];
+                    int N = A->shape()[1];
+                    const %(cdtype)s alpha=1, beta=0;
+                    int incx = 1, incy = 1;
+                  cblas_%(letter)sgemv(CblasRowMajor, (cublasOperation_t)(!cl->tA), N, M, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
+                      incx, beta, (%(cdtype)s*)y->data(), incy);
+                }"""%dict(letter=letter, cdtype = np2c[npdtype])         
         return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples = self.get_closure())
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
@@ -2123,7 +2140,7 @@ class Mul21(Op):
 class Mul22(Op):
     @property
     def available_impls(self):
-        return ("python",) if cgt.get_precision() == "quad" else ("python","native_cpu")
+        return ("python",) if cgt.get_precision() == "quad" else ("python","native_cpu","native_gpu")
     def __init__(self, tA, tB):
         self.tA = tA
         self.tB = tB
@@ -2177,7 +2194,7 @@ class Mul22(Op):
         assert input_types[0].dtype==cgt.floatX and input_types[1].dtype==cgt.floatX
         return input_types[0]
     def get_closure(self):
-        return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB)]
+        return [("tA",ctypes.c_bool, self.tA), ("tB",ctypes.c_bool, self.tB), ("handle",ctypes.c_void_p, 0)]
     # best gemm docs: https://software.intel.com/en-us/node/520775
     def get_native_compile_info(self, input_types, devtype):
         npdtype = input_types[0].dtype
@@ -2185,19 +2202,38 @@ class Mul22(Op):
             letter = {"f4":"s","f8":"d","c8":"c","c16":"z"}[npdtype]
         except KeyError:
             raise MethodNotDefined("Dtype %s not supported by this BLAS. Falling back to numpy"%npdtype)
-        code = r"""
-            CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
-                cgtArray *A=AB[0], *B=AB[1];
-                int lda = A->shape()[1], ldb = B->shape()[1], ldc = C->shape()[1];
-                int M = C->shape()[0];
-                int N = C->shape()[1];
-                int K = A->shape()[cl->tA ? 0 : 1];
-                const %(cdtype)s alpha=1, beta=0;
-              cblas_%(letter)sgemm(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), (CBLAS_TRANSPOSE)(cl->tB + 111), M, N, K, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)B->data(),
-                  ldb, beta, (%(cdtype)s*)C->data(), ldc);
-            }
-            """%dict(letter=letter, cdtype = np2c[npdtype])
-        return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples=self.get_closure())
+        if devtype == "cpu":
+            code = r"""
+                CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
+                    cgtArray *A=AB[0], *B=AB[1];
+                    int lda = A->shape()[1], ldb = B->shape()[1], ldc = C->shape()[1];
+                    int M = C->shape()[0];
+                    int N = C->shape()[1];
+                    int K = A->shape()[cl->tA ? 0 : 1];
+                    const %(cdtype)s alpha=1, beta=0;
+                  cblas_%(letter)sgemm(CblasRowMajor, (CBLAS_TRANSPOSE)(cl->tA + 111), (CBLAS_TRANSPOSE)(cl->tB + 111), M, N, K, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)B->data(),
+                      ldb, beta, (%(cdtype)s*)C->data(), ldc);
+                }
+                """%dict(letter=letter, cdtype = np2c[npdtype])
+            return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples=self.get_closure())
+        elif devtype == "gpu":
+            letter = letter.upper()
+            code = r"""
+                CGT_EXPORT_C void $function($closure* cl, cgtArray** AB, cgtArray* C) {
+                    if (!cl->handle) cublasCreate_v2((cublasHandle_t*)&cl->handle);
+                    cgtArray *A=AB[0], *B=AB[1];
+                    int lda = A->shape()[1], ldb = B->shape()[1], ldc = C->shape()[1];
+                    int M = C->shape()[0];
+                    int N = C->shape()[1];
+                    int K = A->shape()[cl->tA ? 0 : 1];
+                    const %(cdtype)s alpha=1, beta=0;
+                    CUBLAS_CHECK(cublas%(letter)sgemm_v2((cublasHandle_t)cl->handle, (cublasOperation_t)cl->tB, (cublasOperation_t)cl->tA, N, M, K, &alpha, (%(cdtype)s*)B->data(), ldb, (%(cdtype)s*)A->data(),
+                      lda, &beta, (%(cdtype)s*)C->data(), ldc));
+
+                }
+                """%dict(letter=letter, cdtype = np2c[npdtype])
+            return NativeCompileInfo(code, includes=["cublas_v2.h","cgt_cuda.h"], link_flags="-lcublas -lcudart", closure_triples=self.get_closure())
+
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s%s"%(xexpr, u"\u1d57" if self.tA else "", yexpr, u"\u1d57" if self.tB else "")
     def __repr__(self):

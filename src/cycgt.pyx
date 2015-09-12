@@ -96,7 +96,8 @@ cdef object cgt2py_object(cgtObject* o, bint view):
 
 cdef object cgt2py_array(cgtArray* a, bint view):
     cdef cnp.ndarray nparr
-    if view:
+    if view and a.devtype() == cgtCPU: 
+        # XXX won't return a view if data is on the GPU. Does any code REQUIRE output to be a view?
         return cnp.PyArray_SimpleNewFromData(a.ndim(), <cnp.npy_intp*>a.shape(), a.dtype(), a.data())
     else:
         nparr = cnp.PyArray_SimpleNew(a.ndim(), <npy_intp_t*>a.shape(), a.dtype())

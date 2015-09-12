@@ -22,7 +22,10 @@ def main():
     parser.add_argument("--profile",action="store_true")
     parser.add_argument("--unittest",action="store_true")
     parser.add_argument("--epochs",type=int,default=10)
+    parser.add_argument("--devtype",choices=["cpu","gpu"],default="cpu")
     args = parser.parse_args()
+
+    cgt.update_config(default_device=cgt.core.Device(devtype=args.devtype), backend="native")
 
     batchsize = 64
     Xshape = (batchsize, 3, 32, 32)
@@ -48,16 +51,21 @@ def main():
     logprobs = nn.logsoftmax(ip1)
     loss = -logprobs[cgt.arange(batchsize), y].mean()
 
+
     params = nn.get_parameters(loss)
+
     updates = rmsprop_updates(loss, params, stepsize=1e-3)
     
+
     train = cgt.function(inputs=[X, y], outputs=[loss], updates=updates)
+
 
     if args.profile: cgt.profiler.start()
 
     data = fetch_dataset("http://rll.berkeley.edu/cgt-data/cifar10.npz")
     Xtrain = data["X_train"]
     ytrain = data["y_train"]
+
 
     print fmt_row(10, ["Epoch","Train NLL","Train Err","Test NLL","Test Err","Epoch Time"])
     for i_epoch in xrange(args.epochs):

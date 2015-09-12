@@ -27,6 +27,7 @@ def test_incsubtensor0():
 
     # Now let's test non-fancy slice along zeroth dimension
 
+@across_configs(backends=("python","native"), precisions=("single","double"))
 def test_incsubtensor1():
     W = cgt.shared(np.zeros((5,3)), name="W")
     inc = cgt.matrix() # we'll increment W by this matrix
@@ -49,12 +50,12 @@ def test_incsubtensor1():
 
     # Now let's test the last kind of slice, where we have int arrays on each dimension
 
-
+@across_configs(backends=("python","native"), precisions=("single","double"))
 def test_incsubtensor2():
     W = cgt.shared(np.zeros((5,3)), name="W")
     i0 = cgt.vector(dtype='i8')
     i1 = cgt.vector(dtype='i8')
-    inc = cgt.vector(dtype='i8')
+    inc = cgt.vector()
 
     updates2 = {W : cgt.inc_subtensor(W, (i0,i1), inc)}
     f2 = cgt.function([i0,i1,inc],[],updates=updates2)

@@ -86,12 +86,13 @@ PoolInfo = namedtuple("PoolInfo", ["kernel_h", "kernel_w", "pad_h", "pad_w", "st
 
 def conv2d(x_BKRC, f_LKrc, kernelshape, pad=(0,0), stride=(1,1)):
     devtype = cgt.get_config()["default_device"].devtype
+    L,K,r,c = f_LKrc.shape
     if devtype == "gpu":        
-        return cudnn_ops.CudnnConvForward(pad[0],pad[1],stride[0],stride[1])
+        b_1K11 = cgt.zeros((1,L,1,1), cgt.floatX)
+        return core.Result(cudnn_ops.CudnnConvForward(pad[0],pad[1],stride[0],stride[1]), [x_BKRC, f_LKrc, b_1K11])
     else:
         assert devtype == "cpu"
         col_BmnZ = im2col(x_BKRC, kernelshape, pad, stride)
-        L,K,r,c = f_LKrc.shape
         f_LZ = f_LKrc.reshape([L, K*r*c])
         B,m,n,Z = col_BmnZ.shape
         col_Bmn_Z = col_BmnZ.reshape([B*m*n, Z])

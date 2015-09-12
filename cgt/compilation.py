@@ -22,7 +22,7 @@ def _function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
     if isinstance(updates,dict): updates=updates.items()
     if updates is None:  updates = []
     else: assert (isinstance(updates, list) and 
-                all(isinstance(a,tuple) and len(a)==2 
+        all(isinstance(a,tuple) and len(a)==2
                     and isinstance(a[0], core.Node) and isinstance(a[1], core.Node) 
                     for a in updates)), "updates should be a list of pairs (before, after)"
     if givens is None: givens = []
@@ -60,19 +60,21 @@ def determine_devices(nodes_sorted, updatetarg2src):
     for node in nodes_sorted:
 
         default_device = node.props.get("default_device", home_device)
-        if node in updatetarg2src:
+        if node.is_scalar():
+            device = home_device
+        elif node in updatetarg2src:
             device = node2dev[updatetarg2src[node]]
+            assert "native_"+device.devtype in node.op.available_impls, "XXX bug: update only works if final operation can be performed on target device"
         elif node.is_data():
             device = node.op.device
         elif node.is_argument():
             device = home_device
         else:
-
-            if "native_gpu" in node.op.available_impls and (default_device.devtype == "gpu" or "native_cpu" not in node.op.available_impls):                
+            if ("native_gpu" in node.op.available_impls) and ((default_device.devtype == "gpu") or ("native_cpu" not in node.op.available_impls)):                
                 assert cuda_enabled, "trying to put op on gpu but cuda is disabled"
                 device = core.Device("gpu", default_device.idx)
             else:
-                device = core.Device(devtype="cpu", idx=default_device.idx)
+                device = core.Device(devtype="cpu", idx=default_device.idx)                
         node2dev[node] = device
 
     return node2dev
@@ -332,6 +334,8 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
     node2dev = determine_devices(nodelist, {targ:src for (src,targ) in zip(updatesrcs, updatetargs_simple)})
     add_transports(nodelist, node2dev, analysis["node2shape"])
+    # XXX we're missing stuff used for shape computation
+    # XXX i think we might also have unnecessary stuff from shape comp in exe graph
 
     # Phase 3: build execution graph
     # ------------------------------------------------------
