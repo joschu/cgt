@@ -37,7 +37,7 @@ Installation
 **Dependencies**:
 
 - NumPy >= 1.9
-- Cython (optional, required for native backend)
+- Cython >= 0.22 (optional, required for native backend)
 - CUDA Tookit (optional, required for GPU implementation of Ops)
 
 
