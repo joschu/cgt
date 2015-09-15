@@ -9,7 +9,8 @@ from nose.plugins.skip import SkipTest
 
 @across_configs(precisions=("double",), backends=("native",))
 def test_cudnn():
-    if not get_compile_info()["CGT_ENABLE_CUDNN"]:
+    compile_info = get_compile_info()
+    if not (compile_info["CGT_ENABLE_CUDNN"] and compile_info["CGT_ENABLE_CUDA"]):
         raise SkipTest("CUDNN not enabled. Skipping this test")
 
     Xval = nr.randn(2,3,19,18)
