@@ -986,7 +986,7 @@ class Fill(Op):
     def shp_apply(self, inputs):
         return inputs
     def typ_apply(self, input_types):
-        assert all(x.dtype == 'i8' for x in input_types)
+        assert all(map(_isintscalar, input_types)), "Fill Op should have integer scalars as arguments"
         return TensorType(self.dtype, len(input_types))
     def get_closure(self):
         typ = ctypes.c_long if self.value.dtype.kind=='i' else ctypes.c_double
@@ -1001,11 +1001,12 @@ class Fill(Op):
                 for (int i=0; i < s; ++i) write->at<%(cdtype)s>(i) = value;
             }"""%dict(cdtype = np2c[outdtype])
         return NativeCompileInfo(func_code=func_code, closure_triples=self.get_closure())
-def _is_int(node):
-    return dtype_kind(node.dtype)=='i'
+
+def _isintscalar(typ):
+    return typ.dtype[0] == 'i' and typ.ndim == 0
 
 def _list_is_valid_sli(input_types):
-    return len(input_types)==3 and all(x.ndim==0 and dtype_kind(x.dtype)=='i' for x in input_types)
+    return len(input_types)==3 and all(map(_isintscalar, input_types))
 
 class Arange(Op):
     """
@@ -1140,7 +1141,7 @@ BINARY_INFO = {
     ">"   : BinaryInfo("greater",   np.greater,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>y"),
     "<="   : BinaryInfo("less_equal",   np.less_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x<=y"),
     ">="   : BinaryInfo("greater_equal",   np.greater_equal,    False,    (False,False),  'i1',     lambda x, y, z, gz: _no_grad(), "x>=y"),
-    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*z/x,gz*z*cgt.log(x)],"pow(x,y)"), 
+    "**"   : BinaryInfo("power",  np.power,      False,    (True,True), 'p',      lambda x, y, z, gz: [gz*y*cgt.power(x,y-1),gz*z*cgt.log(x)],"pow(x,y)"), 
     "=="  : BinaryInfo("equal", lambda x,y,out : np.equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x==y"),
     "!="  : BinaryInfo("not_equal", lambda x,y,out : np.not_equal(x,y,out=out),      True,      (False, False), 'i1',  lambda x, y, z, gz: _no_grad(), "x!=y"),
 }
@@ -1281,6 +1282,8 @@ class ElwiseBinary(Op):
         elif self.opname == "+":
             if l in node2sv and node2sv[l] == 0: out = r
             if r in node2sv and node2sv[r] == 0: out = l
+        elif self.opname == "**":
+            if r in node2sv and node2sv[r] == 1: out = l
 
         if out is not None:
             outtyp = self.typ_apply([p.typ for p in parents])
@@ -1802,8 +1805,8 @@ class GetSli(Op):
         newshape = copy.copy(s)
         newshape[self.axis] = cgt.ceil_divide(stop - start, step)
         return newshape
-    def typ_apply(self, input_types):
-        assert input_types[1].dtype == input_types[2].dtype == input_types[3].dtype == 'i8'
+    def typ_apply(self, input_types):        
+        assert _list_is_valid_sli(input_types[1:])
         return input_types[0]
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
@@ -2133,7 +2136,7 @@ class Mul21(Op):
                   cblas_%(letter)sgemv(CblasRowMajor, (cublasOperation_t)(!cl->tA), N, M, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
                       incx, beta, (%(cdtype)s*)y->data(), incy);
                 }"""%dict(letter=letter, cdtype = np2c[npdtype])         
-        return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples = self.get_closure())
+        return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lopenblas", closure_triples = self.get_closure())
     def get_expr(self, (xexpr,yexpr)):
         return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
 
@@ -2215,7 +2218,7 @@ class Mul22(Op):
                       ldb, beta, (%(cdtype)s*)C->data(), ldc);
                 }
                 """%dict(letter=letter, cdtype = np2c[npdtype])
-            return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples=self.get_closure())
+            return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lopenblas", closure_triples=self.get_closure())
         elif devtype == "gpu":
             letter = letter.upper()
             code = r"""
@@ -2295,7 +2298,7 @@ class BatchedMul22(Op):
               }
             }
             """%dict(letter=letter, cdtype = np2c[npdtype])
-        return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lblas", closure_triples=self.get_closure())
+        return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lopenblas", closure_triples=self.get_closure())
     # </COPIED>
 
 class Outer(Op):
@@ -2456,6 +2459,7 @@ class MakeTuple(Op):
     def shp_apply(self, inputs):
         return tuple(cgt.shape(x) for x in inputs)
     def typ_apply(self, input_types):
+        assert all(isinstance(t, TensorType) for t in input_types), "Can only create tuples of tensors" # @TUPLES_OF_TENSORS
         return TupleType(*input_types)
     
 def unpack(tup):
