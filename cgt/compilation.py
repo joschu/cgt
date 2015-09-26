@@ -665,7 +665,8 @@ def get_compile_info():
         if _COMPILE_CONFIG["CGT_ENABLE_CUDNN"]: includes += " -I"+_COMPILE_CONFIG["CUDNN_ROOT"]
         _COMPILE_CONFIG["INCLUDES"] = includes
 
-        link_flags = "-lcgt -L"+_COMPILE_CONFIG["CGT_LIBRARY_DIR"]
+        link_flags = "-lcgt -L%s -L%s"%(_COMPILE_CONFIG["CGT_LIBRARY_DIR"], _COMPILE_CONFIG["OPENBLAS_INCLUDE_DIR"])
+        link_flags += " -Wl,-rpath,%s -Wl,-rpath,%s"%(_COMPILE_CONFIG["CGT_LIBRARY_DIR"], _COMPILE_CONFIG["OPENBLAS_INCLUDE_DIR"])
         if _COMPILE_CONFIG["CGT_ENABLE_CUDA"]: link_flags += " -L"+_COMPILE_CONFIG["CUDA_LIBRARY_DIR"]
         if _COMPILE_CONFIG["CGT_ENABLE_CUDNN"]:
             link_flags += " -L"+_COMPILE_CONFIG["CUDNN_ROOT"]

@@ -333,6 +333,8 @@ def _subtensor(x, slis, y=None):
         return _subtensor1(x, slis)
     # Case 2.
     elif all(_iscolon(sli) or isinstance(sli, (slice,int)) for sli in slis):
+        if y is not None:
+            assert np.sum([isinstance(sli, (slice,int)) for sli in slis])==1, "currently can only increment subtensor involving a slice along one axis"
         return _subtensor2(x, slis, y)
     # Case 3.
     elif len(slis) == x.ndim and all(_is1dintarray(sli) for sli in slis):

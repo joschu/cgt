@@ -2133,7 +2133,7 @@ class Mul21(Op):
                     int N = A->shape()[1];
                     const %(cdtype)s alpha=1, beta=0;
                     int incx = 1, incy = 1;
-                  cblas_%(letter)sgemv(CblasRowMajor, (cublasOperation_t)(!cl->tA), N, M, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
+                  cublas_%(letter)sgemv((cublasHandle_t)cl->handle, (cublasOperation_t)(!cl->tA), N, M, alpha, (%(cdtype)s*)A->data(), lda, (%(cdtype)s*)x->data(),
                       incx, beta, (%(cdtype)s*)y->data(), incy);
                 }"""%dict(letter=letter, cdtype = np2c[npdtype])         
         return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lopenblas", closure_triples = self.get_closure())
@@ -2305,7 +2305,7 @@ class Outer(Op):
     available_impls = ("python","native_cpu")        
     def get_py_func(self, input_types):
         def f(reads, write):
-            np.outer(reads[0], reads[1], out=write)
+            write[:] = np.outer(reads[0], reads[1])
         return f
     def pullback(self, inputs, _output, goutput):
         return [goutput.dot(inputs[0]), inputs[1].dot(goutput)]
