@@ -392,7 +392,7 @@ cdef class CppArrayWrapper:
         return self.arr.get().ndim()
     @property
     def shape(self):
-        return [self.arr.get().shape()[i] for i in range(self.arr.get().ndim())]
+        return tuple([self.arr.get().shape()[i] for i in range(self.arr.get().ndim())])
     @property
     def size(self):
         return self.arr.get().size()

@@ -22,4 +22,4 @@ call_and_print("mkdir -p {unpack_dir} && tar -xf {fname} --directory {unpack_dir
     fname=fname,unpack_dir=unpack_dir))
 os.chdir(unpack_dir)
 print "Compiling OpenBLAS...this will take a minute or so"
-call_and_print("make -j ONLY_CBLAS=1 NO_LAPACK=1 NO_LAPACKE=1 USE_OPENMP=0 NUM_THREADS=%i &> compile_output.txt"%multiprocessing.cpu_count())
+call_and_print("make -j ONLY_CBLAS=1 NO_LAPACK=1 NO_LAPACKE=1 USE_OPENMP=0 NUM_THREADS=%i"%multiprocessing.cpu_count())
