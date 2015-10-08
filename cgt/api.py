@@ -44,7 +44,7 @@ tensor4.__doc__ = _tensor_doc_template%("4-tensor",4)
 
 def tensor(dtype, ndim, name=None, fixed_shape=None):
     return core.Argument(core.TensorType(cgt.floatX if dtype is None else dtype, ndim), name, fixed_shape=fixed_shape)
-scalar.__doc__ = _tensor_doc_template%("k-tensor","k")
+tensor.__doc__ = _tensor_doc_template%("k-tensor","k")
 
 # ================================================================
 # Symbolic functions
