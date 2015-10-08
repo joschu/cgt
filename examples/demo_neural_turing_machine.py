@@ -10,7 +10,7 @@ Along with range of elements [low, high]
 Mprev_bnm:          previous memory state. [-inf, inf]
 X_bk:               external inputs. [0,1]
 wprev_bHn:          previous weights (read & write). [0, 1]. Normalized along axis 2.
-rprev_bhm:          previous vector read from memory. [-1, 1]
+rprev_bhm:          previous vector read from memory. [-inf, inf]
 k_bHm:              key vectors [-1, 1]
 beta_bH:            key strength [0, infinity]
 g_bH:               gating for weight update.  [0, 1]
@@ -315,7 +315,7 @@ class RepeatCopyTask(object):
 
         x_tbk[1:self.t+1,:,2:] = message
         x_tbk[self.t+1, :, 1] = 1 # end symbol
-        y_tbk = np.zeros((2*self.t+2, self.b, self.p),cgt.floatX)
+        y_tbk = np.zeros(((1 + self.n_copies)*self.t+2, self.b, self.p),cgt.floatX)
         for i in xrange(self.n_copies):
             start=self.t+2+i*self.t
             y_tbk[start:start+self.t] = message # desired output
@@ -371,6 +371,7 @@ def main():
     parser.add_argument("--n_batches",type=int,default=1000000)
     parser.add_argument("--profile",action="store_true")
     parser.add_argument("--unittest", action="store_true")
+    parser.add_argument("--task",choices=["copy","reverse_copy","repeat_copy"],default="copy")
     args = parser.parse_args()
     np.seterr("raise")
 
@@ -412,7 +413,15 @@ def main():
 
     tstart = time.time()
     ntm = make_ntm(opt)
-    task = CopyTask(opt.b, seq_length, opt.p)
+    if args.task == "copy":
+        task = CopyTask(opt.b, seq_length, opt.p)
+    elif args.task == "reverse_copy":
+        task = ReverseCopyTask(opt.b, seq_length, opt.p)
+    elif args.task == "repeat_copy":
+        n_copies = 4
+        task = RepeatCopyTask(opt.b, seq_length, opt.p, n_copies)
+
+
     f_loss, f_loss_and_grad, params = make_funcs(opt, ntm, task.total_time(), task.loss_timesteps())
     print "graph construction and compilation took %g seconds"%(time.time()-tstart)
 
