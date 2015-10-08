@@ -191,6 +191,18 @@ def dot(x, y):
     else:
         raise NotImplementedError
 
+def diag(v, k=0):
+    """
+    see numpy.diag
+    """
+    assert isinstance(k, int)
+    assert v.ndim == 1
+    n = size(v,0)+abs(k)
+    out = cgt.zeros((n,n), v.dtype)
+    out = inc_subtensor(out, (cgt.arange(n), cgt.arange(n)+k), v)
+    return out
+
+
 def einsum(desc, x, y):
     """
     Like numpy.einsum except x and y are symbolic variables

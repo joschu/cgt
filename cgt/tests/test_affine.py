@@ -274,6 +274,14 @@ def convlike(F_abcd, y_e_bcd, q_ae):
         P_ae = F_a_bcd.dot(y_e_bcd.T)
     return (P_ae*q_ae).sum()
 
+def diag(x, y):
+    if isinstance(x, np.ndarray):
+        return (np.diag(x)*y).sum()
+    else:
+        return (cgt.diag(x)*y).sum()
+
+
+
 
 ################################################################
 ### Tests 
@@ -363,6 +371,10 @@ def test_affine():
 
     # check_affine(rfft, M35)
     check_affine(convlike, T2357, nr.randn(11,3*5*7), nr.randn(2,11))
+
+    M33 = nr.randn(3,3)
+    check_affine(diag, v3, M33)
+
 
 
     if DISPLAY:

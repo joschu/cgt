@@ -2019,6 +2019,9 @@ class IncFlatIndices(Op):
             # This is unvectorized so it gives the right answer when inds are non-unique
             # faster vectorized version: write[inds] += y
         return f
+    def pullback(self, inputs, output, goutput):
+        x, inds, y = inputs
+        return [goutput, None, Result(GetFlatIndices(), [goutput, inds])]        
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, input_types):
