@@ -344,9 +344,10 @@ def _subtensor(x, slis, y=None):
         assert y is None
         return _subtensor1(x, slis)
     # Case 2.
-    elif all(_iscolon(sli) or isinstance(sli, (slice,int)) for sli in slis):
+    elif all(_iscolon(sli) or isinstance(sli, slice) or _is_int_scalar(sli) for sli in slis):
         if y is not None:
-            assert np.sum([isinstance(sli, (slice,int)) for sli in slis])==1, "currently can only increment subtensor involving a slice along one axis"
+            # check that slice is only along one axis:
+            assert np.sum([not _iscolon(sli) for sli in slis])==1, "currently can only increment subtensor involving a slice along one axis"
         return _subtensor2(x, slis, y)
     # Case 3.
     elif len(slis) == x.ndim and all(_is1dintarray(sli) for sli in slis):
@@ -357,6 +358,11 @@ def _subtensor(x, slis, y=None):
     else:
         raise ValueError('Tried to index with slices %s. See cgt.subtensor docstring for description of valid indexing expressions'%slis)
 
+def _is_int_scalar(x):
+    return isinstance(x,int) \
+            or np.isscalar(x) and x.dtype.kind=='i' \
+            or (isinstance(x, core.Node) and x.ndim == 0 and core.dtype_kind(x.dtype)=='i')
+     
 def _subtensor1(x, slis):
 
     axidx = 0 # number of axes from x matched to ":"s so far
@@ -376,7 +382,7 @@ def _subtensor2(x, slis, y):
 
     dims2drop = []
     for (ax,sli) in enumerate(slis):
-        if isinstance(sli, int):
+        if _is_int_scalar(sli):
             sli = slice(sli, sli + 1, 1)
             dims2drop.append(ax)
 
