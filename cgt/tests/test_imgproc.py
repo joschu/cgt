@@ -34,7 +34,8 @@ def test_cudnn():
     angrads = fgrad(Xval,Wval,bval)
     nugrads = numeric_grad_multi(fcost, [Xval, Wval, bval],eps=1e-3)
     for (nugrad,angrad) in zip(nugrads,angrads):
-        assert np.allclose(nugrad, angrad)
+        assert np.allclose(nugrad, angrad, rtol=9e-3, atol=1e-7) 
+        # precision issue: https://groups.google.com/forum/?utm_medium=email&utm_source=footer#!msg/cgt-users/l59nwLF9BzM/aDxcHU5pCgAJ
 
 @across_configs(precisions=("double",), backends=("native",))
 def test_pool(**kwargs):
