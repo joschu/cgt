@@ -589,11 +589,11 @@ def shape(x):
     else:
         return tuple(map(shape, x.parents))
 
-def shared(val, name=None, device=None, fixed_shape_mask=None):
+def shared(value, name=None, device=None, fixed_shape_mask=None):
     """
     Creates a variable that has an underlying data value, which can be changed externally
     """
-    op = core.InMemoryData(val, device=device,fixed_shape_mask=fixed_shape_mask)
+    op = core.InMemoryData(value, device=device,fixed_shape_mask=fixed_shape_mask)
     return core.Result(op, [], name=name)
 
 def size(x, axis):
