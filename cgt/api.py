@@ -612,6 +612,7 @@ def stack(tensors, axis=0):
     a tensor with shape (2, 3, 2, 2)
     """
     assert (len(tensors) > 0)
+    assert 0 <= axis and axis <= tensors[0].ndim
     shp = shape(tensors[0])
     newshp = shp[:axis] + [1] + shp[axis:]
     return concatenate([reshape(t, newshp) for t in tensors], axis=axis)
