@@ -602,13 +602,20 @@ def size(x, axis):
     """
     return core.Result(core.Size(axis), [x])
 
-def stack(scalars):
+def stack(tensors, axis=0):
     """
-    scalars : a list of scalar variables
-    stack([a,b,c]) builds a vector with a,b,c as its elements
+    tensors : a list of tensor or scalar variables with the same shape
+    along all axes
+
+    If a, b, c have shape (2, 2, 2) then stack([a,b,c], axis=0) builds
+    a tensor with shape (3, 2, 2, 2) and stack([a,b,c], axis=0) builds
+    a tensor with shape (2, 3, 2, 2)
     """
-    assert (len(scalars) > 0) and all(s.ndim == 0 for s in scalars)
-    return core.Result(core.Stack(), scalars)
+    assert (len(tensors) > 0)
+    assert 0 <= axis and axis <= tensors[0].ndim
+    shp = shape(tensors[0])
+    newshp = shp[:axis] + [1] + shp[axis:]
+    return concatenate([reshape(t, newshp) for t in tensors], axis=axis)
 
 def sub2ind(subs, shp):
     """

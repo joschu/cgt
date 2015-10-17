@@ -1499,32 +1499,6 @@ class Concatenate(Op):
                 n_in=len(input_types), cdtype=np2c[input_types[0].dtype],axis=self.axis)
         return NativeCompileInfo(code)
 
-# TODO testme
-class Stack(Op):
-    available_impls = ("python","native_cpu")
-    def get_diff(self, num_inputs):
-        return [True for _ in xrange(num_inputs)]
-    def get_py_func(self, input_types):
-        def fn(reads, write):
-            write[:] = np.array(reads)
-        return fn
-    def pullback(self, inputs, output, goutput):
-        return [goutput[i] for i in xrange(len(inputs))]
-    def shp_apply(self, inputs):
-        return [cgt.constant(len(inputs))] + cgt.shape(inputs[0])
-    def typ_apply(self, input_types):
-        assert utils.allsame(input_types)
-        return TensorType(input_types[0].dtype, input_types[0].ndim+1)
-    def get_native_compile_info(self, input_types, devtype):
-        code = r"""
-            CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
-                for (int i=0; i < %(n_in)s, ++i) {
-                    write->at<%(cdtype)s>(i) = reads[i]->at<%(cdtype)s>(0);
-                }
-            }
-            """%dict(n_in = len(input_types),cdtype=np2c[input_types[0].dtype])
-        return NativeCompileInfo(code)
-
 class Repeat(Op):
     available_impls = ("python","native_cpu")        
     def __init__(self, axes):
