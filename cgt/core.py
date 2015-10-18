@@ -1093,13 +1093,13 @@ def _nu_iceil(x,out=None):
     if out is None:
         return np.ceil(x)
     else:
-        np.ceil(x,out)
+        out[...] = np.ceil(x)
 
 def _nu_ifloor(x,out=None):
     if out is None:
         return np.floor(x)
     else:
-        np.floor(x,out)
+        out[...] = np.floor(x)
 
 def _nu_divide(x, y, out=None):
     if x.dtype.kind != 'f': x = x.astype(cgt.floatX)
