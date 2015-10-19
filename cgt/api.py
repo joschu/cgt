@@ -604,8 +604,13 @@ def size(x, axis):
 
 def stack(tensors, axis=0):
     """
+    Take a sequence of tensors and stack them on given axis to make a single
+    tensor. The size in dimension `axis` of the result will be equal to the number
+    of tensors passed.
+
     tensors : a list of tensor or scalar variables with the same shape
     along all axes
+    axis : an int specifying the index of the new axis, default value is 0
 
     If a, b, c have shape (2, 2, 2) then stack([a,b,c], axis=0) builds
     a tensor with shape (3, 2, 2, 2) and stack([a,b,c], axis=1) builds
