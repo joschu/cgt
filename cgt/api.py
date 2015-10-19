@@ -608,7 +608,7 @@ def stack(tensors, axis=0):
     along all axes
 
     If a, b, c have shape (2, 2, 2) then stack([a,b,c], axis=0) builds
-    a tensor with shape (3, 2, 2, 2) and stack([a,b,c], axis=0) builds
+    a tensor with shape (3, 2, 2, 2) and stack([a,b,c], axis=1) builds
     a tensor with shape (2, 3, 2, 2)
     """
     assert (len(tensors) > 0)
