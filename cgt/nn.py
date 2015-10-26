@@ -1,9 +1,9 @@
-__doc__ = """
+"""
 Neural network library, drawing inspiration from Torch's nn and nngraph
 """
 
 import cgt
-from cgt import core, size
+from cgt import core
 import numpy as np
 from .nn_ops.im2col import im2col
 from .nn_ops.cross_channel_lrn import cross_channel_lrn #pylint: disable=W0611
@@ -155,7 +155,7 @@ def init_array(init, shape):
 
 
 def get_xavier_weight(init, shape):
-    """For relu activation scale (init.scale) should be sqrt(2). For sigmoid and tanh 1.0 should be used.
+    r"""For relu activation scale (init.scale) should be sqrt(2). For sigmoid and tanh 1.0 should be used.
            Math depends on chosen underlying distribution (Normal, Uniform, etc) and activation function.
            For uniform with RELU you obtain
            a = sqrt{frac{6}{fan_{in}+fan_{out}}
@@ -247,10 +247,10 @@ def sgd(cost, params, learning_rate):
     params : a list of cgt shared variables. We generate update
             expressions w.r.t. these variables.
     learning_rate : float
-        Tunes the size of the update step.
+
     Returns
     -------
-    list of tuples of the form (param, updates)
+    list of tuples of the form (param, new_param)
     """
     updates = []
     grads = cgt.grad(cost, params)
@@ -260,10 +260,10 @@ def sgd(cost, params, learning_rate):
     return updates
 
 
-def momentum(cost, params, learning_rate, momentum=0.9):
+def momentum(cost, params, learning_rate, mu=0.9):
     """Stochastic Gradient Descent (SGD) updates with momentum
     Math:
-    * ``velocity := momentum * velocity - learning_rate * grad``
+    * ``velocity := mu * velocity - learning_rate * grad``
     * ``param := param + velocity``
     Parameters
     ----------
@@ -274,28 +274,34 @@ def momentum(cost, params, learning_rate, momentum=0.9):
         Tunes the size of the update step.
     momentum: float
         Tunes the weight given to the velocity term.
+    
     Returns
     -------
-    list of tuples of the form [(param, updates) (velocity, velocity_update)]
+    list of tuples of the form (param, new_param) and (velocity, new_velocity)
     """
     updates = []
     grads = cgt.grad(cost, params)
     for param, grad in zip(params, grads):
-        value = param.op.get_value()
-        velocity = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
-        x = momentum * velocity + param - learning_rate * grad
-        updates.append((velocity, x-param))
-        updates.append((param, x))
+        assert isinstance(param.op, core.GetData)
+        velocity = cgt.shared(np.zeros(param.op.get_shape(), dtype=param.dtype))
+        new_velocity = mu * velocity - learning_rate * grad
+        new_param = param + new_velocity
+        updates.append((velocity, new_velocity))
+        updates.append((param, new_param))
 
     return updates
 
 
-def nesterov_momentum(cost, params, learning_rate, momentum=0.9):
+def nesterov_momentum(cost, params, learning_rate, mu=0.9):
     """Stochastic Gradient Descent (SGD) updates with Nesterov momentum
 
     Math:
-    * ``velocity := momentum * velocity - learning_rate * grad``
-    * ``param := momentum*velocity + param - learning_rate * grad``
+    * ``new_velocity := mu * velocity - learning_rate * grad``
+    * ``param := param - mu * velocity + (1 + mu) * new_velocity``
+
+    See http://arxiv.org/abs/1212.0901v2, first part of eq 7
+    At each step we're returning the "peaked-ahead parameters"
+
 
     Parameters
     ----------
@@ -304,22 +310,23 @@ def nesterov_momentum(cost, params, learning_rate, momentum=0.9):
             expressions w.r.t. these variables.
     learning_rate : float
         Tunes the size of the update step.
-    momentum: float
+    mu: float
         Tunes the weight given to the velocity term.
 
     Returns
     -------
-    list of tuples of the form [(param, updates) (velocity, velocity_update)]
+    list of tuples of the form (param, updates), (velocity, velocity_update)
     """
     updates = []
     grads = cgt.grad(cost, params)
 
     for param, grad in zip(params, grads):
-        value = param.op.get_value()
-        velocity = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
-        x = momentum * velocity - learning_rate * grad
-        updates.append((velocity, x))
-        updates.append((param, momentum*x + param - learning_rate * grad))
+        assert isinstance(param.op, core.GetData)
+        velocity = cgt.shared(np.zeros(param.op.get_shape(), dtype=param.dtype))
+        new_velocity = mu * velocity - learning_rate * grad
+        new_param = param - mu * velocity + (mu + 1) * new_velocity
+        updates.append((velocity, new_velocity))
+        updates.append((param, new_param))
 
     return updates
 
@@ -356,8 +363,8 @@ def adagrad(cost, params, learning_rate=1.0, epsilon=1e-6):
     grads = cgt.grad(cost, params)
 
     for param, grad in zip(params, grads):
-        value = param.op.get_value()
-        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        assert isinstance(param.op, core.GetData)
+        accu = cgt.shared(np.zeros(param.op.get_shape(), dtype=param.dtype))
         accu_new = accu + grad ** 2
         updates.append((accu, accu_new))
         updates.append((param, param - (learning_rate * grad) / cgt.sqrt(accu_new + epsilon)))
@@ -387,7 +394,7 @@ def rmsprop(cost, params, learning_rate=1.0, rho=0.9, epsilon=1e-6):
 
     Returns
     -------
-    list of tuples of the form [(param, updates), (accumulated_RMS_grads, accumulated_RMS_grads_new)]
+    list of tuples of the form (param, updates), (accumulated_RMS_grads, accumulated_RMS_grads_new)
 
     References
     ----------
@@ -400,8 +407,8 @@ def rmsprop(cost, params, learning_rate=1.0, rho=0.9, epsilon=1e-6):
     grads = cgt.grad(cost, params)
 
     for param, grad in zip(params, grads):
-        value = param.op.get_value()
-        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        assert isinstance(param.op, core.GetData)
+        accu = cgt.shared(np.zeros(param.op.get_shape(), dtype=param.dtype))
         accu_new = rho * accu + (1 - rho) * grad ** 2
         updates.append((accu, accu_new))
         updates.append((param, param - (learning_rate * grad / cgt.sqrt(accu_new + epsilon))))
@@ -434,7 +441,7 @@ def adadelta(cost, params, learning_rate=1.0, rho=0.95, epsilon=1e-6):
     Returns
     -------
     list of tuples of the form
-    [(param, updates), (accumulated_grads, accumulated_grads_new), (step_accum, step_accum_new)]
+    (param, updates), (accumulated_grads, accumulated_grads_new), (step_accum, step_accum_new)
 
     References
     ----------
@@ -446,9 +453,9 @@ def adadelta(cost, params, learning_rate=1.0, rho=0.95, epsilon=1e-6):
     grads = cgt.grad(cost, params)
 
     for param, grad in zip(params, grads):
-        value = param.op.get_value()
-        accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
-        delta_accu = cgt.shared(np.zeros(value.shape, dtype=value.dtype))
+        assert isinstance(param.op, core.GetData)
+        accu = cgt.shared(np.zeros(param.op.get_shape(), dtype=param.dtype))
+        delta_accu = cgt.shared(np.zeros(param.op.get_shape(), dtype=param.dtype))
 
         accu_new = rho * accu + (1 - rho) * grad ** 2
         updates.append((accu, accu_new))

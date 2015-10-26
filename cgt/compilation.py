@@ -147,7 +147,7 @@ def topsorted_shapes_first(outputs, node2shape):
                 stack.append((j,0))
     return out
 
-def determine_memowner(nodes_sorted, updates, node2dev):
+def determine_memowner(nodes_sorted, updates, node2dev, outputs):
     # First determine how many "child" nodes each node has
     node2child = defaultdict(list)
     for node in nodes_sorted:
@@ -174,11 +174,14 @@ def determine_memowner(nodes_sorted, updates, node2dev):
         elif enable_inplace_opt and node.op.return_type == "byref": # TODO think about if we need any other conditions
             nodeshape = node.op.shp_apply(node.parents)
             for parent in node.parents:
+                parentowner = node2memowner[parent]
                 if (len(node2child[parent])==1
                         and nodeshape==cgt.shape(parent) # XXX not a very robust way to check
                         and node.dtype == parent.dtype
-                        and _is_data_mutable(parent)):
-                    base = parent
+                        and _is_data_mutable(parentowner)
+                        and node not in outputs
+                        ):
+                    base = parentowner
                     break
         # TODO: add optimization for in-place incrementing
         node2memowner[node] = base
@@ -231,7 +234,6 @@ def create_execution_graph(inputs, nodes_sorted, node2shape, node2memowner, node
                             arr_locs.append(arr_loc)
                         write_loc = counter.new_memloc(node2dev[node].devtype)
                         instrs.append(BuildTup(node.typ, arr_locs, write_loc))
-
                 else:
                     # If this node writes to another node's memory, the devices must be the same
                     # this should have been enforced in determine_devices()
@@ -343,10 +345,10 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     nodes_sorted = topsorted_shapes_first(outputs_updatetargs_simple, analysis["node2shape"]) # XXX don't need shapes for byval ops
     # For each node, figure out if its output should be written to a previous node's memory
     # (memowner : "memory owner")
-    updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
-    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple), node2dev)
-    # Find the outputs we want to return
     outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
+    updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
+    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple), node2dev, outputs_simple)
+    # Find the outputs we want to return
     # Generate execution graph
     eg, node2memloc = create_execution_graph(
         inputs, nodes_sorted, analysis["node2shape"], node2memowner, node2dev)
@@ -895,6 +897,6 @@ def _list_to_json(xs):
     return [x.to_json() for x in xs]
 
 def _is_data_mutable(node):
-    return not node.is_input() and not isinstance(node.op, core.Constant)
+    return not node.is_input() and node.op.return_type == "byref"
 
 

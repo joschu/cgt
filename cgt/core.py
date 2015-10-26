@@ -571,7 +571,7 @@ class InMemoryData(GetData):
     def get_size(self):
         return self._value.size
     def set_value(self, value):
-        value = value.astype(self.typ.dtype)
+        value = np.asarray(value, dtype=self.typ.dtype)
         if self.use_numpy:
             self._value = value.copy()
         else:
@@ -1777,9 +1777,8 @@ class GetSli(Op):
     def shp_apply(self, inputs):
         arr, start, stop, step = inputs
         s = cgt.shape(arr) #pylint: disable=W0621
-        newshape = copy.copy(s)
-        newshape[self.axis] = cgt.ceil_divide(stop - start, step)
-        return newshape
+        s[self.axis] = cgt.ceil_divide(stop - start, step)
+        return s
     def typ_apply(self, input_types):        
         assert _list_is_valid_sli(input_types[1:])
         return input_types[0]
