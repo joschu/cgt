@@ -179,7 +179,7 @@ def determine_memowner(nodes_sorted, updates, node2dev, outputs):
                         and nodeshape==cgt.shape(parent) # XXX not a very robust way to check
                         and node.dtype == parent.dtype
                         and _is_data_mutable(parentowner)
-                        and node not in outputs
+                        and parent not in outputs
                         ):
                     base = parentowner
                     break
