@@ -281,6 +281,21 @@ def diag(x, y):
         return (cgt.diag(x)*y).sum()
 
 
+def inc_vec(M,x, Y):
+    if isinstance(M, np.ndarray):
+        M1 = M.copy()
+        M1[0] += x
+    else:
+        M1 = cgt.inc_subtensor(M, 0, x)
+    return (M1*Y).sum()
+
+def inc_row(M,x, Y):
+    if isinstance(M, np.ndarray):
+        M1 = M.copy()
+        M1[0:1] += x
+    else:
+        M1 = cgt.inc_subtensor(M, slice(0,1), x)
+    return (M1*Y).sum()
 
 
 ################################################################
@@ -322,10 +337,11 @@ def test_affine():
     M23 = mA
     M35 = nr.randn(3,5)
     v3 = nr.randn(3)
-    v13 = v3.reshape(1,3) #XXX
+    v13 = v3.reshape(1,3)
     v5 = nr.randn(5)
-    v15 = v5.reshape(1,5) #XXX
+    v15 = v5.reshape(1,5)
     v3b = nr.randn(3)
+
 
     check_affine(matmat00, M23, M35)
     check_affine(matmat01, M23, M35.T)
@@ -374,6 +390,10 @@ def test_affine():
 
     M33 = nr.randn(3,3)
     check_affine(diag, v3, M33)
+
+    check_affine(inc_vec, M23, v3, nr.randn(2,3))
+    check_affine(inc_row, M23, v13, nr.randn(2,3))
+
 
 
 

@@ -1809,7 +1809,7 @@ class IncSli(Op):
     def __init__(self, axis):
         self.axis = axis
     def get_diff(self, _):
-        return [True,False,True,True]
+        return [True,False,False,False,True]
     def get_py_func(self, input_types):
         def f(reads, write):
             x, start, stop, step, y=reads
@@ -1822,7 +1822,8 @@ class IncSli(Op):
             write[slices] += y
         return f
     def pullback(self, inputs, output, goutput):
-        raise NotImplementedError
+        _x, start,stop,step, _y = inputs
+        return [goutput, None, None,None,Result(GetSli(self.axis), [goutput, start,stop,step])]        
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
     def typ_apply(self, input_types):
@@ -2352,6 +2353,11 @@ class Composition(Op):
         assert [x.is_input() for x in inputs]
         self._nodes = list(topsorted(outputs))
 
+        self._needs_compute_pullback = True
+
+    def _compute_pullback(self):
+        inputs = self._inputs
+        outputs = self._outputs
         dio = set(differentiably_influences(outputs))
         wrt = [x for x in inputs if x in dio]
 
@@ -2368,6 +2374,7 @@ class Composition(Op):
 
         self._diff = [node in dio for node in self._inputs]
         self._out_typs = [x.typ for x in outputs]
+        self._needs_compute_pullback = False
 
     def get_diff(self, _):
         return self._diff
@@ -2383,6 +2390,8 @@ class Composition(Op):
         # repl.update(utils.safezip(self._outputs, output))
         # repl.update(utils.safezip(self._goutput, goutput))
         # return clone(self._gin, replace=repl)
+        if self._needs_compute_pullback:
+            self._compute_pullback()
         gwrt = pullback([output], [goutput], inputs)
     def shp_apply(self, inputs):
         out = clone(self._shp, replace=dict(utils.safezip(self._inputs, inputs)))

@@ -383,8 +383,13 @@ def _subtensor2(x, slis, y):
     dims2drop = []
     for (ax,sli) in enumerate(slis):
         if _is_int_scalar(sli):
+            if y is None:
+                dims2drop.append(ax)
+            else:
+                yshape = cgt.shape(y)
+                yshape.insert(ax, 1)
+                y = y.reshape(yshape)
             sli = slice(sli, sli + 1, 1)
-            dims2drop.append(ax)
 
         assert isinstance(sli.step, int) or sli.step is None
         step = 1 if sli.step is None else sli.step
@@ -401,10 +406,10 @@ def _subtensor2(x, slis, y):
         if y is None:
             x = core.Result(core.GetSli(ax), [x, start, stop, step])
         else:
-            x = core.Result(core.IncSli(ax), [x, start, stop, step, y])
+            # note: we only support incrementing slice along one axis
+            return core.Result(core.IncSli(ax), [x, start, stop, step, y])
 
     x = _dropdims(x, dims2drop)
-
     return x
 
 def _subtensor3(x, slis, y):
