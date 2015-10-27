@@ -230,7 +230,7 @@ class Node(object):
         """
         Return UNIQUE string identifying this Node
         """
-        if self.is_input():
+        if self.is_input() or self.op.is_random_op:
             return str(self.counter)
         else:
             hashobj = hashlib.md5(self.op.get_hash())
@@ -398,6 +398,7 @@ class Op(object):
     writes_to_input = -1 # whether output is allowed to have same underlying data as input
     available_impls = () # python, native_cpu, native_gpu
     is_data_op = False
+    is_random_op = False
 
     # pylint: disable=W0613
 
@@ -1049,6 +1050,7 @@ class ScalarRng(Op):
     (shape...) -> array filled with iid random numbers, from either uniform or normal distribution
     """
     available_impls = ("python",)        
+    is_random_op = True
     def __init__(self, kind):
         assert kind in ("uniform","gaussian")
         self.kind = kind
