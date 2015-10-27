@@ -13,6 +13,7 @@ The core features are as follows:
 - Automatic differentiation of functions involving multidimensional arrays, using computation graphs
 - Compile fast implementations of array computations that can be run in parallel on multiple CPUs and GPUs. (GPU and multi-GPU support is currently in work-in-progress)
 - A compilation process that simplifies your function through arithmetic identities and in-place optimizations, which readily handles extremely large graphs.
+
 .. - Supports both forward and backward derivative propagation, as well as higher-order differentiation.
 .. - CGT can export standalone C++ code for of your functions.
 
@@ -36,9 +37,18 @@ Installation
 
 **Dependencies**:
 
+Python backend requires:
+
 - NumPy >= 1.9
-- Cython >= 0.22 (optional, required for native backend)
-- CUDA Tookit (optional, required for GPU implementation of Ops)
+
+Native (C++) backend requires:
+
+- Cython >= 0.22
+- A C++ compiler supporting C++11 (g++ >= 4.7, or recent clang)
+
+GPU on native backend requires:
+
+- CUDA Tookit
 
 
 Option 1: Python (NumPy) only
@@ -49,10 +59,10 @@ Just update your ``PYTHONPATH`` as follows::
 
     export PYTHONPATH=/path/to/cgt
 
-Option 2: Build C++ backend
----------------------------
+Option 2: Build native (C++) backend
+------------------------------------
 
-If you want to use the C++ backend, which has better performance and enables multithreading, then Cython is required, and the installation procedure is as follows.
+If you want to use the native (C++) backend, which has better performance and enables multithreading, then Cython is required, and the installation procedure is as follows.
 First, ``cd`` into the source directory. Then, type::
 
     mkdir build
