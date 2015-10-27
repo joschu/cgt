@@ -1,9 +1,10 @@
 #pragma once
 
-#include "stddef.h"
-#include "stdbool.h"
 #include "IRC.h"
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstddef>
 #include <atomic>
 
 // ================================================================
