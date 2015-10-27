@@ -49,7 +49,7 @@ class Im2Col(core.Op):
         code = r"""
             CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
                 cgtArray* im = reads[0];
-                const size_t* imshape = im->shape();
+                const long* imshape = im->shape();
                 int batchsize = imshape[0],
                     channels = imshape[1],
                     height = imshape[2],
@@ -81,10 +81,10 @@ class Col2Im(core.Op):
         code = r"""
             CGT_EXPORT_C void $function($closure* cl, cgtArray** reads, cgtArray* write) {
                 cgtArray* col = reads[0];
-                size_t batchsize = reads[1]->at<size_t>(0),
-                       channels  = reads[2]->at<size_t>(0),
-                       height    = reads[3]->at<size_t>(0),
-                       width     = reads[4]->at<size_t>(0);
+                long batchsize = reads[1]->at<long>(0),
+                       channels  = reads[2]->at<long>(0),
+                       height    = reads[3]->at<long>(0),
+                       width     = reads[4]->at<long>(0);
                 for (int i=0; i < batchsize; ++i) {
                     col2im_cpu<%(cdtype)s, %(kernel_h)s,%(kernel_w)s,%(pad_h)s,%(pad_w)s,%(stride_h)s,%(stride_w)s>
                     ((%(cdtype)s*)col->data() + col->stride(0)*i, channels, height, width,(%(cdtype)s*)write->data() + write->stride(0)*i);

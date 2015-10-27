@@ -39,7 +39,7 @@ public:
             instr->fire(this);
         }
         args_ = NULL;
-        size_t n_outputs = output_locs_.size();
+        long n_outputs = output_locs_.size();
         cgtTuple * out = new cgtTuple(n_outputs);
         for (int i=0; i < n_outputs; ++i) {
             int index = output_locs_[i].index(); // XXX what is this used for?
@@ -76,7 +76,7 @@ Thus, when all the predecessors of an instruction fire, we can enqueue that inst
 
 class ParallelInterpreter: public Interpreter {
 public:
-    using InstrInd = size_t;    
+    using InstrInd = long;    
     ParallelInterpreter(ExecutionGraph* eg, const vector<MemLocation>& output_locs, int num_threads);
 
     cgtObject * get(const MemLocation& m) {
@@ -188,7 +188,7 @@ cgtTuple * ParallelInterpreter::run(cgtTuple * newargs) {
     }
 
     args_ = NULL;
-    size_t n_outputs = output_locs_.size();
+    long n_outputs = output_locs_.size();
     cgtTuple * out = new cgtTuple(n_outputs);
     for (int i=0; i < n_outputs; ++i) {
         int index = output_locs_[i].index();
@@ -250,11 +250,11 @@ void LoadArgument::fire(Interpreter* interp) {
 
 void Alloc::fire(Interpreter* interp) {
     int ndim = readlocs.size();
-    vector<size_t> shape(ndim);
+    vector<long> shape(ndim);
     for (int i=0; i < ndim; ++i) {
         cgtArray * sizeval = (cgtArray *)interp->get(readlocs[i]);
         cgt_assert(sizeval->dtype() == cgt_i8);
-        shape[i] = sizeval->at<size_t>(0);
+        shape[i] = sizeval->at<long>(0);
     }
 
     cgtArray* cur = static_cast<cgtArray*>(interp->get(writeloc));

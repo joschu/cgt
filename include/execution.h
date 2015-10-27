@@ -34,11 +34,11 @@ public:
 class MemLocation {
 public:
     MemLocation() : index_(0), devtype_(cgtCPU) {}
-    MemLocation(size_t index, cgtDevtype devtype) : index_(index), devtype_(devtype) {}
-    size_t index() const { return index_; }
+    MemLocation(long index, cgtDevtype devtype) : index_(index), devtype_(devtype) {}
+    long index() const { return index_; }
     cgtDevtype devtype() const { return devtype_; }
 private:
-    size_t index_;
+    long index_;
     cgtDevtype devtype_; // TODO: full device, not just devtype
 };
 
@@ -70,17 +70,17 @@ private:
 
 class ExecutionGraph {
 public:
-    ExecutionGraph(const vector<Instruction*>& instrs, size_t n_args, size_t n_locs)
+    ExecutionGraph(const vector<Instruction*>& instrs, long n_args, long n_locs)
     : instrs_(instrs), n_args_(n_args), n_locs_(n_locs) {}
     ~ExecutionGraph();
     const vector<Instruction*>& instrs() const {return instrs_;}
-    size_t n_args() const {return n_args_;}
-    size_t n_locs() const {return n_locs_;}
-    size_t n_instrs() const {return instrs_.size();}
+    long n_args() const {return n_args_;}
+    long n_locs() const {return n_locs_;}
+    long n_instrs() const {return instrs_.size();}
 private:
     vector<Instruction*> instrs_; // owns, will delete
-    size_t n_args_;
-    size_t n_locs_;
+    long n_args_;
+    long n_locs_;
 };
 
 class Interpreter {

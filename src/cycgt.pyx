@@ -41,24 +41,24 @@ cdef extern from "cgt_common.h":
         cgtGPU
 
     cppclass cgtArray(cgtObject):
-        cgtArray(size_t, const size_t*, cgtDtype, cgtDevtype)
-        cgtArray(size_t, const size_t*, cgtDtype, cgtDevtype, void* fromdata, bint copy)
+        cgtArray(int, const long*, cgtDtype, cgtDevtype)
+        cgtArray(int, const long*, cgtDtype, cgtDevtype, void* fromdata, bint copy)
         int ndim() const
-        const size_t* shape() const
-        size_t size()
-        size_t nbytes() const
-        size_t stride(size_t)
+        const long* shape() const
+        long size()
+        long nbytes() const
+        long stride(int)
         cgtDtype dtype() const
         cgtDevtype devtype() const
         bint ownsdata() const
         void* data()
 
     cppclass cgtTuple(cgtObject):
-        cgtTuple(size_t)
+        cgtTuple(int)
         void setitem(int, cgtObject*)
         cgtObject* getitem(int)
-        size_t size()
-        size_t len
+        int size()
+        int len
         cgtObject** members        
 
 
@@ -79,9 +79,9 @@ cdef extern from "cgt_common.h":
     bint cgt_is_array(cgtObject*)
     bint cgt_is_tuple(cgtObject*)
 
-    void* cgt_alloc(cgtDevtype devtype, size_t)    
+    void* cgt_alloc(cgtDevtype devtype, long)    
     void cgt_free(cgtDevtype devtype, void* ptr)
-    void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void* dest_ptr, void* src_ptr, size_t nbytes)
+    void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void* dest_ptr, void* src_ptr, long nbytes)
 
 
 # Conversion funcs
@@ -136,13 +136,13 @@ cdef cgtObject* py2cgt_object(object o, bint view) except *:
             return py2cgt_array(o, cgtCPU)
 
 cdef cgtArray* py2cgt_array(cnp.ndarray arr, cgtDevtype devtype):
-    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, devtype)
+    cdef cgtArray* out = new cgtArray(arr.ndim, <long*>arr.shape, arr.dtype.num, devtype)
     if not arr.flags.c_contiguous: arr = np.ascontiguousarray(arr)
     cgt_memcpy(out.devtype(), cgtCPU, out.data(), cnp.PyArray_DATA(arr), out.nbytes())
     return out
 
 cdef cgtArray* py2cgt_arrayview(cnp.ndarray arr):
-    cdef cgtArray* out = new cgtArray(arr.ndim, <size_t*>arr.shape, arr.dtype.num, cgtCPU, cnp.PyArray_DATA(arr), False)
+    cdef cgtArray* out = new cgtArray(arr.ndim, <long*>arr.shape, arr.dtype.num, cgtCPU, cnp.PyArray_DATA(arr), False)
     assert arr.flags.c_contiguous
     return out
 
@@ -238,8 +238,8 @@ cdef extern from "execution.h" namespace "cgt":
         ByValCallable()
     cppclass MemLocation:
         MemLocation()
-        MemLocation(size_t, cgtDevtype)
-        size_t index()
+        MemLocation(long, cgtDevtype)
+        long index()
         cgtDevtype devtype()
     cppclass Instruction:
         pass
@@ -262,20 +262,20 @@ cdef extern from "execution.h" namespace "cgt":
 
     Interpreter* create_interpreter(ExecutionGraph*, vector[MemLocation], int)
 
-cdef vector[size_t] _tovectorlong(object xs):
-    cdef vector[size_t] out = vector[size_t]()
-    for x in xs: out.push_back(<size_t>x)
+cdef vector[long] _tovectorlong(object xs):
+    cdef vector[long] out = vector[long]()
+    for x in xs: out.push_back(<long>x)
     return out
 
 cdef void* _getstructptr(object o) except NULL: # XXX except NULL causes unnecessary exception check
     if o is None: 
         return NULL
     else: 
-        return <void*><size_t>ctypes.cast(ctypes.pointer(o), ctypes.c_voidp).value    
+        return <void*><long>ctypes.cast(ctypes.pointer(o), ctypes.c_voidp).value    
     # XXX be more careful about what's coming into this fn
 
 cdef void* _getfuncptr(object o) except NULL:
-    cdef void* out= <void*><size_t>ctypes.cast(o, ctypes.c_void_p).value
+    cdef void* out= <void*><long>ctypes.cast(o, ctypes.c_void_p).value
     assert out != NULL
     return out
 
@@ -333,7 +333,7 @@ cdef ByValCallable _tocppbyvalcallable(callable, storage) except *:
         return ByValCallable(&_pyfunc_byval, <PyObject*>py_cldata)
 
 cdef MemLocation _tocppmem(object pymem):
-    return MemLocation(<size_t>pymem.index, devtype_fromstr(pymem.devtype))
+    return MemLocation(<long>pymem.index, devtype_fromstr(pymem.devtype))
 
 cdef vector[MemLocation] _tocppmemvec(object pymemlist) except *:
     cdef vector[MemLocation] out = vector[MemLocation]()
@@ -401,10 +401,10 @@ cdef class CppArrayWrapper:
         return dtype_tostr(self.arr.get().dtype())
     @property
     def ptr(self):
-        return <size_t>self.arr.get()
+        return <long>self.arr.get()
     @property
     def data(self):
-        return <size_t>self.arr.get().data()
+        return <long>self.arr.get().data()
 
 
 cdef class CppInterpreterWrapper:

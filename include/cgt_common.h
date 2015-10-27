@@ -90,21 +90,21 @@ private:
 
 class cgtArray : public cgtObject {
 public:
-  cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype devtype);
-  cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype devtype, void* fromdata, bool copy);
+  cgtArray(int ndim, const long* shape, cgtDtype dtype, cgtDevtype devtype);
+  cgtArray(int ndim, const long* shape, cgtDtype dtype, cgtDevtype devtype, void* fromdata, bool copy);
   ~cgtArray();
 
-  size_t ndim() const { return ndim_; }
-  const size_t* shape() const { return shape_; }
-  size_t size() const {
-    size_t s = 1;
-    for (size_t i = 0; i < ndim_; ++i) {
+  int ndim() const { return ndim_; }
+  const long* shape() const { return shape_; }
+  long size() const {
+    long s = 1;
+    for (int i = 0; i < ndim_; ++i) {
       s *= shape_[i];
     }
     return s;
   }
-  size_t nbytes() const { return size() * cgt_itemsize(dtype_); }
-  size_t stride(int i) const {
+  long nbytes() const { return size() * cgt_itemsize(dtype_); }
+  long stride(int i) const {
     if (ndim_ == 0) {
       return 0;
     }
@@ -120,19 +120,22 @@ public:
   bool ownsdata() const { return ownsdata_; }
   void* data() { return data_; }
   
+
+  template <typename T>  
+  T& at() {return static_cast<T*>(data_)[0];}
   template <typename T>
-  T& at(size_t i) {return static_cast<T*>(data_)[i];}
+  T& at(long i) {return static_cast<T*>(data_)[i];}
   template <typename T>
-  T& at(size_t i, size_t j) {return static_cast<T*>(data_)[i*shape_[1]+j];}
+  T& at(long i, long j) {return static_cast<T*>(data_)[i*shape_[1]+j];}
   template <typename T>
-  T& at(size_t i, size_t j, size_t k) {return static_cast<T*>(data_)[(i*shape_[1]+j)*shape_[2]+k];}
+  T& at(long i, long j, long k) {return static_cast<T*>(data_)[(i*shape_[1]+j)*shape_[2]+k];}
   template <typename T>
-  T& at(size_t i, size_t j, size_t k, size_t l) {return static_cast<T*>(data_)[((i*shape_[1]+j)*shape_[2]+k)*shape_[3]+l];}
+  T& at(long i, long j, long k, long l) {return static_cast<T*>(data_)[((i*shape_[1]+j)*shape_[2]+k)*shape_[3]+l];}
   void print();
 
 private:
   const int ndim_;
-  const size_t* shape_;
+  const long* shape_;
   const cgtDtype dtype_;
   const cgtDevtype devtype_;
   const bool ownsdata_;
@@ -141,16 +144,16 @@ private:
 
 class cgtTuple : public cgtObject {
 public:
-  cgtTuple(size_t len);
+  cgtTuple(int len);
   void setitem(int i, cgtObject *o) {
     members[i] = o;
   }
   cgtObject *getitem(int i) {
     return members[i].get();
   }
-  size_t size() {return len;}
+  int size() {return len;}
   ~cgtTuple();
-  size_t len;
+  int len;
   IRC<cgtObject> *members;
 };
 
@@ -219,6 +222,6 @@ static inline void clear_error() {
 static inline bool cgt_is_array(cgtObject *o) { return o->kind() == cgtObject::ArrayKind; }
 static inline bool cgt_is_tuple(cgtObject *o) { return o->kind() == cgtObject::TupleKind; }
 
-void *cgt_alloc(cgtDevtype devtype, size_t size);
+void *cgt_alloc(cgtDevtype devtype, long size);
 void cgt_free(cgtDevtype devtype, void *ptr);
-void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void *dest_ptr, void *src_ptr, size_t nbytes);
+void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void *dest_ptr, void *src_ptr, long nbytes);

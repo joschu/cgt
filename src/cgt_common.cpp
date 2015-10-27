@@ -12,18 +12,18 @@
 // Object alloc/dealloc 
 // ================================================================
 
-cgtArray::cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype devtype)
+cgtArray::cgtArray(int ndim, const long* shape, cgtDtype dtype, cgtDevtype devtype)
     : cgtObject(ObjectKind::ArrayKind),
       ndim_(ndim),
       dtype_(dtype),
       devtype_(devtype),
       ownsdata_(true) {
-  shape_ = new size_t[ndim];
-  memcpy(const_cast<size_t*>(shape_), shape, ndim * sizeof(size_t));
+  shape_ = new long[ndim];
+  memcpy(const_cast<long*>(shape_), shape, ndim * sizeof(long));
   data_ = cgt_alloc(devtype_, nbytes());
 }
 
-cgtArray::cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype devtype, void* fromdata, bool copy)
+cgtArray::cgtArray(int ndim, const long* shape, cgtDtype dtype, cgtDevtype devtype, void* fromdata, bool copy)
     : cgtObject(ObjectKind::ArrayKind),
       ndim_(ndim),
       shape_(shape),
@@ -31,8 +31,8 @@ cgtArray::cgtArray(size_t ndim, const size_t* shape, cgtDtype dtype, cgtDevtype 
       devtype_(devtype),
       ownsdata_(copy) {
   cgt_assert(fromdata != NULL);
-  shape_ = new size_t[ndim];
-  memcpy(const_cast<size_t*>(shape_), shape, ndim * sizeof(size_t));
+  shape_ = new long[ndim];
+  memcpy(const_cast<long*>(shape_), shape, ndim * sizeof(long));
   if (copy) {
     data_ = cgt_alloc(devtype, nbytes());
     cgt_memcpy(devtype, cgtCPU, data_, fromdata, nbytes());
@@ -55,7 +55,7 @@ cgtArray::~cgtArray() {
   if (ownsdata_) cgt_free(devtype_, data_);
 }
 
-cgtTuple::cgtTuple(size_t len)
+cgtTuple::cgtTuple(int len)
     : cgtObject(ObjectKind::TupleKind), len(len) {
   members = new IRC<cgtObject>[len];
 }
@@ -107,7 +107,7 @@ char cgtGlobalErrorMsg[1000];
 // Memory management 
 // ================================================================
 
-void *cgt_alloc(cgtDevtype devtype, size_t size) {
+void *cgt_alloc(cgtDevtype devtype, long size) {
   if (devtype == cgtCPU) {
     return malloc(size);
   }
@@ -135,7 +135,7 @@ void cgt_free(cgtDevtype devtype, void *ptr) {
   }
 }
 
-void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void *dest_ptr, void *src_ptr, size_t nbytes) {
+void cgt_memcpy(cgtDevtype dest_type, cgtDevtype src_type, void *dest_ptr, void *src_ptr, long nbytes) {
   if (src_type == cgtCPU && dest_type == cgtCPU) {
     memcpy(dest_ptr, src_ptr, nbytes);
   } else {
