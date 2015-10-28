@@ -521,10 +521,15 @@ class ReturnByVal(Instr):
 # Compiling native code
 # ================================================================
 
+
+CPP_ABI_VERSION = 1 
+# every time your make changes to internal data structures in cgt_common.h, increment this number
+# to force recompilation of all shared libraries
+
 def nci2callable(nci):
     template_code = gen_templated_code(nci.includes, nci.closure_triples, nci.func_code)
     compile_info = get_compile_info()    
-    prefix = utils.hash_seq1(template_code, compile_info["CPP_FLAGS"], *(src.code for src in nci.extra_srcs))
+    prefix = utils.hash_seq1(template_code, compile_info["CPP_FLAGS"], str(CPP_ABI_VERSION), *(src.code for src in nci.extra_srcs))
     d = dict(function=_funcname(prefix), closure=_closurename(prefix),setup=_setupname(prefix),teardown=_teardownname(prefix))
     
     fn_srcfile = core.SrcFile("c++",string.Template(template_code).substitute(d))
