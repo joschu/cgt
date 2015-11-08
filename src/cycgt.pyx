@@ -113,12 +113,6 @@ cdef object cgt2py_tuple(cgtTuple* t, bint view):
     #     cpython.PyTuple_SetItem(out, i, cgt2py_object(t.getitem(i)))
     # return out
 
-cdef cnp.ndarray _to_valid_array(object arr):
-    cdef cnp.ndarray out = np.asarray(arr, order='C')
-    if not out.flags.c_contiguous: 
-        out = out.copy()
-    return out
-
 cdef bint _is_valid_array(cnp.ndarray arr):
     return arr.flags.c_contiguous
 
@@ -132,7 +126,7 @@ cdef cgtObject* py2cgt_object(object o, bint view) except *:
         # Doing a copy here could cause wrong behavior for inplace operation
             return py2cgt_arrayview(o)
         else:
-            o = _to_valid_array(o)
+            o = core.as_valid_array(o, o.dtype)
             return py2cgt_array(o, cgtCPU)
 
 cdef cgtArray* py2cgt_array(cnp.ndarray arr, cgtDevtype devtype):

@@ -35,9 +35,11 @@ def as_valid_array(x, dtype=None):
     """
     Converts to numpy array and dtype with valid precision
     """
-    if isinstance(x, int): x = np.array(x, 'i8')
-    else: x = np.asarray(x)
-    x = x.astype(Dtype.canon(x.dtype) if dtype is None else dtype)
+    # surprising how convoluted this function needs to be
+    if not isinstance(x, np.ndarray): x = np.asarray(x,dtype=dtype)
+    if dtype is None: dtype = Dtype.canon(x.dtype)
+    x = x.astype(dtype)
+    if not x.flags.c_contiguous: x = x.copy()
     return x
 
 def as_valid_tuple(x):
