@@ -48,6 +48,7 @@ endif()
 option(CGT_ENABLE_CUDA OFF "Enable CUDA support")
 option(CGT_ENABLE_CUDNN ON "Enable CUDNN support")
 option(CGT_DEVEL_MODE OFF "Build with more compiler errors and warnings")
+SET(CGT_MAX_CPUS "16" CACHE STRING "Max CPUs that might ever be used")
 
 message(
     "\n"
@@ -106,7 +107,7 @@ target_link_libraries(cycgt cgt)
 set(OPENBLAS_LIBRARY ${CMAKE_BINARY_DIR}/OpenBLAS/libopenblas.a)
 
 add_custom_command(
-  COMMAND 4build/download_and_build_openblas.py ${CMAKE_BINARY_DIR}/OpenBLAS
+  COMMAND 4build/download_and_build_openblas.py ${CMAKE_BINARY_DIR}/OpenBLAS ${CGT_MAX_CPUS}
   OUTPUT ${OPENBLAS_LIBRARY}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
