@@ -676,6 +676,35 @@ def transpose(arr, axes=None):
     else:
         return core.Result(core.Transpose(axes), [arr])
 
+def to_one_hot(y, nb_class, dtype=None):
+    """
+    Return a matrix where each row corresponds to the one hot
+    encoding of each element in y.
+    Parameters
+    ----------
+    y
+        A vector of integer value between 0 and nb_class - 1.
+    nb_class : int
+        The number of classes in y.
+    dtype : data-type
+        The dtype of the returned matrix. Default floatX.
+    Returns
+    -------
+    object
+        A matrix of shape (y.shape[0], nb_class), where each row ``i`` is
+        the one hot encoding of the corresponding ``y[i]`` value.
+    """
+    
+    fill_vals = cgt.ones((y.shape[0],))
+    ret = cgt.zeros((y.shape[0], nb_class), dtype)
+    
+    d1 = cgt.arange(y.shape[0])
+    d2 = cgt.cast(y, 'i1')
+    
+    ret = cgt.inc_subtensor(ret, [d1, d2], fill_vals)
+    
+    return ret
+
 def tuple_index(x, i):
     """
     If x is a symbolic variable with isinstance(x.typ, TupleType), return x[i]
