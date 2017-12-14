@@ -31,21 +31,21 @@ def colorprint(colorcode, text, o=sys.stdout):
     o.write(colorize(colorcode, text))
 
 def warn(msg):
-    print colorize(Color.YELLOW, msg)
+    print(colorize(Color.YELLOW, msg))
 
 def error(msg):
-    print colorize(Color.RED, msg)
+    print(colorize(Color.RED, msg))
 
 def is_singleton(x):
     return isinstance(x, np.ndarray) and np.prod(x.shape)==1
 
 def safezip(x,y):
     assert len(x) == len(y)
-    return zip(x,y)
+    return list(zip(x,y))
 
 def safezip3(x,y,z):
     assert len(x) == len(y) == len(z)
-    return zip(x,y,z)
+    return list(zip(x,y,z))
 
 
 def allsame(xs):
@@ -61,8 +61,10 @@ def invert_perm(x):
 
 def _hash_seq(args):
     hashobj = hashlib.md5()
-    for a in args: hashobj.update(a)
-    return hashobj.hexdigest()
+    for a in args: 
+        if isinstance(a, str): a = a.encode()
+        hashobj.update(a)
+    return hashobj.digest()
 
 def hash_seq1(*args):
     return _hash_seq(args)
@@ -73,11 +75,11 @@ class Message(object):
         self.msg = msg
     def __enter__(self):
         global MESSAGE_DEPTH #pylint: disable=W0603
-        print colorize(Color.MAGENTA, '\t'*MESSAGE_DEPTH + '=: ' + self.msg)
+        print(colorize(Color.MAGENTA, '\t'*MESSAGE_DEPTH + '=: ' + self.msg))
         self.tstart = time.time()
         MESSAGE_DEPTH += 1
     def __exit__(self, etype, *args):
         global MESSAGE_DEPTH #pylint: disable=W0603
         MESSAGE_DEPTH -= 1
         maybe_exc = "" if etype is None else " (with exception)"
-        print colorize(Color.MAGENTA, '\t'*MESSAGE_DEPTH + "done%s in %.3f seconds"%(maybe_exc, time.time() - self.tstart))
+        print(colorize(Color.MAGENTA, '\t'*MESSAGE_DEPTH + "done%s in %.3f seconds"%(maybe_exc, time.time() - self.tstart)))

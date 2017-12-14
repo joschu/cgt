@@ -22,8 +22,8 @@ class CyCgtTestCase(unittest.TestCase):
         cs.set_shapes([xshp,yshp,zshp])
         cs.set_inputs([xval,yval])
         cs.execute()
-        print xval, yval
-        print xval * yval
+        print(xval, yval)
+        print(xval * yval)
         np.testing.assert_allclose(yval/xval , cs.get_outputs_numpy()[0])
 
 

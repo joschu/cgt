@@ -1,6 +1,6 @@
 
 from example_utils import fmt_row, fetch_dataset
-import cPickle, numpy as np
+import pickle, numpy as np
 import cgt
 from cgt import nn
 import argparse, time
@@ -67,12 +67,12 @@ def main():
     ytrain = data["y_train"]
 
 
-    print fmt_row(10, ["Epoch","Train NLL","Train Err","Test NLL","Test Err","Epoch Time"])
-    for i_epoch in xrange(args.epochs):
-        for start in xrange(0, Xtrain.shape[0], batchsize):
+    print(fmt_row(10, ["Epoch","Train NLL","Train Err","Test NLL","Test Err","Epoch Time"]))
+    for i_epoch in range(args.epochs):
+        for start in range(0, Xtrain.shape[0], batchsize):
             tstart = time.time()
             end = start+batchsize
-            print train(Xtrain[start:end], ytrain[start:end]), time.time()-tstart
+            print(train(Xtrain[start:end], ytrain[start:end]), time.time()-tstart)
             if start > batchsize*5: break
         # elapsed = time.time() - tstart
         # trainerr, trainloss = computeloss(Xtrain[:len(Xtest)], ytrain[:len(Xtest)])

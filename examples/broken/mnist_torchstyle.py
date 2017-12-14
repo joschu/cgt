@@ -4,8 +4,8 @@ from sklearn.datasets import fetch_mldata
 
 mnist = fetch_mldata('MNIST original', data_home='~/cgt/data')  # XXX
 
-print(mnist.data.shape)
-print(mnist.target.shape)
+print((mnist.data.shape))
+print((mnist.target.shape))
 
 np.unique(mnist.target)
 
@@ -41,7 +41,7 @@ out_size = 10
 inps = [cgt.matrix(dtype=cgt.floatX)]
 
 param_list = []
-for k in xrange(N_LAYERS):
+for k in range(N_LAYERS):
     tmp = nn.Affine(hid_size, hid_size)#(inps[k])
     param_list.extend([tmp.weight, tmp.bias])
     inps.append(cgt.tanh(tmp(inps[k])))
@@ -60,7 +60,7 @@ theta[:] = np.random.uniform(-0.08, 0.08, theta.shape)
 # XXX taken from other demo, move
 def ind2onehot(inds, n_cls):
     out = np.zeros(list(inds.shape)+[n_cls,], cgt.floatX)
-    for k in xrange(inds.shape[0]):
+    for k in range(inds.shape[0]):
         out[k, inds[k].astype('int32')] = 1
     #out.flat[np.arange(inds.size)*n_cls + inds.ravel()] = 1
     return out
@@ -97,11 +97,11 @@ state = Table()
 state.theta = theta
 state.step_size = 0.1
 exploss = None
-for k in xrange(X_train.shape[0] / b_size):
+for k in range(X_train.shape[0] / b_size):
     X_batch, y_batch = X_train[k*b_size:(k+1)*b_size, :], y_train[k*b_size:(k+1)*b_size]
     loss, grad, logprobs = f_loss_and_grad(X_batch, ind2onehot(y_batch, 10))
     exploss = loss if k == 0 else 0.99*exploss + 0.01*loss
-    print('iter %d, loss %f, exploss %f' % (k + 1, loss, exploss))
+    print(('iter %d, loss %f, exploss %f' % (k + 1, loss, exploss)))
     sgd_update(state, grad)
 
 
@@ -109,13 +109,13 @@ for k in xrange(X_train.shape[0] / b_size):
 
 correct = 0
 total = 0
-print(X_test.shape)
-print(y_test.shape)
-for k in xrange(X_test.shape[0] / b_size):
+print((X_test.shape))
+print((y_test.shape))
+for k in range(X_test.shape[0] / b_size):
     X_batch, y_batch = X_test[k*b_size:(k+1)*b_size, :], y_test[k*b_size:(k+1)*b_size]
     loss, grad, logprobs = f_loss_and_grad(X_batch, ind2onehot(y_batch, 10))
     preds = logprobs.argmax(axis=1).flatten()
     correct = correct + (preds == y_batch).sum()
     total = total + b_size
 
-print('%d/%d correct', correct, total)
+print(('%d/%d correct', correct, total))

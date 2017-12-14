@@ -22,9 +22,9 @@ def test_conv():
     outchans = filt.shape[0]
 
     out = np.zeros((batchsize,outchans,x.shape[2]+filtrows-1,x.shape[3]+filtcols-1))
-    for b in xrange(x.shape[0]):
-        for inchan in xrange(x.shape[1]):
-            for outchan in xrange(outchans):
+    for b in range(x.shape[0]):
+        for inchan in range(x.shape[1]):
+            for outchan in range(outchans):
                 out[b,outchan] += scipy.signal.convolve2d(x[b,inchan],filt[outchan,inchan][::-1,::-1],mode='full')
 
     f = cgt.function([], nn.conv2d(cgt.constant(x), cgt.constant(filt), kernelshape=(filtrows,filtcols), pad=(filtrows-1, filtcols-1)))

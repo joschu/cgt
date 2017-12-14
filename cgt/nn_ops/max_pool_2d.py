@@ -28,7 +28,8 @@ class MaxPool(core.Op):
         return [True]
     def get_py_impl(self):
         raise core.MethodNotDefined
-    def pullback(self, (x,), y, gy):
+    def pullback(self, xxx_todo_changeme, y, gy):
+        (x,) = xxx_todo_changeme
         pool,mask = core.unpack(y)
         gpool,_gmask = gy
         return [core.Result(MaxPoolPullback(self.info), [x,pool,mask,gpool])]

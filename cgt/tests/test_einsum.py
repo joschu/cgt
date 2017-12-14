@@ -11,7 +11,7 @@ def test_einsum():
     xaxes = 'ijk'
     yaxes = 'ikl'
     zaxes = 'ijl'
-    for i in xrange(10):
+    for i in range(10):
         xperm = xaxes
         (yperm,zperm) = permaxes = [[chars[i] for i in np.random.permutation(3)] for chars in [yaxes,zaxes]]
         desc = "%s,%s->%s"%tuple("".join(chars) for chars in [xperm] + permaxes)

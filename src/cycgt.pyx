@@ -339,16 +339,17 @@ cdef Instruction* _tocppinstr(object pyinstr, object storage) except *:
     t = type(pyinstr)
     cdef Instruction* out
     cdef MemLocation wloc = _tocppmem(pyinstr.write_loc)
+    cdef bytes instr_repr = repr(pyinstr).encode()
     if t == compilation.LoadArgument:
-        out = new LoadArgument(repr(pyinstr), pyinstr.ind, wloc)
+        out = new LoadArgument(instr_repr, pyinstr.ind, wloc)
     elif t == compilation.Alloc:
-        out = new Alloc(repr(pyinstr), dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), wloc)
+        out = new Alloc(instr_repr, dtype_fromstr(pyinstr.dtype), _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == compilation.BuildTup:
-        out = new BuildTup(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc)
+        out = new BuildTup(instr_repr, _tocppmemvec(pyinstr.read_locs), wloc)
     elif t == compilation.ReturnByRef:
-        out = new ReturnByRef(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(), storage), _isquick(pyinstr))
+        out = new ReturnByRef(instr_repr, _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyrefcallable(pyinstr.get_callable(), storage), _isquick(pyinstr))
     elif t == compilation.ReturnByVal:
-        out = new ReturnByVal(repr(pyinstr), _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage), _isquick(pyinstr))
+        out = new ReturnByVal(instr_repr, _tocppmemvec(pyinstr.read_locs), wloc, _tocppbyvalcallable(pyinstr.get_callable(), storage), _isquick(pyinstr))
     else:
         raise RuntimeError("expected instance of type Instruction. got type %s"%t)
     return out

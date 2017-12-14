@@ -25,15 +25,15 @@ def test_linreg():
     g_simple,an,_ = cgt.core.simplify_and_analyze(g)
 
 
-    print "Loss function:"
+    print("Loss function:")
     cgt.print_tree([err])
-    print "Gradient:"
+    print("Gradient:")
     cgt.print_tree(g)
 
-    print "Gradient simplified"
-    cgt.print_tree(g_simple, nodefn=lambda node,o: o.write(" " + an["node2hash"][node][:5]))
+    print("Gradient simplified")
+    cgt.print_tree(g_simple, nodefn=lambda node,o: o.write(" " + str(an["node2hash"][node][:5])))
 
-    print "-------"
+    print("-------")
 
     d = {X_nk : Xval, w_k : wval, b : bval, y_n : yval}
 

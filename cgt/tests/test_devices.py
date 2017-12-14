@@ -25,7 +25,7 @@ def test_devices():
         w_k = cgt.shared(wval, "w")
         b = cgt.shared(bval, name="b")
 
-        print "bval",bval
+        print("bval",bval)
 
         ypred = cgt.dot(cgt.square(X_nk), w_k) + b
 
@@ -34,7 +34,7 @@ def test_devices():
         outputs = [err]+g
         f = cgt.function([], [err]+g)
         results = f()
-        print results
+        print(results)
         assert np.allclose(results[0] , np.sin(np.square(Xval).dot(wval)+bval-yval).sum())
 
 

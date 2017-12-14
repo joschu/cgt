@@ -18,7 +18,7 @@ if __name__ == "__main__":
     init = cgt.matrix()
 
     prev_h = init
-    for i in xrange(horizon):
+    for i in range(horizon):
         prev_h = cell(X[i], prev_h)
     loss = prev_h.sum()
 
@@ -27,7 +27,7 @@ if __name__ == "__main__":
     with Message("running"):
         xval = np.zeros((horizon,batchsize,size),cgt.floatX)
         initval = np.zeros((batchsize, size), cgt.floatX)
-        for i in xrange(100): 
+        for i in range(100): 
             f(xval, initval)
 
 

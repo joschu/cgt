@@ -144,25 +144,25 @@ def main():
     from cgt.tests import gradcheck_model
     if args.grad_check:
         cost_nodrop = cgt.core.clone(cost_nodrop, {X:Xtrain[:1],y:ytrain[:1]})
-        print "doing gradient check..."
-        print "------------------------------------"
+        print("doing gradient check...")
+        print("------------------------------------")
         gradcheck_model(cost_nodrop, params[0:1])
-        print "success!"
+        print("success!")
         return
 
     if args.profile: cgt.profiler.start()
 
-    print fmt_row(10, ["Epoch","Train NLL","Train Err","Test NLL","Test Err","Epoch Time"])
-    for i_epoch in xrange(args.epochs):
+    print(fmt_row(10, ["Epoch","Train NLL","Train Err","Test NLL","Test Err","Epoch Time"]))
+    for i_epoch in range(args.epochs):
         tstart = time.time()
-        for start in xrange(0, Xtrain.shape[0], batch_size):
+        for start in range(0, Xtrain.shape[0], batch_size):
             end = start+batch_size
             train(Xtrain[start:end], ytrain[start:end])
             if args.unittest: return
         elapsed = time.time() - tstart
         trainerr, trainloss = computeloss(Xtrain[:len(Xtest)], ytrain[:len(Xtest)])
         testerr, testloss = computeloss(Xtest, ytest)
-        print fmt_row(10, [i_epoch, trainloss, trainerr, testloss, testerr, elapsed])
+        print(fmt_row(10, [i_epoch, trainloss, trainerr, testloss, testerr, elapsed]))
     if args.profile: cgt.execution.profiler.print_stats()
 
 if __name__ == "__main__":

@@ -16,12 +16,12 @@ def gradcheck_model(cost, params, extravars=(), extravals=(), atol=1e-8, eps=1e-
     param_args = [cgt.core.Argument(typ=s.typ,name=s.name)if s.is_data() else s for s in params]
 
     # Get new cost in terms o farguments
-    cost = cgt.core.clone(cost, replace=dict(zip(params,param_args)))
+    cost = cgt.core.clone(cost, replace=dict(list(zip(params,param_args))))
 
     grads = cgt.grad(cost, param_args)
     paramvals = [param.op.get_value() for param in params]
-    fcost = cgt.function(param_args, cost, givens=zip(extravars,extravals))
-    fgrad = cgt.function(param_args, grads,givens=zip(extravars,extravals))
+    fcost = cgt.function(param_args, cost, givens=list(zip(extravars,extravals)))
+    fgrad = cgt.function(param_args, grads,givens=list(zip(extravars,extravals)))
 
     angrads = fgrad(*paramvals)
     nugrads = numeric_grad_multi(fcost, paramvals, eps=eps)

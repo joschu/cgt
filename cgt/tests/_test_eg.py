@@ -11,7 +11,7 @@ class EgTestCase(unittest.TestCase):
         pprint.pprint(eg.to_json())
         import cycgt
         interp = cycgt.cInterpreter(eg)
-        print interp(np.array([3,4,5,6],'f8'))
+        print(interp(np.array([3,4,5,6],'f8')))
 
 if __name__ == "__main__":
     EgTestCase().runTest()

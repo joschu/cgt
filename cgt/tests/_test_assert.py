@@ -2,7 +2,7 @@ import cgt
 import unittest
 
 def myfunc(x):
-    print "x",x
+    print("x",x)
 
 class AssertTestCase(unittest.TestCase):
     def runTest(self):
@@ -11,9 +11,9 @@ class AssertTestCase(unittest.TestCase):
             return
         x = cgt.scalar()
         with cgt.debug_context() as dbg:
-            cgt.assert_(cgt.equal(x, 1),"yoyoyo")
+            cgt.assertTrue(cgt.equal(x, 1),"yoyoyo")
             cgt.dbg_call(myfunc, x)
-            print "dbg",dbg.nodes
+            print("dbg",dbg.nodes)
             # cgt.assert_(cgt.equal(x, 2))
 
         f = cgt.make_function([x],[x],dbg=dbg)

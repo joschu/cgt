@@ -117,15 +117,15 @@ if __name__ == "__main__":
     updater_fc = make_updater_fc()
 
     def run_sgd_epochs(Xs, ys, updater, stepsizeval = .001, n_epochs=1):
-        for epoch in xrange(n_epochs):
+        for epoch in range(n_epochs):
             t_start = time.time()
             epoch_losses = []
-            for start in xrange(0, Xs.shape[0]-(Xs.shape[0]%batch_size), batch_size):
+            for start in range(0, Xs.shape[0]-(Xs.shape[0]%batch_size), batch_size):
                 lossval = updater(Xs[start:start+batch_size], ys[start:start+batch_size], stepsizeval)
                 epoch_losses.append(lossval)
-            print "epoch %i took %5.2fs. mean train loss %8.3g"%(epoch, time.time() - t_start, np.mean(epoch_losses))
+            print("epoch %i took %5.2fs. mean train loss %8.3g"%(epoch, time.time() - t_start, np.mean(epoch_losses)))
     
-    print "CGT Fully-Connected Network"
+    print("CGT Fully-Connected Network")
     run_sgd_epochs(Xtrain, ytrain, updater_fc)
 
     def make_updater_fc_theano():
@@ -149,7 +149,7 @@ if __name__ == "__main__":
 
     if have_theano and not args.unittest:
         updater_fc_theano = make_updater_fc_theano()
-        print "Theano Fully-Connected Network"
+        print("Theano Fully-Connected Network")
         run_sgd_epochs(Xtrain, ytrain, updater_fc_theano)
 
 
@@ -165,7 +165,7 @@ if __name__ == "__main__":
         params = nn.get_parameters(loss)        
         m = nn.Module([X,y], [loss])
         split_loss = 0
-        for start in xrange(0, batch_size, batch_size//4):
+        for start in range(0, batch_size, batch_size//4):
             sli = slice(start, start+batch_size//4)
             split_loss += m([X[sli], y[sli]])[0]
         split_loss /= 4
@@ -177,7 +177,7 @@ if __name__ == "__main__":
         updater_fc_par = make_updater_fc_parallel()
 
 
-    print "Fully-connected Network with Split Input for Data Parallelism"
+    print("Fully-connected Network with Split Input for Data Parallelism")
     run_sgd_epochs(Xtrain, ytrain, updater_fc_par)
 
 
@@ -216,7 +216,7 @@ if __name__ == "__main__":
 
     updater_convnet = make_updater_convnet()
 
-    print "CGT Convnet"
+    print("CGT Convnet")
     Xtrainimgs = Xtrain.reshape(-1,1,28,28)
     run_sgd_epochs(Xtrainimgs, ytrain, updater_convnet)
 
@@ -250,7 +250,7 @@ if __name__ == "__main__":
     if False:#have_theano and not args.unittest:
 
         updater_convnet_theano = make_updater_convnet_theano()
-        print "Theano Convnet"
+        print("Theano Convnet")
         Xtrainimgs = Xtrain.reshape(-1,1,28,28)
         run_sgd_epochs(Xtrainimgs, ytrain, updater_convnet_theano)
 
@@ -265,7 +265,7 @@ if __name__ == "__main__":
 
         m = nn.Module([X,y], [loss])
         split_loss = 0
-        for start in xrange(0, batch_size, batch_size//4):
+        for start in range(0, batch_size, batch_size//4):
             sli = slice(start, start+batch_size//4)
             split_loss += m([X[sli], y[sli]])[0]
         split_loss /= 4
@@ -279,6 +279,6 @@ if __name__ == "__main__":
 
     # Run SGD
     # -----------------------
-    print "CGT Convnet with Data Parallelism"    
+    print("CGT Convnet with Data Parallelism")    
     run_sgd_epochs(Xtrainimgs, ytrain, updater_convnet_parallel)
 

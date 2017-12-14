@@ -57,7 +57,7 @@ def test_matmuls():
         X = cgt.matrix("X")
         Y = cgt.matrix("Y")
         loss=0
-        for k in xrange(m):
+        for k in range(m):
             # loss = loss+cgt.sin(X*Y+k).sum()
             loss = loss+(X.dot(Y+k)).sum()
 
@@ -75,7 +75,7 @@ def test_matmuls():
         out = f(*vals)
         toc = time.time()
 
-        print toc-tic
+        print(toc-tic)
     
 
 @across_configs(backends=("native",))

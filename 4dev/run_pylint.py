@@ -15,7 +15,7 @@ if args.files is None and args.patfile is None: args.patfile=open("4dev/lintfile
 
 def cap(cmd):
     "call and print"
-    print "\x1b[32m%s\x1b[0m"%cmd
+    print("\x1b[32m%s\x1b[0m"%cmd)
     subprocess.call(cmd,shell=True)
 
 def filelist_from_patterns(pats, rootdir=None):

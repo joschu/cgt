@@ -3,22 +3,22 @@ A nearly direct translation of Andrej's code
 https://github.com/karpathy/char-rnn
 """
 
-from __future__ import division
+
 import cgt
 from cgt import nn, utils, profiler
 import numpy as np, numpy.random as nr
 import os.path as osp
 import argparse
 from time import time
-from StringIO import StringIO
+from io import StringIO
 from param_collection import ParamCollection
 
 # via https://github.com/karpathy/char-rnn/blob/master/model/GRU.lua
 # via http://arxiv.org/pdf/1412.3555v1.pdf
 def make_deep_gru(size_input, size_mem, n_layers, size_output, size_batch):
-    inputs = [cgt.matrix() for i_layer in xrange(n_layers+1)]
+    inputs = [cgt.matrix() for i_layer in range(n_layers+1)]
     outputs = []
-    for i_layer in xrange(n_layers):
+    for i_layer in range(n_layers):
         prev_h = inputs[i_layer+1] # note that inputs[0] is the external input, so we add 1
         x = inputs[0] if i_layer==0 else outputs[i_layer-1]
         size_x = size_input if i_layer==0 else size_mem
@@ -42,10 +42,10 @@ def make_deep_gru(size_input, size_mem, n_layers, size_output, size_batch):
 
 def make_deep_lstm(size_input, size_mem, n_layers, size_output, size_batch):
     inputs = [cgt.matrix(fixed_shape=(size_batch, size_input))]
-    for _ in xrange(2*n_layers):
+    for _ in range(2*n_layers):
         inputs.append(cgt.matrix(fixed_shape=(size_batch, size_mem)))
     outputs = []
-    for i_layer in xrange(n_layers):
+    for i_layer in range(n_layers):
         prev_h = inputs[i_layer*2]
         prev_c = inputs[i_layer*2+1]
         if i_layer==0:
@@ -112,12 +112,12 @@ def make_loss_and_grad_and_step(arch, size_input, size_output, size_mem, size_ba
     targ_tnk = cgt.tensor3()
     make_network = make_deep_lstm if arch=="lstm" else make_deep_gru
     network = make_network(size_input, size_mem, n_layers, size_output, size_batch)
-    init_hiddens = [cgt.matrix() for _ in xrange(get_num_hiddens(arch, n_layers))]
+    init_hiddens = [cgt.matrix() for _ in range(get_num_hiddens(arch, n_layers))]
     # TODO fixed sizes
 
     cur_hiddens = init_hiddens
     loss = 0
-    for t in xrange(n_unroll):
+    for t in range(n_unroll):
         outputs = network([x_tnk[t]] + cur_hiddens)
         cur_hiddens, prediction_logprobs = outputs[:-1], outputs[-1]
         # loss = loss + nn.categorical_negloglik(prediction_probs, targ_tnk[t]).sum()
@@ -178,14 +178,14 @@ class Loader(object):
         self.n_test_batches = int(n_batches*split_fractions[1])
         self.n_val_batches = n_batches - self.n_train_batches - self.n_test_batches
 
-        print "%i train batches, %i test batches, %i val batches"%(self.n_train_batches, self.n_test_batches, self.n_val_batches)
+        print("%i train batches, %i test batches, %i val batches"%(self.n_train_batches, self.n_test_batches, self.n_val_batches))
 
     @property
     def size_vocab(self):
         return len(self.char2ind)
 
     def train_batches_iter(self):
-        for i in xrange(self.n_train_batches):
+        for i in range(self.n_train_batches):
             start = i*self.n_unroll
             stop = (i+1)*self.n_unroll
             yield ind2onehot(self.data[start:stop], self.size_vocab), ind2onehot(self.data[start+1:stop+1], self.size_vocab) # XXX
@@ -218,7 +218,7 @@ def get_num_hiddens(arch, n_layers):
 
 def sample(f_step, init_hiddens, char2ind, n_steps, temperature, seed_text = ""):
     vocab_size = len(char2ind)
-    ind2char = {ind:char for (char,ind) in char2ind.iteritems()}
+    ind2char = {ind:char for (char,ind) in char2ind.items()}
     cur_hiddens = init_hiddens
     t = StringIO()
     t.write(seed_text)
@@ -231,7 +231,7 @@ def sample(f_step, init_hiddens, char2ind, n_steps, temperature, seed_text = "")
         logprobs_1k = np.zeros((1,vocab_size))
     
 
-    for _ in xrange(n_steps):        
+    for _ in range(n_steps):        
         logprobs_1k /= temperature
         probs_1k = np.exp(logprobs_1k*2)
         probs_1k /= probs_1k.sum()
@@ -281,10 +281,10 @@ def main():
     pc.set_value_flat(nr.uniform(-.1, .1, size=(pc.get_total_size(),)))
 
     def initialize_hiddens(n):
-        return [np.zeros((n, args.size_mem), cgt.floatX) for _ in xrange(get_num_hiddens(args.arch, args.n_layers))]
+        return [np.zeros((n, args.size_mem), cgt.floatX) for _ in range(get_num_hiddens(args.arch, args.n_layers))]
 
     if args.grad_check:
-        x,y = loader.train_batches_iter().next()
+        x,y = next(loader.train_batches_iter())
         prev_hiddens = initialize_hiddens(args.size_batch)
         def f(thnew):
             thold = pc.get_value_flat()
@@ -297,16 +297,16 @@ def main():
         result = f_loss_and_grad(x,y,*prev_hiddens)
         g_anal = result[1]
         assert np.allclose(g_num, g_anal, atol=1e-4)
-        print "Gradient check succeeded!"
+        print("Gradient check succeeded!")
         return
 
     optim_state = make_rmsprop_state(theta=pc.get_value_flat(), step_size = args.step_size, 
         decay_rate = args.decay_rate)
 
-    for iepoch in xrange(args.n_epochs):
+    for iepoch in range(args.n_epochs):
         losses = []
         tstart = time()
-        print "starting epoch",iepoch
+        print("starting epoch",iepoch)
         cur_hiddens = initialize_hiddens(args.size_batch)
         for (x,y) in loader.train_batches_iter():
             out = f_loss_and_grad(x,y, *cur_hiddens)
@@ -317,7 +317,7 @@ def main():
             pc.set_value_flat(optim_state.theta)
             losses.append(loss)
             if args.unittest: return
-        print "%.3f s/batch. avg loss = %.3f"%((time()-tstart)/len(losses), np.mean(losses))
+        print("%.3f s/batch. avg loss = %.3f"%((time()-tstart)/len(losses), np.mean(losses)))
         optim_state.step_size *= .98 #pylint: disable=E1101
 
         sample(f_step, initialize_hiddens(1), char2ind=loader.char2ind, n_steps=1000, temperature=args.temperature, seed_text = "")

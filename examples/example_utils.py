@@ -1,5 +1,5 @@
-import cPickle as pickle
-import os, os.path as osp, shutil, numpy as np, urllib
+import pickle as pickle
+import os, os.path as osp, shutil, numpy as np, urllib.request, urllib.parse, urllib.error
 
 def train_val_test_slices(n, trainfrac, valfrac, testfrac):
     assert trainfrac+valfrac+testfrac==1.0
@@ -29,9 +29,9 @@ def download(url):
     datadir = osp.join(get_cgt_src_root(),"downloads")
     datapath = osp.join(datadir, fname)
     if not osp.exists(datapath):
-        print "downloading %s to %s"%(url, datapath)
+        print("downloading %s to %s"%(url, datapath))
         if not osp.exists(datadir): os.makedirs(datadir)
-        urllib.urlretrieve(url, datapath)
+        urllib.request.urlretrieve(url, datapath)
     return datapath
 
 

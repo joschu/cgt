@@ -34,7 +34,7 @@ class NotebookDirective(Directive):
         dest_dir = setup.app.builder.outdir
         dest_path = os.path.join(dest_dir, nb_basename)
 
-        print dest_path, nb_abs_path
+        print(dest_path, nb_abs_path)
 
         if not os.path.exists(dest_dir):
             os.makedirs(dest_dir)
@@ -124,8 +124,7 @@ def nb_to_html(nb_path):
     ]
     filter_strings.extend(['h%s{' % (i+1) for i in range(6)])
 
-    header_lines = filter(
-        lambda x: not any([s in x for s in filter_strings]), header.split('\n'))
+    header_lines = [x for x in header.split('\n') if not any([s in x for s in filter_strings])]
     header = '\n'.join(header_lines)
 
     # concatenate raw html lines

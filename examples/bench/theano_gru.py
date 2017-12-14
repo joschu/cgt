@@ -83,12 +83,12 @@ if __name__ == "__main__":
     init = TT.zeros((batchsize, size),theano.config.floatX)
 
     prev_h = init
-    for i in xrange(horizon):
+    for i in range(horizon):
         prev_h = cell(X[i], prev_h)
 
     with Message("compiling"):
         f = theano.function([X],theano.grad(prev_h.sum(), cell.params()))
     with Message("running"):
         x = np.zeros((horizon,batchsize,size),theano.config.floatX)
-        for i in xrange(100): 
+        for i in range(100): 
             f(x)

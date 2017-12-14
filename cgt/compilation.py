@@ -1,9 +1,10 @@
 from . import core, utils
 import cgt
-import ctypes, os.path as osp, hashlib, numpy as np, sys, subprocess, string, os, time, traceback, cPickle
+import ctypes, os.path as osp, hashlib, numpy as np, sys, subprocess, string, os, time, traceback, pickle
 from collections import defaultdict, namedtuple
-from StringIO import StringIO
+from io import StringIO
 import logging
+import binascii
 
 def function(inputs, outputs, dbg=None, updates=None, givens=None):
     assert isinstance(inputs, list), "Inputs must be a list"
@@ -19,7 +20,7 @@ def function(inputs, outputs, dbg=None, updates=None, givens=None):
         raise ValueError("Expected `outputs` to be a Node or a list of Nodes. Got an object of type %s"%type(outputs))
 
 def _function_listout(inputs, outputs, dbg = None, updates=None, givens=None):
-    if isinstance(updates,dict): updates=updates.items()
+    if isinstance(updates,dict): updates=list(updates.items())
     if updates is None:  updates = []
     else: assert (isinstance(updates, list) and 
         all(isinstance(a,tuple) and len(a)==2
@@ -267,7 +268,7 @@ def get_callable(op, input_types, devtype, prefer_python=False):
             if "native_cpu" in op.available_impls:
                 return get_native_callable(op, input_types, "cpu")
             else:
-                print "using python impl for",op
+                print("using python impl for",op)
                 return op.get_py_callable(input_types)
         else:
             if "native_gpu" in op.available_impls:
@@ -347,7 +348,7 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
     # (memowner : "memory owner")
     outputs_simple = outputs_updatetargs_simple[:len(outputs)] # get rid
     updatetargs_simple = outputs_updatetargs_simple[len(outputs):]
-    node2memowner = determine_memowner(nodes_sorted, zip(updatesrcs, updatetargs_simple), node2dev, outputs_simple)
+    node2memowner = determine_memowner(nodes_sorted, list(zip(updatesrcs, updatetargs_simple)), node2dev, outputs_simple)
     # Find the outputs we want to return
     # Generate execution graph
     eg, node2memloc = create_execution_graph(
@@ -355,9 +356,9 @@ def run_compilation_pipeline(inputs, outputs, updates, givens):
 
     # print execution graph
     if config["verbose"]:
-        print 'begin'
-        print '\n'.join(str(i)+'.) \t'+repr(instr) for (i,instr) in enumerate(eg.instrs))
-        print 'end'
+        print('begin')
+        print('\n'.join(str(i)+'.) \t'+repr(instr) for (i,instr) in enumerate(eg.instrs)))
+        print('end')
 
     # Phase 3: create C or Python interpreter for graph
     # ------------------------------------------------------
@@ -530,6 +531,7 @@ def nci2callable(nci):
     template_code = gen_templated_code(nci.includes, nci.closure_triples, nci.func_code)
     compile_info = get_compile_info()    
     prefix = utils.hash_seq1(template_code, compile_info["CPP_FLAGS"], str(CPP_ABI_VERSION), *(src.code for src in nci.extra_srcs))
+    prefix = binascii.hexlify(prefix).decode()
     d = dict(function=_funcname(prefix), closure=_closurename(prefix),setup=_setupname(prefix),teardown=_teardownname(prefix))
     
     fn_srcfile = core.SrcFile("c++",string.Template(template_code).substitute(d))
@@ -635,7 +637,7 @@ def get_compile_info():
         with open(osp.join(CGT_BUILD_ROOT,"build_info.txt")) as fh:
             lines = fh.readlines()
         for line in lines:
-            if ":=" not in line: print "skipping",line
+            if ":=" not in line: print("skipping",line)
             lhs,rhs = line.split(":=")
             lhs = lhs.strip()
             rhs = rhs.strip()
@@ -713,7 +715,7 @@ def _make_link_cmd(objs, extra_link_flags, libpath):
         link_flags=d["LINK_FLAGS"]+" "+extra_link_flags, cacheroot=d["CACHE_ROOT"], iname=iname)
 
 def call_and_print(cmd):
-    print "\x1b[32m%s\x1b[0m"%cmd
+    print("\x1b[32m%s\x1b[0m"%cmd)
     subprocess.check_call(cmd,shell=True)
 
 _ctypes2str = {
@@ -739,7 +741,7 @@ def _build_closure(triples):
         vals.append(val)
         fields.append((fieldname,fieldtype))
     try:
-        key = cPickle.dumps(fields)
+        key = pickle.dumps(fields)
         S = _struct_cache[key]
     except KeyError:
         class S(ctypes.Structure):
@@ -772,7 +774,7 @@ class SequentialInterpreter(Interpreter):
         self.eg = eg
         self.input_types = input_types
         self.output_locs = output_locs
-        self.storage = [None for _ in xrange(self.eg.n_locs)]
+        self.storage = [None for _ in range(self.eg.n_locs)]
         self.args = None
         self.copy_outputs = copy_outputs
     def __call__(self, *args):
@@ -788,9 +790,9 @@ class SequentialInterpreter(Interpreter):
                     if core.get_config()["debug"]:
                         assert "stack" in instr.node_props
                         utils.colorprint(utils.Color.MAGENTA, "HERE'S THE STACK WHEN THE OFFENDING NODE WAS CREATED\n",o=sys.stderr)
-                        print>>sys.stderr, ">>>>>>>>>>>>>>>>>>>>>>>>>>"        
+                        print(">>>>>>>>>>>>>>>>>>>>>>>>>>", file=sys.stderr)        
                         traceback.print_list(instr.node_props["stack"])
-                        print>>sys.stderr, "<<<<<<<<<<<<<<<<<<<<<<<<<<"        
+                        print("<<<<<<<<<<<<<<<<<<<<<<<<<<", file=sys.stderr)        
                         raise e
                     else:
                         utils.error("Didn't save the stack so I can't give you a nice traceback :(. Try running with CGT_FLAGS=debug=True")
@@ -801,7 +803,7 @@ class SequentialInterpreter(Interpreter):
 
             if profiler.on: profiler.update(instr, time.time()-tstart)
         outputs = [self.get(loc) for loc in self.output_locs]
-        if self.copy_outputs: outputs = map(_copy, outputs)
+        if self.copy_outputs: outputs = list(map(_copy, outputs))
         return outputs
         # need to copy because otherwise we might mess up the data when we call func again
         # todo: add option that prevents this behavior
@@ -835,7 +837,7 @@ class _Profiler(object):
     def print_stats(self):
         op2stats = {}
         # Collapse by Op, rather than instruction
-        for (instr,(count,t)) in self.instr2stats.iteritems():
+        for (instr,(count,t)) in self.instr2stats.items():
             if isinstance(instr, (ReturnByRef, ReturnByVal)):
                 opkey = str(instr.op)
             elif isinstance(instr, Alloc):
@@ -846,7 +848,7 @@ class _Profiler(object):
             (prevcount, prevtime) = op2stats.get(opkey, (0, 0.0))
             op2stats[opkey] = (prevcount+count, prevtime+t)
 
-        print "Total time elapsed: %.3g seconds"%self.t_total
+        print("Total time elapsed: %.3g seconds"%self.t_total)
         # _print_heading("By instruction")
         # _print_stats(self.instr2stats, self.t_total)
         _print_heading("By Op")
@@ -861,16 +863,16 @@ def _print_heading(heading):
     heading = "  " + heading + "  "
     width = 60
     assert len(heading) < width-10
-    print
-    print "*"*width
+    print()
+    print("*"*width)
     padleft = (width-len(heading))//2
     padright = width-len(heading)-padleft
-    print "*"*padleft + heading + "*"*padright
-    print "*"*width
+    print("*"*padleft + heading + "*"*padright)
+    print("*"*width)
 
 def _print_stats(key2stats, t_total):
     rows = []
-    for (key, (count,t)) in key2stats.iteritems():
+    for (key, (count,t)) in key2stats.items():
         rows.append([str(key), count, t, t/t_total])
     rows = sorted(rows, key=lambda row: row[2], reverse=True)
     cumsum = 0
@@ -878,7 +880,7 @@ def _print_stats(key2stats, t_total):
         cumsum += row[3]
         row.append(cumsum)
     from thirdparty.tabulate import tabulate
-    print tabulate(rows, headers=["Instruction","Count","Time","Frac","Frac cumsum"])
+    print(tabulate(rows, headers=["Instruction","Count","Time","Frac","Frac cumsum"]))
 
 def _copy(x):
     if isinstance(x, np.ndarray): return x.copy()

@@ -17,11 +17,11 @@ def test_scalars():
     PROB2RESULT = {}
 
     for ((key,_), cls) in it.chain(
-            it.izip(core.UNARY_INFO.items(),it.repeat(core.ElwiseUnary)),
-            it.izip(core.BINARY_INFO.items(),it.repeat(core.ElwiseBinary))
+            zip(list(core.UNARY_INFO.items()),it.repeat(core.ElwiseUnary)),
+            zip(list(core.BINARY_INFO.items()),it.repeat(core.ElwiseBinary))
             ):
         if key == "conj":
-            print "skipping conj"
+            print("skipping conj")
             continue
         utils.colorprint(utils.Color.YELLOW, "Testing %s\n"%key)
         if cls == core.ElwiseUnary:
@@ -37,14 +37,14 @@ def test_scalars():
         try:
             grads = cgt.grad(out, inputvars)
         except core.NonDifferentiable:
-            print "nondiff"
+            print("nondiff")
             continue
         if DISPLAY:
-            print "Function:"
+            print("Function:")
             cgt.print_tree(out)
-            print "Gradient original:"
+            print("Gradient original:")
             cgt.print_tree(grads)
-            print "Gradient simplified:"
+            print("Gradient simplified:")
         grads_simple = core.simplify(grads)
         if DISPLAY: cgt.print_tree(grads_simple)
         gradf = cgt.function(inputvars, grads)
@@ -59,7 +59,7 @@ def test_scalars():
 
     if DISPLAY:
         from thirdparty.tabulate import tabulate
-        print tabulate([[key,val["grad"]] for (key,val) in PROB2RESULT.iteritems()],headers=["funcname","gradcount"])    
+        print(tabulate([[key,val["grad"]] for (key,val) in PROB2RESULT.items()],headers=["funcname","gradcount"]))    
 
 if __name__ == "__main__":
     import nose

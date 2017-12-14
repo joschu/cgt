@@ -27,7 +27,7 @@ if net.input: #pylint: disable=E1101
 
 for layer in net.layer: #pylint: disable=E1101
     if layer.phase==TRAIN:
-        print "loading layer %s type=%s in=%s out=%s"%(layer.name, layer.type, layer.bottom, layer.top)
+        print("loading layer %s type=%s in=%s out=%s"%(layer.name, layer.type, layer.bottom, layer.top))
         output = None
         inputs = [name2node[name] for name in layer.bottom]
         if layer.type == "Data":
@@ -106,10 +106,10 @@ for layer in net.layer: #pylint: disable=E1101
         assert output is not None
 
         # assert isinstance(output, cgt.Node)
-        for i in xrange(len(layer.top)): name2node[layer.top[i]] = output[i]
-        print "stored", layer.top[0]
+        for i in range(len(layer.top)): name2node[layer.top[i]] = output[i]
+        print("stored", layer.top[0])
         if layer.type != "Data":
-            print "shape",layer.type, infer_shape(name2node[layer.bottom[0]]), infer_shape(name2node[layer.top[0]])
+            print("shape",layer.type, infer_shape(name2node[layer.bottom[0]]), infer_shape(name2node[layer.top[0]]))
 
 
 

@@ -1,6 +1,6 @@
 import cgt, numpy as np
 from nose.tools import raises
-from StringIO import StringIO
+from io import StringIO
 import sys
 
 class CaptureStderr(object):

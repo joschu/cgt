@@ -12,7 +12,7 @@ def test_array_wrapper():
     assert np.allclose(x.op.get_value(), xval+1)
     xval2 = np.arange(10)
     x.op.set_value(xval2)
-    print x.op.get_value()
+    print(x.op.get_value())
     assert np.allclose(x.op.get_value(), xval2)
     assert g() == xval2.sum()
     f()

@@ -1,9 +1,10 @@
-import sys, numpy as np, hashlib, copy, cPickle, ctypes, os, os.path as osp
+import sys, numpy as np, hashlib, copy, pickle, ctypes, os, os.path as osp
 from collections import defaultdict,namedtuple
-import __builtin__
+import builtins
 import traceback
 import cgt
 from . import utils
+from functools import reduce
 
 # ================================================================
 # Datatypes
@@ -129,7 +130,7 @@ def _promote(typ1, typ2):
         return cgt.floatX
     elif d1 == 'i' and d2 == 'i':
         assert d1 == d2
-        return d1 + __builtin__.max(s1,s2)
+        return d1 + builtins.max(s1,s2)
     else:
         raise ValueError("Don't know what to do with dtypes %s,%s"%(typ1, typ2))
 
@@ -233,12 +234,12 @@ class Node(object):
         Return UNIQUE string identifying this Node
         """
         if self.is_input() or self.op.is_random_op:
-            return str(self.counter)
+            return str(self.counter).encode()
         else:
             hashobj = hashlib.md5(self.op.get_hash())
             for p in self.parents: 
                 hashobj.update(node2hash[p])
-            return hashobj.hexdigest()
+            return hashobj.digest()
     def clone(self, newparents):
         """
         Create a new Node that applies self.op to `newparents`
@@ -299,7 +300,7 @@ class Node(object):
     def __rdiv__(self, other):
         return cgt.constant(other).__div__(self)
     def __rtruediv__(self, other):
-        return cgt.constant(other).__rtruediv__(self)
+        return cgt.constant(other).__truediv__(self)
     def __rfloordiv__(self, other):
         return cgt.constant(other).__floordiv__(self)
     def __getitem__(self, slis):
@@ -320,7 +321,7 @@ class Node(object):
             return len(self.typ)
         else:
             raise ValueError("Node of type Tensor has no __len__")
-    def __nonzero__(self):
+    def __bool__(self):
         return True
 
 
@@ -384,7 +385,7 @@ def _get_value_type(value):
     if isinstance(value, np.ndarray):
         return TensorType(value.dtype, value.ndim)
     elif isinstance(value, tuple):
-        return TupleType(*map(_get_value_type, value))
+        return TupleType(*list(map(_get_value_type, value)))
 
 def num_components(node):
     return len(node.typ) if isinstance(node.typ, TupleType) else 1
@@ -430,7 +431,7 @@ class Op(object):
         Return a string that uniquely identifies the value of this Op.
         Should ideally be fixed across program runs
         """
-        return cPickle.dumps(self.__dict__, -1)+self.__class__.__name__
+        return pickle.dumps(self.__dict__, -1)+self.__class__.__name__.encode()
     def get_name(self):
         """
         Get a human-readable description of the Op, including its attributes
@@ -512,7 +513,7 @@ def Result(op, parents, typ=None, props=None, name=None):
     """
     Just here as as "damage control" after some refactoring/renaming
     """
-    parents = map(as_node, parents)
+    parents = list(map(as_node, parents))
     typ = op.typ_apply([parent.typ for parent in parents]) if typ is None else typ
     return Node(typ, op, parents, props=props or default_props(), name=name)
 
@@ -909,7 +910,7 @@ class ConstantTensor(Constant):
         assert len(input_types)==0
         return _ndarray_type(self.value)
     def get_hash(self):
-        if self._hash is None: self._hash = cPickle.dumps(self.value, -1)
+        if self._hash is None: self._hash = pickle.dumps(self.value, -1)
         return self._hash
     def get_closure(self):
         assert isinstance(self.value, np.ndarray)
@@ -954,12 +955,12 @@ class ConstantTuple(Constant):
             return self.value
         return f
     def shp_apply(self, _inputs):
-        return tuple(map(cgt.constant, x.shape) for x in self.value)
+        return tuple(list(map(cgt.constant, x.shape)) for x in self.value)
     def typ_apply(self, input_types):
         assert len(input_types)==0
         return _get_value_type(self.value)
     def get_hash(self):
-        if self._hash is None: self._hash = cPickle.dumps(self.value, -1)
+        if self._hash is None: self._hash = pickle.dumps(self.value, -1)
         return self._hash
 
 
@@ -976,7 +977,7 @@ class Fill(Op):
         assert self.value.ndim==0
         self.tag = -1 # @TAG_HACK
     def get_hash(self):
-        return cPickle.dumps((self.value,self.tag) ,-1)
+        return pickle.dumps((self.value,self.tag) ,-1)
     def get_diff(self, num_inputs):
         return [False]*num_inputs
     def __str__(self):
@@ -1023,7 +1024,8 @@ class Arange(Op):
     def get_diff(self, num_inputs):
         return [False]*num_inputs
     def get_py_func(self, input_types):
-        def f((start, stop, step)):
+        def f(xxx_todo_changeme):
+            (start, stop, step) = xxx_todo_changeme
             return np.arange(start, stop, step, self.dtype)
         return f
     def pullback(self, inputs, output, goutput):
@@ -1170,10 +1172,11 @@ class ElwiseUnary(Op):
     def __str__(self):
         return self.info.short
     def get_hash(self):
-        return utils.hash_seq1(self.opname)
+        return utils.hash_seq1(self.opname.encode())
     def get_replacement(self, _newparents, _analysis):
         return None
-    def pullback(self, (x,), y, gy): #pylint: disable=W0613
+    def pullback(self, xxx_todo_changeme2, y, gy): #pylint: disable=W0613
+        (x,) = xxx_todo_changeme2
         return [self.info.gradexpr(x, y, gy)]
     def shp_apply(self, inputs):
         return cgt.shape(inputs[0])
@@ -1251,7 +1254,7 @@ class ElwiseBinary(Op):
     def get_diff(self, _):
         return BINARY_INFO[self.opname].diff
     def get_hash(self):
-        return utils.hash_seq1(self.opname)        
+        return utils.hash_seq1(self.opname.encode())        
     def get_expr(self, parent_exprs):
         return "(%s %s %s)"%(parent_exprs[0], self.opname, parent_exprs[1])
     def __str__(self):
@@ -1300,7 +1303,8 @@ class ElwiseBinary(Op):
 
         return out
 
-    def pullback(self, (x, y), z, gz): #pylint: disable=W0613
+    def pullback(self, xxx_todo_changeme3, z, gz): #pylint: disable=W0613
+        (x, y) = xxx_todo_changeme3
         gin = BINARY_INFO[self.opname].gradexpr(x, y, z, gz)
         return [cgt.sum(gv) if (v.ndim==0 and gv.ndim > 0) else gv for (v,gv) in utils.safezip([x,y],gin)]
     def shp_apply(self, inputs):
@@ -1378,7 +1382,7 @@ class ElwiseBinary(Op):
                 extra_srcs=[SrcFile("cuda",cuda_code)])
 
 def elwise_binary(opname, x, y):
-    (x, y) = map(as_node, (x, y))
+    (x, y) = list(map(as_node, (x, y)))
     scalar_mask = ((x.ndim == 0), (y.ndim == 0))
     op = ElwiseBinary(opname, scalar_mask)
     if (scalar_mask == (False, False)):
@@ -1489,10 +1493,10 @@ class Concatenate(Op):
         return TensorType(_promote_multi([x.dtype for x in input_types]), input_types[0].ndim)
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < in->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < in->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(x.ndim)])
         closeloops = "}"*x.ndim
-        inidxexpr =  ",".join(["i%i"%ax for ax in xrange(x.ndim)])
-        outidxexpr =  ",".join([("i%i+n" if ax == self.axis else "i%i")%ax for ax in xrange(x.ndim)])
+        inidxexpr =  ",".join(["i%i"%ax for ax in range(x.ndim)])
+        outidxexpr =  ",".join([("i%i+n" if ax == self.axis else "i%i")%ax for ax in range(x.ndim)])
         code = r"""
             CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
                 long n=0; // value along concat axis
@@ -1513,7 +1517,7 @@ class Repeat(Op):
     def __init__(self, axes):
         self.axes = axes
     def get_diff(self, num_inputs):
-        return [True] + [False for _ in xrange(num_inputs-1)]
+        return [True] + [False for _ in range(num_inputs-1)]
     def get_py_func(self, input_types):
         def f(reads, write):
             arr = reads[0]
@@ -1526,10 +1530,10 @@ class Repeat(Op):
         return f
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(x.ndim)])
         closeloops = "}"*x.ndim
-        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
-        inidxexpr = ",".join(["0" if ax in self.axes else "i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
+        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in range(x.ndim)])
+        inidxexpr = ",".join(["0" if ax in self.axes else "i%(ax)s"%dict(ax=ax) for ax in range(x.ndim)])
         code = r"""
             CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
                 cgtArray *read=reads[0];
@@ -1578,9 +1582,9 @@ class Transpose(Op):
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
         d = {}
-        d["openloops"] = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        d["openloops"] = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(x.ndim)])
         d["closeloops"] = "}"*x.ndim
-        d["outidxexpr"] = ",".join(["i"+str(i) for i in xrange(x.ndim)])
+        d["outidxexpr"] = ",".join(["i"+str(i) for i in range(x.ndim)])
         d["inidxexpr"] = ",".join(["i"+str(i) for i in utils.invert_perm(self.axes)])
         d["cdtype"] = np2c[x.dtype]
         code = r"""
@@ -1621,7 +1625,7 @@ class RFFT(Op):
     def get_py_func(self, input_types):
         def f(reads, write):
             x = reads[0]
-            shp = map(int,reads[1:])
+            shp = list(map(int,reads[1:]))
             np.copyto(write, np.fft.fftn(x,shp,self.axes))
         return f
     def pullback(self, inputs, _outputs, goutput):
@@ -1645,8 +1649,8 @@ class IRFFT(Op):
     def get_py_func(self, input_types):
         def f(reads, write):
             x = reads[0]
-            shp = map(int,reads[1:])
-            slis = [slice(0,None) for _ in xrange(x.ndim)]
+            shp = list(map(int,reads[1:]))
+            slis = [slice(0,None) for _ in range(x.ndim)]
             for (ax,s) in zip(self.axes,shp): slis[ax] = slice(0, s)
             np.copyto(write, np.real(np.fft.ifftn(x,axes=self.axes)[slis]))
         return f
@@ -1661,10 +1665,10 @@ class IRFFT(Op):
 # ----------------------------------------------------------------
 
 def gen_reduction_code(dtype, axes, ndim, reduction_expr, initval):
-    openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(ndim)])
+    openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < read->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(ndim)])
     closeloops = "}"*ndim
-    inidxexpr = ",".join(["i"+str(i) for i in xrange(ndim)])
-    outidxexpr = ",".join(["0" if i in axes else  "i"+str(i) for i in xrange(ndim)])
+    inidxexpr = ",".join(["i"+str(i) for i in range(ndim)])
+    outidxexpr = ",".join(["0" if i in axes else  "i"+str(i) for i in range(ndim)])
     d = dict(openloops=openloops, outidxexpr=outidxexpr, inidxexpr=inidxexpr, closeloops=closeloops,
             cdtype=np2c[dtype])
     reduction_expr %= d
@@ -1701,7 +1705,7 @@ class Sum(Op):
     def shp_apply(self, inputs):
         x = inputs[0]
         s = cgt.shape(x)
-        return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
+        return [(cgt.constant(1) if i in self.axes else s[i]) for i in range(x.ndim)]
     def typ_apply(self, input_types):
         return input_types[0]
     def get_native_compile_info(self, input_types, devtype):        
@@ -1723,14 +1727,14 @@ class Max(Op):
     def pullback(self, inputs, output, goutput):
         x = inputs[0]
         inputpat = "x"*x.ndim
-        singpat = "".join(["1" if i in self.axes else "x" for i in xrange(x.ndim)])
+        singpat = "".join(["1" if i in self.axes else "x" for i in range(x.ndim)])
         bcpat = singpat+","+inputpat
         return [cgt.broadcast("*", goutput, cgt.broadcast("==", output, x, bcpat), bcpat)]
         # XXX doesn't deal well with corner case
     def shp_apply(self, inputs):
         x = inputs[0]
         s = cgt.shape(x)
-        return [(cgt.constant(1) if i in self.axes else s[i]) for i in xrange(x.ndim)]
+        return [(cgt.constant(1) if i in self.axes else s[i]) for i in range(x.ndim)]
     def typ_apply(self, input_types):
         return input_types[0]
     def get_native_compile_info(self, input_types, devtype):
@@ -1752,7 +1756,7 @@ class Argmax(Op):
     def shp_apply(self, inputs):
         x = inputs[0]
         s = cgt.shape(x)
-        return [(cgt.constant(1) if i == self.axis else s[i]) for i in xrange(x.ndim)]
+        return [(cgt.constant(1) if i == self.axis else s[i]) for i in range(x.ndim)]
     def typ_apply(self, inputs):
         return TensorType('i8', inputs[0].ndim)
     # re: native impl, this is a tricky one, since it requires some scratch space
@@ -1774,7 +1778,7 @@ class GetSli(Op):
         def f(reads, write):
             x,start,stop,step=reads
             if step<0 and stop==-1: stop=None
-            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+            slices = [slice(None,None,None) for _ in range(x.ndim)]
             slices[self.axis] = slice(start,stop,step)
             write[:] = x[slices]
         return f
@@ -1792,11 +1796,11 @@ class GetSli(Op):
         return input_types[0]
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(x.ndim)])
         closeloops = "}"*x.ndim
 
-        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
-        inidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in range(x.ndim)])
+        inidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in range(x.ndim)])
 
         code = r"""
             CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
@@ -1822,7 +1826,7 @@ class IncSli(Op):
         def f(reads, write):
             x, start, stop, step, y=reads
             if step<0 and stop==-1: stop=None            
-            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+            slices = [slice(None,None,None) for _ in range(x.ndim)]
             slices[self.axis] = slice(start,stop,step)          
             if x.data != write.data:
                 utils.warn("incsli not inplace!")
@@ -1839,11 +1843,11 @@ class IncSli(Op):
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
         openloops = " ".join(
-            ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+            ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(x.ndim)])
         closeloops = "}"*x.ndim
 
-        incidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
-        outidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+        incidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in range(x.ndim)])
+        outidxexpr = ",".join([("start + step*i%(ax)s" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in range(x.ndim)])
 
         code = r"""
             CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
@@ -1870,7 +1874,7 @@ class GetFancySli(Op):
     def get_py_func(self, input_types):
         def f(reads, write):
             x,inds=reads
-            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
+            slices = [slice(None,None,None) for _ in range(x.ndim)]
             slices[self.axis] = inds
             write[:] = x[slices]
         return f
@@ -1889,11 +1893,11 @@ class GetFancySli(Op):
         return input_types[0]
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < write->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(x.ndim)])
         closeloops = "}"*x.ndim
 
-        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
-        inidxexpr = ",".join([("inds->at<long>(i%(ax)s)" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+        outidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in range(x.ndim)])
+        inidxexpr = ",".join([("inds->at<long>(i%(ax)s)" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in range(x.ndim)])
 
         code = r"""
             CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
@@ -1918,8 +1922,8 @@ class IncFancySli(Op):
     def get_py_func(self, input_types):
         def f(reads, write):
             x, inds, y=reads
-            slices = [slice(None,None,None) for _ in xrange(x.ndim)]
-            slices2 = [slice(None,None,None) for _ in xrange(x.ndim)]
+            slices = [slice(None,None,None) for _ in range(x.ndim)]
+            slices2 = [slice(None,None,None) for _ in range(x.ndim)]
             if x.data != write.data:
                 utils.warn("incsli not inplace!")
                 np.copyto(write, x)
@@ -1937,11 +1941,11 @@ class IncFancySli(Op):
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
         openloops = " ".join(
-            ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+            ["for (int i%(ax)s=0; i%(ax)s < inc->shape()[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(x.ndim)])
         closeloops = "}"*x.ndim
 
-        incidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in xrange(x.ndim)])
-        outidxexpr = ",".join([("inds->at<long>(i%(ax)s)" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+        incidxexpr = ",".join(["i%(ax)s"%dict(ax=ax) for ax in range(x.ndim)])
+        outidxexpr = ",".join([("inds->at<long>(i%(ax)s)" if ax==self.axis else "i%(ax)s")%dict(ax=ax) for ax in range(x.ndim)])
 
         code = r"""
             CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
@@ -2031,7 +2035,7 @@ class Flip(Op):
     def get_py_func(self, input_types):
         def f(reads, write):
             x = reads[0]
-            slices = [slice(0,None,None) for _ in xrange(x.ndim)]
+            slices = [slice(0,None,None) for _ in range(x.ndim)]
             for ax in self.axes: slices[ax] = slice(None,None,-1)
             np.copyto(write, x[slices])
         return f
@@ -2043,10 +2047,10 @@ class Flip(Op):
         return input_types[0]
     def get_native_compile_info(self, input_types, devtype):
         x = input_types[0]
-        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in xrange(x.ndim)])
+        openloops = " ".join(["for (int i%(ax)s=0; i%(ax)s < shape[%(ax)s]; ++i%(ax)s) {"%dict(ax=ax) for ax in range(x.ndim)])
         closeloops = "}"*x.ndim
-        inidxexpr =  ",".join(["i%i"%ax for ax in xrange(x.ndim)])
-        outidxexpr =  ",".join([("shape[%(ax)s] - 1 - i%(ax)s" if ax in self.axes else "i%(ax)s")%dict(ax=ax) for ax in xrange(x.ndim)])
+        inidxexpr =  ",".join(["i%i"%ax for ax in range(x.ndim)])
+        outidxexpr =  ",".join([("shape[%(ax)s] - 1 - i%(ax)s" if ax in self.axes else "i%(ax)s")%dict(ax=ax) for ax in range(x.ndim)])
         code = r"""
             CGT_EXPORT_C void $function(void* cldata, cgtArray** reads, cgtArray* write) {
                 cgtArray *in=reads[0], *out=write;
@@ -2123,8 +2127,9 @@ class Mul21(Op):
                       incx, beta, (%(cdtype)s*)y->data(), incy);
                 }"""%dict(letter=letter, cdtype = np2c[npdtype])         
         return NativeCompileInfo(code, includes=["cblas.h"], link_flags="-lopenblas", closure_triples = self.get_closure())
-    def get_expr(self, (xexpr,yexpr)):
-        return u"%s%s \u00D7 %s"%(xexpr, u"\u1d57" if self.tA else "", yexpr)
+    def get_expr(self, xxx_todo_changeme4):
+        (xexpr,yexpr) = xxx_todo_changeme4
+        return "%s%s \u00D7 %s"%(xexpr, "\u1d57" if self.tA else "", yexpr)
 
 class Mul22(Op):
     @property
@@ -2223,8 +2228,9 @@ class Mul22(Op):
                 """%dict(letter=letter, cdtype = np2c[npdtype])
             return NativeCompileInfo(code, includes=["cublas_v2.h","cgt_cuda.h"], link_flags="-lcublas -lcudart", closure_triples=self.get_closure())
 
-    def get_expr(self, (xexpr,yexpr)):
-        return u"%s%s \u00D7 %s%s"%(xexpr, u"\u1d57" if self.tA else "", yexpr, u"\u1d57" if self.tB else "")
+    def get_expr(self, xxx_todo_changeme5):
+        (xexpr,yexpr) = xxx_todo_changeme5
+        return "%s%s \u00D7 %s%s"%(xexpr, "\u1d57" if self.tA else "", yexpr, "\u1d57" if self.tB else "")
     def __repr__(self):
         return "Mul22{%s,%s}"%("T" if self.tA else "N", "T" if self.tB else "N")
 
@@ -2234,7 +2240,8 @@ class BatchedMul22(Op):
         self.tA = tA
         self.tB = tB
     def get_py_func(self, input_types):
-        def f((x,y), z):
+        def f(xxx_todo_changeme1, z):
+            (x,y) = xxx_todo_changeme1
             for (xmat, ymat, zmat) in zip(x,y, z):
                 if self.tA: xmat = xmat.T
                 if self.tB: ymat = ymat.T            
@@ -2457,7 +2464,7 @@ class MakeTuple(Op):
         return TupleType(*input_types)
     
 def unpack(tup):
-    return [Result(TupleIndex(i),[tup]) for i in xrange(len(tup.typ))]
+    return [Result(TupleIndex(i),[tup]) for i in range(len(tup.typ))]
 
 # Assertion and debug operations
 # ----------------------------------------------------------------
@@ -2485,10 +2492,10 @@ class Assertion(Op):
                 self.display_error()
         return f
     def display_error(self):
-        print "Stack trace at failed assertion:"
-        print "**************************"        
+        print("Stack trace at failed assertion:")
+        print("**************************")        
         traceback.print_list(self.stack)
-        print "**************************"        
+        print("**************************")        
         raise AssertionError("Assertion failed. Message: %s. Above, you can find the stack trace of the failed node"%self.msg)
 
 class DebugFunc(Op):
@@ -2510,7 +2517,7 @@ class DebugFunc(Op):
 
 def assert_(x,msg=None):
     dbgnode = Result(Assertion(msg or "(empty)"), [x])
-    print "assertion", CACHER.simplify1(dbgnode)
+    print("assertion", CACHER.simplify1(dbgnode))
     # add_debug_node(dbgnode)
 
 def dbg_call(yourfunc, *args):
@@ -2667,7 +2674,7 @@ def maybe_replace(node, analysis, repl):
     h = node.get_hash(node2hash)
     if h in analysis["hash2node"]:
         newnode = analysis["hash2node"][h]
-        if VERBOSE_OPTIMIZATION: print "Did CSE", node
+        if VERBOSE_OPTIMIZATION: print("Did CSE", node)
         assert newnode in repl and newnode.op.__class__ == node.op.__class__
         return newnode
     parents = node.parents
@@ -2678,7 +2685,7 @@ def maybe_replace(node, analysis, repl):
         c = cgt.compilation.get_callable(node.op, [par.typ for par in parents], "cpu", True)
         try:
             out = cgt.constant(py_numeric_apply(node, [p.op.value for p in parents]))
-            if VERBOSE_OPTIMIZATION: print "Did constant prop on %s"%node.op
+            if VERBOSE_OPTIMIZATION: print("Did constant prop on %s"%node.op)
             return out
         except MethodNotDefined:
             utils.warn("Couldn't get a python impl of %s"%node.op)
@@ -2686,12 +2693,12 @@ def maybe_replace(node, analysis, repl):
     if isinstance(node.op, Size):
         s = analysis["node2shape"][parents[0]][node.op.axis]
         if not (isinstance(s.op, Size) and s.parents[0] == node.parents[0]): 
-            if VERBOSE_OPTIMIZATION: print "Did size prop"
+            if VERBOSE_OPTIMIZATION: print("Did size prop")
             return s
     # -- OP IDENTITY --
     maybe_repl = node.op.get_replacement(parents, analysis)
     if maybe_repl is not None: 
-        if VERBOSE_OPTIMIZATION: print "Applied op-specific identity for %s"%node.op
+        if VERBOSE_OPTIMIZATION: print("Applied op-specific identity for %s"%node.op)
         return maybe_repl
 
     return None
@@ -2769,8 +2776,8 @@ def assertequal1(x,y,msg):
 
 def assertequaln(xs,ys,msg):
     if not CACHER_ENABLED: return
-    xs = map(as_node,xs)
-    ys = map(as_node,ys)
+    xs = list(map(as_node,xs))
+    ys = list(map(as_node,ys))
     simpxs = CACHER.simplify(xs)
     simpys = CACHER.simplify(ys)
     for (x,y) in utils.safezip(simpxs,simpys):
@@ -2833,7 +2840,7 @@ def _clone_list(nodes, replace):
     else:
         assert isinstance(replace, dict)
         replace = replace.copy()
-        for (k,v) in replace.iteritems():
+        for (k,v) in replace.items():
             if not isinstance(v, Node):
                 replace[k] = as_node(v)
     for node in topsorted(nodes):
@@ -2907,7 +2914,7 @@ def py_numeric_apply(node, vals):
     try:
         callable = cgt.compilation.get_callable(node.op, [par.typ for par in node.parents],"cpu", True)
     except MethodNotDefined:
-        print 'Op %s has no Python implementation' % repr(node.op)
+        print('Op %s has no Python implementation' % repr(node.op))
         raise
 
     if node.op.return_type == "byval":
@@ -2999,7 +3006,7 @@ def update_config(**kws):
     Globally update the provided configuration variables
     """
     config = get_config()
-    for (name,val) in kws.iteritems():
+    for (name,val) in kws.items():
         if name not in config:
             raise ValueError("%s is not a valid config option"%name)
         config[name] = val
@@ -3018,7 +3025,7 @@ class scoped_update_config(object):
         self.kw = kw
         config = get_config()
         self.prevsettings = {}
-        for k in kw.iterkeys(): 
+        for k in kw.keys(): 
             if k in config: 
                 self.prevsettings[k] = config[k]
             else:

@@ -2,8 +2,9 @@
 import operator
 import numpy as np
 import sys
+from functools import reduce
 if sys.argv[0] != "gen_py.py":
-    from api_autogen import *
+    from .api_autogen import *
 import cgt
 from . import core, utils
 # Every non-underscored function in this file should have a docstring, and it should enforce that the input data is valid
@@ -255,7 +256,7 @@ def fill(val, shape):
     # if val is a non-constant variable, we can use a Repeat Op
     else:
         singleton = reshape(val, [1]*len(shape))
-        return core.Result(core.Repeat(range(len(shape))), [singleton] + shape)
+        return core.Result(core.Repeat(list(range(len(shape)))), [singleton] + shape)
 
 def flatten(x):
     """
@@ -417,7 +418,7 @@ def _subtensor3(x, slis, y):
     Index x with x.ndim arrays of int.
     """
     assert all(((indarr.ndim == 1) for indarr in slis))
-    slis = map(core.as_node, slis)
+    slis = list(map(core.as_node, slis))
     flatinds = sub2ind(slis, shape(x))
     if y is None:
         return core.Result(core.GetFlatIndices(), [x, flatinds])
@@ -520,7 +521,7 @@ def rand(*shp):
     Like numpy.random.rand
     """
     _validate_shape(shp,"rand")
-    shp = map(core.as_node, shp)
+    shp = list(map(core.as_node, shp))
     return core.Result(core.ScalarRng('uniform'), shp)
 
 def randn(*shp):
@@ -528,7 +529,7 @@ def randn(*shp):
     Like numpy.random.randn
     """
     _validate_shape(shp,"randn")
-    shp = map(core.as_node, shp)
+    shp = list(map(core.as_node, shp))
     return core.Result(core.ScalarRng('gaussian'), shp)
 
 def real(x):
@@ -548,7 +549,7 @@ def reshape(x, shp):
     """
     Like numpy.reshape
     """
-    shp = map(core.as_node, shp)
+    shp = list(map(core.as_node, shp))
     assert all(s.ndim==0 and core.dtype_kind(s.dtype)=='i' for s in shp)
     return core.Result(core.Reshape(), [x] + list(shp))
 
@@ -590,7 +591,7 @@ def shape(x):
     """
     x = core.as_node(x)
     if isinstance(x.typ, core.TensorType):
-        return [size(x, i) for i in xrange(x.ndim)]
+        return [size(x, i) for i in range(x.ndim)]
     else:
         return tuple(map(shape, x.parents))
 
@@ -634,7 +635,7 @@ def sub2ind(subs, shp):
     ndim = len(shp)
     assert ndim >= 1
     strides = [None]*(ndim-1) + [1]
-    for i in xrange(ndim-2, -1, -1):
+    for i in range(ndim-2, -1, -1):
         strides[i] = shp[i+1] * strides[i+1]
     return add_multi([stride*sub for (stride,sub) in utils.safezip(strides, subs)])
 
@@ -671,7 +672,7 @@ def transpose(arr, axes=None):
     else:
         assert _is_list_or_tuple(axes) and len(axes) == arr.ndim
         axes = list(axes)
-    if axes == range(arr.ndim):
+    if axes == list(range(arr.ndim)):
         return arr
     else:
         return core.Result(core.Transpose(axes), [arr])
@@ -726,7 +727,7 @@ def zeros_like(x):
     return zeros(shape(x), x.dtype)
 
 def _dropdims(x, axes):
-    return reshape(x, [size(x, i) for i in xrange(x.ndim) if (i not in axes)])
+    return reshape(x, [size(x, i) for i in range(x.ndim) if (i not in axes)])
 
 def _is_list_or_tuple(xs):
     return isinstance(xs, (list, tuple))
@@ -739,7 +740,7 @@ def _is_unique(col):
 
 def _red_axes(axis, ndim):
     if (axis is None):
-        return range(ndim)
+        return list(range(ndim))
     elif isinstance(axis, int):
         return [axis]
     elif isinstance(axis, (list, tuple)):
@@ -764,7 +765,7 @@ def dimshuffle(arr, pattern):
     variable with permuted axes
     """
     assert isinstance(pattern, list)
-    if pattern == range(arr.ndim):
+    if pattern == list(range(arr.ndim)):
         return arr
     else:
         shapes = []

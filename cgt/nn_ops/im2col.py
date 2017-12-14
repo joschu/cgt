@@ -8,7 +8,7 @@ Im2ColInfo = namedtuple("Im2ColInfo", ["kernel_h", "kernel_w", "pad_h", "pad_w",
 def im2col(x, kernelshape, pad, stride):
     assert stride[0] > 0 and stride[1] > 0
     assert kernelshape[0] > 0 and kernelshape[1] > 0
-    kernelshape, pad, stride = map(tuple, (kernelshape, pad, stride))
+    kernelshape, pad, stride = list(map(tuple, (kernelshape, pad, stride)))
     return core.Result(Im2Col(Im2ColInfo(*(kernelshape+pad+stride))), [x])
 
 def info2closure(info):
@@ -31,7 +31,8 @@ class Im2Col(core.Op):
         return [True]
     def get_py_impl(self):
         raise core.MethodNotDefined
-    def pullback(self, (x,), _y, gy):
+    def pullback(self, xxx_todo_changeme, _y, gy):
+        (x,) = xxx_todo_changeme
         return [core.Result(Col2Im(self.info), [gy] + cgt.shape(x))]
     def shp_apply(self, inputs):
         info = self.info

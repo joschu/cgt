@@ -73,7 +73,7 @@ def make_ff_controller(opt):
     layer_out_sizes = [in_size] + hid_sizes + [out_size]
     last_out = inp_bq
     # feedforward part. we could simplify a bit by using nn.Affine
-    for i in xrange(len(layer_out_sizes)-1):
+    for i in range(len(layer_out_sizes)-1):
         indim = layer_out_sizes[i]
         outdim = layer_out_sizes[i+1]        
         W = cgt.shared(.02*nr.randn(indim, outdim), name="W%i"%i, fixed_shape_mask="all")
@@ -220,7 +220,7 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
     loss01 = 0
 
     state_arrs = initial_states
-    for t in xrange(total_time):
+    for t in range(total_time):
         tmp = ntm([x_tbk[t]] + state_arrs)
         raw_pred = tmp[0]
         state_arrs = tmp[1:4]
@@ -241,7 +241,7 @@ def make_funcs(opt, ntm, total_time, loss_timesteps):
     f_loss = cgt.function([x_tbk, y_tbp], lossCE)
     f_loss_and_grad = cgt.function([x_tbk, y_tbp], [lossCE, loss01, flatgrad])
 
-    print "number of nodes in computation graph:", core.count_nodes([lossCE, loss01, flatgrad])
+    print("number of nodes in computation graph:", core.count_nodes([lossCE, loss01, flatgrad]))
 
     return f_loss, f_loss_and_grad, params
 
@@ -271,7 +271,7 @@ class CopyTask(object):
 
         return x_tbk, y_tbk
     def loss_timesteps(self):
-        return range(self.t+1, 2*self.t+2)
+        return list(range(self.t+1, 2*self.t+2))
     def total_time(self):
         return 2*self.t+2
 
@@ -295,7 +295,7 @@ class ReverseCopyTask(object):
 
         return x_tbk, y_tbk
     def loss_timesteps(self):
-        return range(self.t+1, 2*self.t+2)
+        return list(range(self.t+1, 2*self.t+2))
     def total_time(self):
         return 2*self.t+2
 
@@ -316,12 +316,12 @@ class RepeatCopyTask(object):
         x_tbk[1:self.t+1,:,2:] = message
         x_tbk[self.t+1, :, 1] = 1 # end symbol
         y_tbk = np.zeros(((1 + self.n_copies)*self.t+2, self.b, self.p),cgt.floatX)
-        for i in xrange(self.n_copies):
+        for i in range(self.n_copies):
             start=self.t+2+i*self.t
             y_tbk[start:start+self.t] = message # desired output
         return x_tbk, y_tbk
     def loss_timesteps(self):
-        return range(self.t+1, 2*self.t+2)
+        return list(range(self.t+1, 2*self.t+2))
     def total_time(self):
         return 2*self.t+2        
 
@@ -423,7 +423,7 @@ def main():
 
 
     f_loss, f_loss_and_grad, params = make_funcs(opt, ntm, task.total_time(), task.loss_timesteps())
-    print "graph construction and compilation took %g seconds"%(time.time()-tstart)
+    print("graph construction and compilation took %g seconds"%(time.time()-tstart))
 
     pc = ParamCollection(params)
     pc.set_value_flat(nr.uniform(-.1, .1, size=(pc.get_total_size(),)))
@@ -440,22 +440,22 @@ def main():
         g_num = numeric_grad(f, th,eps=1e-8)
         _, _, g_anal = f_loss_and_grad(x,y)
         assert np.allclose(g_num, g_anal, atol=1e-8)
-        print "Gradient check succeeded!"
-        print "%i/%i elts of grad are nonzero"%( (g_anal != 0).sum(), g_anal.size )
+        print("Gradient check succeeded!")
+        print("%i/%i elts of grad are nonzero"%( (g_anal != 0).sum(), g_anal.size ))
         return
 
 
     seq_num = 0
     state = make_rmsprop_state(pc.get_value_flat(), .01, .95)
-    print fmt_row(13, ["seq num", "CE (bits)", "accuracy", "|g|_inf"], header=True)
+    print(fmt_row(13, ["seq num", "CE (bits)", "accuracy", "|g|_inf"], header=True))
     
     if args.profile: cgt.profiler.start()
     
-    for i in xrange(args.n_batches):
+    for i in range(args.n_batches):
         x,y = task.gen_batch()
         seq_num += x.shape[1]
         l,l01,g = f_loss_and_grad(x,y)
-        print fmt_row(13, [seq_num, l,l01,np.abs(g).max()])
+        print(fmt_row(13, [seq_num, l,l01,np.abs(g).max()]))
         rmsprop_update(g, state)        
         pc.set_value_flat(state.theta)
         if not np.isfinite(l): break

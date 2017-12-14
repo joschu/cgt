@@ -11,10 +11,10 @@ PROB2RESULT = {}
 
 def gradients_affine(f, xs, h=1e-1):
     grads = [np.zeros_like(x) for x in xs]
-    xs = map(np.copy, xs)
+    xs = list(map(np.copy, xs))
     yorig = f(*xs)
     for (x,g) in zip(xs, grads):
-        for i in xrange(x.size):
+        for i in range(x.size):
             xiorig = x.flat[i]
             x.flat[i] = xiorig + h
             y = f(*xs)
@@ -31,14 +31,14 @@ def broadcast(opname,x,y,bcpat):
 def check_affine(f, *nu_inputs):
     types = ",".join(["{%s,%s}"%(x.dtype, x.ndim) for x in nu_inputs])
     cgt.utils.colorprint(cgt.utils.Color.YELLOW,"Testing %s(%s)\n"%(f.__name__, types))
-    sy_inputs = map(tensor_like, nu_inputs)
+    sy_inputs = list(map(tensor_like, nu_inputs))
     for (i,sy) in enumerate(sy_inputs):
         sy.name = "x%i"%i
 
     sy_result = f(*sy_inputs)
 
     def maybeprint(msg):
-        if DISPLAY: print msg
+        if DISPLAY: print(msg)
 
     maybeprint("Function:")
     if DISPLAY: cgt.print_tree([sy_result])
@@ -399,7 +399,7 @@ def test_affine():
 
     if DISPLAY:
         from thirdparty.tabulate import tabulate
-        print tabulate([[key,val["fn"],val["grad"]] for (key,val) in sorted(PROB2RESULT.items())],headers=["funcname","fncount","gradcount"])
+        print(tabulate([[key,val["fn"],val["grad"]] for (key,val) in sorted(PROB2RESULT.items())],headers=["funcname","fncount","gradcount"]))
 
 
 if __name__ == "__main__":

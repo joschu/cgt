@@ -2,7 +2,7 @@ import cgt
 from cgt import core
 from cgt import nn
 import numpy as np
-import cPickle as pickle
+import pickle as pickle
 from scipy.stats import norm
 import matplotlib.pyplot as plt
 from example_utils import fetch_dataset
@@ -75,7 +75,7 @@ class _MLP(object):
         self.nlayers = nlayers
         self.hidden_layers = list()
         inp = x
-        for k in xrange(self.nlayers):
+        for k in range(self.nlayers):
             hlayer = HiddenLayer(
                 input=inp,
                 n_in=n_in,
@@ -234,7 +234,7 @@ def main():
     num_valid_batches = valid_x.shape[0] / args.batch_size
     valid_freq = num_train_batches
 
-    for b in xrange(args.epochs * num_train_batches):
+    for b in range(args.epochs * num_train_batches):
         k = b % num_train_batches
         x = train_x[k * args.batch_size:(k + 1) * args.batch_size, :]
         eps = np.random.randn(x.shape[0], args.zdim).astype(cgt.floatX)
@@ -244,15 +244,15 @@ def main():
         else:
             expcost = 0.01 * cost + 0.99 * expcost
         if (b + 1) % args.print_every == 0:
-            print("iter %d, cost %f, expcost %f" % (b + 1, cost, expcost))
+            print(("iter %d, cost %f, expcost %f" % (b + 1, cost, expcost)))
         if (b + 1) % valid_freq == 0:
             valid_cost = 0
-            for l in xrange(num_valid_batches):
+            for l in range(num_valid_batches):
                 x_val = valid_x[l * args.batch_size:(l + 1) * args.batch_size, :]
                 eps_val = np.zeros((x_val.shape[0], args.zdim), dtype=cgt.floatX)
                 valid_cost = valid_cost + model.test(x_val, eps_val)
             valid_cost = valid_cost / num_valid_batches
-            print("valid cost: %f" % valid_cost)
+            print(("valid cost: %f" % valid_cost))
 
     # XXX fix pickling of cgt models
     #print("saving final model")
@@ -271,9 +271,9 @@ def main():
     M = 20
     manifold = np.zeros((S[0]*M, S[1]*M), dtype=cgt.floatX)
 
-    for z1 in xrange(M):
-        for z2 in xrange(M):
-            print z1, z2
+    for z1 in range(M):
+        for z2 in range(M):
+            print(z1, z2)
             z = np.zeros((1, 2))
             # pass unit square through inverse Gaussian CDF
             z[0, 0] = norm.ppf(z1 * 1.0/M + 1.0/(M * 2))
